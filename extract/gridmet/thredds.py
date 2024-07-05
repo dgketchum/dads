@@ -327,7 +327,7 @@ class GridMet(Thredds):
         - 'erc' : energy release component [-]
         - 'fm100' : 100-hour dead fuel moisture [%]
         - 'fm1000' : 1000-hour dead fuel moisture [%]
-        - 'pdsi' : Palmer Drough Severity Index [-]
+        - 'pdsi' : Palmer Drought Severity Index [-]
         - 'pet' : daily reference potential evapotranspiration [mm]
         - 'pr' : daily accumulated precipitation [mm]
         - 'rmax' : daily maximum relative humidity [%]

@@ -97,7 +97,6 @@ def multipoint_landsat(shapefile, bucket=None, debug=False, check_dir=None):
 
             task.start()
             print(desc)
-            exit()
 
 
 if __name__ == '__main__':
@@ -108,9 +107,9 @@ if __name__ == '__main__':
 
     is_authorized()
     bucket_ = 'wudr'
-    fields = os.path.join(d, 'climate', 'agrimet', 'agrimet_mt_aea.shp')
+    fields = os.path.join(d, 'climate', 'agrimet', 'agrimet_aea.shp')
 
     chk = os.path.join(d, 'dads', 'landsat', 'agrimet_locations', 'ee_extracts')
-    multipoint_landsat(fields, bucket_, debug=False, check_dir=None)
+    multipoint_landsat(fields, bucket_, debug=False, check_dir=chk)
 
 # ========================= EOF ====================================================================

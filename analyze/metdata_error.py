@@ -62,12 +62,11 @@ PACIFIC = pytz.timezone('US/Pacific')
 
 
 def residuals(stations, resids, out_data, check_dir=None, overwrite=False):
-
     kw = station_par_map('agri')
     stations = gpd.read_file(stations)
     stations.index = stations['FID']
 
-    s, e = '1990-01-01', '2024-07-04'
+    s, e = '1990-01-01', '2023-12-31'
 
     errors, all_res_dict = {}, {v: [] for v in COMPARISON_VARS}
     for i, (fid, row) in enumerate(stations.iterrows()):
@@ -83,17 +82,22 @@ def residuals(stations, resids, out_data, check_dir=None, overwrite=False):
             ag.region = row['region']
             sdf = ag.fetch_met_data()
 
+            sdf['ea'] = calcs._sat_vapor_pressure(sdf['t_dew'])
+
             sdf.index = sdf.index.tz_localize(PACIFIC)
             sdf = sdf.rename(RENAME_MAP, axis=1)
             sdf['doy'] = [i.dayofyear for i in sdf.index]
+            sdf.dropna(how='any', inplace=True, axis=0)
 
-            _zw = row['anemom_height_m']
+            # TODO: find metadata for anemometer height
+            _zw = 2.0
 
+            # rs in MJ m-2 day-1
             def calc_asce_params(r, zw):
                 asce = Daily(tmin=r['min_temp'],
                              tmax=r['max_temp'],
                              ea=r['ea'],
-                             rs=r['rsds'] * 0.0036,
+                             rs=r['rsds'],
                              uz=r['wind'],
                              zw=zw,
                              doy=r['doy'],
@@ -109,15 +113,24 @@ def residuals(stations, resids, out_data, check_dir=None, overwrite=False):
                 return vpd, rn, u2, mean_temp, eto
 
             asce_params = sdf.apply(calc_asce_params, zw=_zw, axis=1)
-            sdf[['vpd', 'rn', 'u2', 'tmean', 'eto']] = pd.DataFrame(asce_params.tolist(), index=sdf.index)
+            sdf_cols = ['vpd_ob', 'rn_ob', 'u2_ob', 'tmean_ob', 'eto_ob']
+            sdf[sdf_cols] = pd.DataFrame(asce_params.tolist(), index=sdf.index)
+            gs, ge = sdf.index[0].strftime('%Y-%m-%d'), sdf.index[-1].strftime('%Y-%m-%d')
 
-            nld = get_nldas(row[kw['lon']], row[kw['lat']], row[kw['elev']], start=s, end=e)
-            gmt = get_gridmet(row[kw['lon']], row[kw['lat']], start=s, end=e)
+            nld = get_nldas(row[kw['lon']], row[kw['lat']], row[kw['elev']], start=gs, end=ge)
+            asce_params = nld.apply(calc_asce_params, zw=_zw, axis=1)
+            nld_cols = ['vpd_nl', 'rn_nl', 'u2_nl', 'tmean_nl', 'eto_nl']
+            nld[nld_cols] = pd.DataFrame(asce_params.tolist(), index=nld.index)
 
-            grid = pd.concat([nld, gmt], axis=1, ignore_index=False)
+            gmt = get_gridmet(row[kw['lon']], row[kw['lat']], start=gs, end=ge)
+            asce_params = gmt.apply(calc_asce_params, zw=_zw, axis=1)
+            gmt_cols = ['vpd_gm', 'rn_gm', 'u2_gm', 'tmean_gm', 'eto_gm']
+            gmt[gmt_cols] = pd.DataFrame(asce_params.tolist(), index=gmt.index)
 
-            asce_params = grid.apply(calc_asce_params, zw=_zw, axis=1)
-            grid[['vpd', 'rn', 'u2', 'tmean', 'eto']] = pd.DataFrame(asce_params.tolist(), index=grid.index)
+            grid = pd.concat([sdf, nld, gmt], axis=1, ignore_index=False)
+            target_cols = [[s, n, g] for s, n, g in zip(sdf_cols, nld_cols, gmt_cols)]
+            target_cols = [item for sublist in target_cols for item in sublist]
+            grid = grid[target_cols]
 
             # TODO: gridmet ETo is not right
             res_df = sdf[['eto']].copy()
@@ -164,10 +177,10 @@ def station_par_map(station_type):
                 'start': 'START DATE',
                 'end': 'END DATE'}
     elif station_type == 'agri':
-        return {'index': 'id',
-                'lat': 'latitude',
-                'lon': 'longitude',
-                'elev': 'elev_m',
+        return {'index': 'FID',
+                'lat': 'lat',
+                'lon': 'lon',
+                'elev': 'elev',
                 'start': 'record_start',
                 'end': 'record_end'}
     else:
@@ -181,7 +194,7 @@ def gridmet_par_map():
         'tmmx': 'max_temp',
         'tmmn': 'min_temp',
         'vs': 'wind',
-        'vpd': 'q',
+        'vpd': 'vpd',
     }
 
 
@@ -198,6 +211,9 @@ def get_nldas(lon, lat, elev, start, end):
     nldas['min_temp'] = nldas['temp'] - 273.15
     nldas['max_temp'] = nldas['temp'] - 273.15
     nldas['doy'] = [i.dayofyear for i in nldas.index]
+
+    # W m-2 to MJ m-2 day-1
+    nldas['rsds'] = (nldas['rsds'] * 86400) / 1000000
 
     nldas = nldas.resample('D').agg(RESAMPLE_MAP)
     nldas['ea'] = calcs._actual_vapor_pressure(pair=calcs._air_pressure(elev),
@@ -240,9 +256,12 @@ def get_gridmet(lon, lat, start, end):
     df['min_temp'] = df['min_temp'] - 273.15
     df['max_temp'] = df['max_temp'] - 273.15
 
-    p_air = air_pressure(df['elev_m'])
-    ea_kpa = actual_vapor_pressure(df['q'], p_air)
-    df['ea'] = ea_kpa.copy()
+    # W m-2 to MJ m-2 day-1
+    df['rsds'] = (df['rsds'] * 86400) / 1000000
+
+    es = 0.5 * (calcs._sat_vapor_pressure(df['min_temp']) +
+                calcs._sat_vapor_pressure(df['max_temp']))
+    df['ea'] = es - df['vpd']
 
     df.index = df.index.tz_localize(PACIFIC)
 
@@ -284,7 +303,7 @@ if __name__ == '__main__':
         home = os.path.expanduser('~')
         r = os.path.join(home, 'data', 'IrrigationGIS')
 
-    fields = os.path.join(r, 'climate', 'agrimet', 'agrimet_mt_aea.shp')
+    fields = os.path.join(r, 'climate', 'agrimet', 'agrimet_mt_aea_elev.shp')
 
     d = os.path.join(r, 'dads')
     comp_data = os.path.join(d, 'obs', 'agrimet', 'station_data')

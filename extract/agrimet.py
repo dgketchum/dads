@@ -70,6 +70,14 @@ WEATHER_PARAMETRS = [('DATETIME', 'Date', '[YYYY-MM-DD]'),
                      ('WG', 'Daily Peak Wind Gust', '[m sec-1]'),
                      ('WR', 'Daily Wind Run', '[m]')]
 
+COLUMN_MAPPING = {'DATETIME': 'date',
+                   'MM': 'mean_temp',
+                   'MN': 'min_temp',
+                   'MX': 'max_temp',
+                   'SR': 'rsds',
+                   'YM': 't_dew',
+                   'UA': 'wind'}
+
 TARGET_COLUMNS = ['{a}_et', '{a}_etos', '{a}_etrs', '{a}_mm', '{a}_mn',
                   '{a}_mx', '{a}_pp', '{a}_pu', '{a}_sr', '{a}_ta', '{a}_tg',
                   '{a}_ua', '{a}_ud', '{a}_wg', '{a}_wr', '{a}_ym']
@@ -212,6 +220,11 @@ class Agrimet(object):
             return df
 
         df = self._reformat_dataframe(df)
+        df.columns = [c[0] for c in df.columns]
+        cols = [c for c in df.columns if c in [k for k, v in COLUMN_MAPPING.items()]]
+
+        df = df[cols]
+        df.rename(columns=COLUMN_MAPPING, inplace=True)
 
         if out_csv_file:
             df.to_csv(path_or_buf=out_csv_file)
@@ -312,8 +325,8 @@ class Agrimet(object):
                     # mi to m
                     df['WR'] *= 1609.34
                 if col == 'SR':
-                    # Langleys to W m-2
-                    df['SR'] /= 23.900574
+                    # Langleys to MJ m-2 day-1
+                    df['SR'] = (df['SR'] * 41840) / 1000000
             except KeyError:
                 head_1.remove(head_1[i])
                 head_2.remove(head_2[i])
