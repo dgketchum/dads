@@ -8,8 +8,6 @@ import geopandas as gpd
 # from data_extraction.gridmet.gridmet import find_gridmet_points, download_gridmet
 # from data_extraction.snodas.snodas import snodas_zonal_stats
 
-from prep.prep_plots import FLUX_SELECT, TONGUE_SELECT
-
 import warnings
 
 warnings.filterwarnings("ignore", category=FutureWarning)

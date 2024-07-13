@@ -8,8 +8,8 @@ import pynldas2 as nld
 from refet import calcs
 
 from thredds import GridMet
-from nldas_eto_error import station_par_map
 from qaqc.agweatherqaqc import WeatherQC
+from agrimet import Agrimet
 
 PACIFIC = pytz.timezone('US/Pacific')
 
@@ -20,11 +20,13 @@ RESAMPLE_MAP = {'rsds': 'mean',
                 'wind': 'mean'}
 
 
-def extract_gridded(stations, proc_dir, model='nldas'):
+def extract_gridded(stations, obs_dir, gridded_dir, source='agrimet'):
     kw = station_par_map('agri')
     station_list = pd.read_csv(stations, index_col=kw['index'])
 
-    template = '{}_template.ini'.format(model)
+    ws = os.path.dirname(__file__)
+    template = os.path.join(ws, 'qaqc', '{}_template.ini'.format(source))
+    ini = None
 
     for i, (fid, row) in enumerate(station_list.iterrows()):
 
@@ -33,25 +35,26 @@ def extract_gridded(stations, proc_dir, model='nldas'):
 
         lat, lon, elv = row[kw['lon']], row[kw['lat']], row[kw['elev']]
 
-        station_dir = os.path.join(proc_dir, model, fid)
+        station_dir = os.path.join(obs_dir, source, fid)
         if not os.path.isdir(station_dir):
             os.mkdir(station_dir)
 
-        if model == 'nldas2':
-            df = get_nldas(lat, lon, elv)
-        elif model == 'gridmet':
-            df = get_gridmet(lat, lon, elv)
-        else:
-            raise NotImplementedError('Choose "nldas2" or "gridmet" model')
+        if source == 'agrimet':
+            ag = Agrimet(start_date='1989-01-01', end_date='2023-12-31', station=fid)
+            ag.region = 'great_plains'
+            sta_df = ag.fetch_met_data()
+            file_unproc = os.path.join(station_dir, '{}_input.csv'.format(fid))
+            sta_df.to_csv(file_unproc, index=False)
+            ini = os.path.join(station_dir, '{}_input.ini'.format(fid))
+            modify_config(template, ini, file_unproc, lat, lon, elv)
 
-        file_unproc = os.path.join(station_dir, '{}_input.csv'.format(fid))
-        df.to_csv(file_unproc, index=False)
-
-        ini_unproc = os.path.join(station_dir, '{}_input.ini'.format(fid))
-        modify_config(template, ini_unproc, file_unproc, lat, lon, elv)
-
-        qaqc = WeatherQC(ini_unproc)
+        qaqc = WeatherQC(ini)
         qaqc.process_station()
+
+        df = get_nldas(lat, lon, elv)
+        df.to_csv(gridded_dir, 'nldas2', index=False)
+        df = get_gridmet(lat, lon, elv)
+        df.to_csv(gridded_dir, 'gridmet', index=False)
 
 
 def get_nldas(lon, lat, elev, start='1989-01-01', end='2023-12-31'):
@@ -107,6 +110,7 @@ def get_gridmet(lon, lat, elev, start='1989-01-01', end='2023-12-31'):
 
 def modify_config(template_file, output_file, data_file_path, latitude, longitude, elevation):
     config = configparser.ConfigParser()
+    assert os.path.exists(template_file)
     config.read(template_file)
 
     config.set('METADATA', 'DATA_FILE_PATH', data_file_path)
@@ -129,16 +133,36 @@ def gridmet_par_map():
     }
 
 
+def station_par_map(station_type):
+    if station_type == 'ec':
+        return {'index': 'SITE_ID',
+                'lat': 'LATITUDE',
+                'lon': 'LONGITUDE',
+                'elev': 'ELEVATION (METERS)',
+                'start': 'START DATE',
+                'end': 'END DATE'}
+    elif station_type == 'agri':
+        return {'index': 'id',
+                'lat': 'latitude',
+                'lon': 'longitude',
+                'elev': 'elev_m',
+                'start': 'record_start',
+                'end': 'record_end'}
+    else:
+        raise NotImplementedError
+
+
 if __name__ == '__main__':
-    d = '/media/research/IrrigationGIS/milk'
+    d = '/media/research/IrrigationGIS/dads'
     if not os.path.isdir(d):
         home = os.path.expanduser('~')
-        d = os.path.join(home, 'data', 'IrrigationGIS', 'milk')
+        d = os.path.join(home, 'data', 'IrrigationGIS', 'dads')
 
-    station_meta = os.path.join(d, 'bias_ratio_data_processing/ETo/'
-                                   'final_milk_river_metadata_nldas_eto_bias_ratios_long_term_mean.csv')
+    station_meta = os.path.join(d, 'met', 'stations', 'smm_stations.csv')
 
-    data_proc = os.path.join(d, 'weather_station_data_processing', 'gridded')
+    obs = os.path.join(d, 'met', 'obs')
 
-    extract_gridded(station_meta, data_proc)
+    grid_dir = os.path.join(d, 'weather_station_data_processing', 'gridded')
+
+    extract_gridded(station_meta, obs, grid_dir, source='agrimet')
 # ========================= EOF ====================================================================
