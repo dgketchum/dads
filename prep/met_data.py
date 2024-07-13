@@ -37,8 +37,7 @@ LIMITS = {'vpd': 3,
 PACIFIC = pytz.timezone('US/Pacific')
 
 
-def residuals(stations, station_data, gridded_data, comparison_out):
-
+def join_meteorology(stations, station_data, gridmet, nldas2, comparison_out):
     kw = station_par_map('agri')
     station_list = pd.read_csv(stations, index_col=kw['index'])
 
@@ -58,15 +57,27 @@ def residuals(stations, station_data, gridded_data, comparison_out):
             sdf['vpd'] = sdf.apply(_vpd, axis=1)
             sdf['rn'] = sdf.apply(_rn, lat=row['latitude'], elev=row['elev_m'], zw=row['anemom_height_m'], axis=1)
             sdf = sdf[COMPARISON_VARS]
+            sdf = sdf.rename(columns={k: '{}_sdf'.format(k) for k in COMPARISON_VARS})
 
-            grid_file = os.path.join(gridded_data, '{}.csv'.format(fid))
-            gdf = pd.read_csv(grid_file, index_col='date_str', parse_dates=True)
+            gm_file = os.path.join(gridmet, '{}.csv'.format(fid))
+            gdf = pd.read_csv(gm_file, index_col='date_str', parse_dates=True)
             gdf['mean_temp'] = (gdf['min_temp'] + gdf['max_temp']) * 0.5
             gdf = gdf[COMPARISON_VARS]
+            gdf = gdf.rename(columns={k: '{}_gdf'.format(k) for k in COMPARISON_VARS})
+
+            nld_file = os.path.join(nldas2, '{}.csv'.format(fid))
+            ndf = pd.read_csv(nld_file, index_col='date_str', parse_dates=True)
+            ndf['mean_temp'] = (ndf['min_temp'] + ndf['max_temp']) * 0.5
+            ndf = ndf[COMPARISON_VARS]
+            ndf = ndf.rename(columns={k: '{}_ndf'.format(k) for k in COMPARISON_VARS})
+
+            df = pd.concat([sdf, gdf, ndf], axis=1)
+
+            pass
+
 
         except Exception as e:
             print('Exception raised on {}, {}'.format(fid, e))
-
 
     with open(comparison_out, 'w') as dst:
         json.dump(eto_estimates, dst, indent=4)
@@ -145,30 +156,20 @@ def check_file(lat, elev):
 
 if __name__ == '__main__':
 
-    d = '/media/research/IrrigationGIS/milk'
+    d = '/media/research/IrrigationGIS/dads'
     if not os.path.isdir(d):
         home = os.path.expanduser('~')
-        d = os.path.join(home, 'data', 'IrrigationGIS', 'milk')
+        d = os.path.join(home, 'data', 'IrrigationGIS', 'dads')
 
-    # pandarallel.initialize(nb_workers=4)
+    station_meta = os.path.join(d, 'met', 'stations', 'smm_stations.csv')
 
-    station_meta = os.path.join(d, 'bias_ratio_data_processing/ETo/'
-                                   'final_milk_river_metadata_nldas_eto_bias_ratios_long_term_mean.csv')
-    sta_data = os.path.join(d, 'weather_station_data_processing', 'corrected_data')
+    sta_data = os.path.join(d, 'met', 'obs')
 
-    model_ = 'nldas2'
+    g_data = os.path.join(d, 'met', 'gridded', 'gridmet')
+    n_data = os.path.join(d, 'met', 'gridded', 'nldas2')
 
-    grid_data = os.path.join(d, 'weather_station_data_processing', 'gridded', model_)
+    met_join = os.path.join(d, 'met', 'join')
 
-    res_json = os.path.join(d, 'weather_station_data_processing', 'error_analysis',
-                            'all_residuals_{}.json'.format(model_))
-
-    sta_res = os.path.join(d, 'weather_station_data_processing', 'error_analysis',
-                           'station_residuals_{}.json'.format(model_))
-
-    comparison_js = os.path.join(d, 'weather_station_data_processing', 'comparison_data',
-                                 'eto_all_{}.json'.format(model_))
-
-    residuals(station_meta, sta_data, grid_data, comparison_js)
+    join_meteorology(station_meta, sta_data, gridmet=g_data, nldas2=n_data, comparison_out=met_join)
 
 # ========================= EOF ====================================================================
