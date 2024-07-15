@@ -35,23 +35,24 @@ AGRIMET_CROP_REQ_SCRIPT_GP = 'https://www.usbr.gov/gp-bin/et_summaries.pl?statio
 # in km
 EARTH_RADIUS = 6371.
 
-WEATHER_PARAMETRS_UNCONVERTED = [('DATETIME', 'Date - [YYYY-MM-DD]'),
-                                 ('ET', 'Evapotranspiration Kimberly-Penman - [in]'),
-                                 ('MM', 'Mean Daily Air Temperature - [F]'),
-                                 ('MN', 'Minimum Daily Air Temperature - [F]'),
-                                 ('MX', 'Maximum Daily Air Temperature - [F]'),
-                                 ('PC', 'Accumulated Precipitation Since Recharge/Reset - [in]'),
-                                 ('PP', 'Daily (24 hour) Precipitation - [in]'),
-                                 ('PU', 'Accumulated Water Year Precipitation - [in]'),
-                                 ('SR', 'Daily Global Solar Radiation - [langleys]'),
-                                 ('TA', 'Mean Daily Humidity - [%]'),
-                                 ('TG', 'Growing Degree Days - [base 50F]'),
-                                 ('YM', 'Mean Daily Dewpoint Temperature - [F]'),
-                                 ('UA', 'Daily Average Wind Speed - [mph]'),
-                                 ('UD', 'Daily Average Wind Direction - [deg az]'),
-                                 ('WG', 'Daily Peak Wind Gust - [mph]'),
-                                 ('WR', 'Daily Wind Run - [miles]'),
-                                 ]
+WEATHER_PARAMETRS_UNCONVERTED = [
+    ('DATETIME', 'Date - [YYYY-MM-DD]'),
+    ('ET', 'Evapotranspiration Kimberly-Penman - [in]'),
+    ('MM', 'Mean Daily Air Temperature - [F]'),
+    ('MN', 'Minimum Daily Air Temperature - [F]'),
+    ('MX', 'Maximum Daily Air Temperature - [F]'),
+    ('PC', 'Accumulated Precipitation Since Recharge/Reset - [in]'),
+    ('PP', 'Daily (24 hour) Precipitation - [in]'),
+    ('PU', 'Accumulated Water Year Precipitation - [in]'),
+    ('SR', 'Daily Global Solar Radiation - [langleys]'),
+    ('TA', 'Mean Daily Humidity - [%]'),
+    ('TG', 'Growing Degree Days - [base 50F]'),
+    ('YM', 'Mean Daily Dewpoint Temperature - [F]'),
+    ('UA', 'Daily Average Wind Speed - [mph]'),
+    ('UD', 'Daily Average Wind Direction - [deg az]'),
+    ('WG', 'Daily Peak Wind Gust - [mph]'),
+    ('WR', 'Daily Wind Run - [miles]'),
+]
 
 STANDARD_PARAMS = ['et', 'mm', 'mn',
                    'mx', 'pp', 'pu', 'sr', 'ta', 'tg',
@@ -138,15 +139,6 @@ class Agrimet(object):
         names = [c.strip() for c in content[0].split(',')]
         data = {name: [x.split(',')[i].strip() for x in content[1:]] for i, name in enumerate(names)}
         df = DataFrame(data)
-        rename = dict((c, str(c).split(' ')[1]) if c != 'DATE' else (c, c) for c in df.columns)
-
-        cols = df.columns[df.dtypes.eq('object')]
-        df[cols] = df[cols].apply(to_numeric, errors='coerce')
-        df.rename(columns=rename, inplace=True)
-
-        df.index = date_range(self.start, periods=df.shape[0], name='DateTime')
-        df['DATE'] = [i for i in df.index]
-        df = df[to_datetime(self.start): to_datetime(self.end)]
         return df
 
     @staticmethod

@@ -845,32 +845,32 @@ def correction(station, log_path, folder_path, var_one, var_two, dt_array, month
             auto_corr = 0  # set to 0 to prevent another automatic correction loop
 
         # Determine if user wants to keep correcting
-        print('\nAre you done correcting?'
-              '\n   Enter 1 for yes.'
-              '\n   Enter 2 for another iteration.'
-              '\n   Enter 3 to start over.'
-              '\n   Enter 4 to discard all changes.')
-
-        choice = get_int_input(1, 4, "Enter your selection: ")
-
-        if choice == 1:
-            correction_loop = 0
-            corr_log.write('---> User has elected to end corrections. \n')
-        elif choice == 2:
-            var_one = np.array(corr_var_one)
-            var_two = np.array(corr_var_two)
-            corr_log.write('---> User has elected to do another iteration of corrections. \n')
-        elif choice == 3:
-            var_one = np.array(backup_var_one)
-            var_two = np.array(backup_var_two)
-            corr_var_one = np.array(backup_var_one)
-            corr_var_two = np.array(backup_var_two)
-            corr_log.write('---> User has elected to ignore previous iterations of corrections and start over. \n')
-        else:
-            correction_loop = 0
-            corr_var_one = np.array(backup_var_one)
-            corr_var_two = np.array(backup_var_two)
-            corr_log.write('---> User has elected to end corrections without keeping any changes. \n')
+        # print('\nAre you done correcting?'
+        #       '\n   Enter 1 for yes.'
+        #       '\n   Enter 2 for another iteration.'
+        #       '\n   Enter 3 to start over.'
+        #       '\n   Enter 4 to discard all changes.')
+        #
+        # choice = get_int_input(1, 4, "Enter your selection: ")
+        #
+        # if choice == 1:
+        #     correction_loop = 0
+        #     corr_log.write('---> User has elected to end corrections. \n')
+        # elif choice == 2:
+        #     var_one = np.array(corr_var_one)
+        #     var_two = np.array(corr_var_two)
+        #     corr_log.write('---> User has elected to do another iteration of corrections. \n')
+        # elif choice == 3:
+        #     var_one = np.array(backup_var_one)
+        #     var_two = np.array(backup_var_two)
+        #     corr_var_one = np.array(backup_var_one)
+        #     corr_var_two = np.array(backup_var_two)
+        #     corr_log.write('---> User has elected to ignore previous iterations of corrections and start over. \n')
+        # else:
+        #     correction_loop = 0
+        #     corr_var_one = np.array(backup_var_one)
+        #     corr_var_two = np.array(backup_var_two)
+        #     corr_log.write('---> User has elected to end corrections without keeping any changes. \n')
 
     ####################
     # Generate Final Graph

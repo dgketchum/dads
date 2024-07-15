@@ -233,14 +233,17 @@ class WeatherQC:
                   '\n   Enter 0 to stop applying corrections.'
                   )
 
-            choice_loop = True
+            choice_loop = False
+            user = 0
+            print('WARNING: corrections have been manually disabled in line 241 of agweatherqaqc.py')
             while choice_loop:
 
                 # user = utils.get_int_input(0, 9, "\nEnter your selection: ")
-                user = 0
-                print('WARNING: corrections have been manually disabled in line 241 of agweatherqaqc.py')
                 # The following if statements check whether user tries to correct a variable that was not provided
                 # or make sure correction is being done in the ideal order
+
+                user == 0
+
                 if user == 2 and self.column_ser.tdew == -1:
                     print('\nDewpoint temperature was not provided by the file, please choose a different option.')
                 elif user == 6 and self.column_ser.ea == -1:
@@ -265,55 +268,55 @@ class WeatherQC:
             # Correcting individual variables based on user choice
             # Correcting Max/Min Temperature data
             if user == 1:
-                (self.data_tmax, self.data_tmin) = qaqc_functions.\
+                (self.data_tmax, self.data_tmin) = qaqc_functions. \
                     correction(self.station_name, self.log_file, self.folder_path,
                                self.data_tmax, self.data_tmin, self.dt_array,
                                self.data_month, self.data_year, 1, self.auto_mode)
             # Correcting Min/Dew Temperature data
             elif user == 2:
-                (self.data_tmin, self.data_tdew) = qaqc_functions.\
+                (self.data_tmin, self.data_tdew) = qaqc_functions. \
                     correction(self.station_name, self.log_file, self.folder_path,
                                self.data_tmin, self.data_tdew, self.dt_array,
                                self.data_month, self.data_year, 2, self.auto_mode)
             # Correcting Windspeed
             elif user == 3:
-                (self.data_ws, self.data_null) = qaqc_functions.\
+                (self.data_ws, self.data_null) = qaqc_functions. \
                     correction(self.station_name, self.log_file, self.folder_path,
                                self.data_ws, self.data_null, self.dt_array,
                                self.data_month, self.data_year, 3, self.auto_mode)
             # Correcting Precipitation
             elif user == 4:
-                (self.data_precip, self.data_null) = qaqc_functions.\
+                (self.data_precip, self.data_null) = qaqc_functions. \
                     correction(self.station_name, self.log_file, self.folder_path,
                                self.data_precip, self.data_null, self.dt_array,
                                self.data_month, self.data_year, 4, self.auto_mode)
             # Correcting Solar radiation
             elif user == 5:
-                (self.data_rs, self.data_null) = qaqc_functions.\
+                (self.data_rs, self.data_null) = qaqc_functions. \
                     correction(self.station_name, self.log_file, self.folder_path,
                                self.data_rs, self.rso, self.dt_array,
                                self.data_month, self.data_year, 5, self.auto_mode)
             # Correcting Vapor Pressure
             elif user == 6:
-                (self.data_ea, self.data_null) = qaqc_functions.\
+                (self.data_ea, self.data_null) = qaqc_functions. \
                     correction(self.station_name, self.log_file, self.folder_path,
                                self.data_ea, self.data_null, self.dt_array,
                                self.data_month, self.data_year, 7, self.auto_mode)
             # Correcting Relative Humidity Max and Min
             elif user == 7:
-                (self.data_rhmax, self.data_rhmin) = qaqc_functions.\
+                (self.data_rhmax, self.data_rhmin) = qaqc_functions. \
                     correction(self.station_name, self.log_file, self.folder_path,
                                self.data_rhmax, self.data_rhmin, self.dt_array,
                                self.data_month, self.data_year, 8, self.auto_mode)
             # Correcting Relative Humidity Average
             elif user == 8:
-                (self.data_rhavg, self.data_null) = qaqc_functions.\
+                (self.data_rhavg, self.data_null) = qaqc_functions. \
                     correction(self.station_name, self.log_file, self.folder_path,
                                self.data_rhavg, self.data_null, self.dt_array,
                                self.data_month, self.data_year, 9, self.auto_mode)
             # Adjusting compiled_ea
             elif user == 9:
-                self.compiled_ea = qaqc_functions.\
+                self.compiled_ea = qaqc_functions. \
                     compiled_humidity_adjustment(self.station_name, self.log_file, self.folder_path, self.dt_array,
                                                  self.data_tmax, self.data_tmin, self.data_tavg, self.compiled_ea,
                                                  self.data_ea, self.column_ser.ea, self.data_tdew, self.column_ser.tdew,
@@ -383,7 +386,7 @@ class WeatherQC:
                             self.fill_tmax[i] = self.complete_tmax[i]
 
                             self.complete_tmin[i] = self.mm_tmin[self.data_month[i] - 1] - \
-                                (0.5 * self.mm_delta_t[self.data_month[i] - 1])
+                                                    (0.5 * self.mm_delta_t[self.data_month[i] - 1])
                             self.fill_tmin[i] = self.complete_tmin[i]
                         else:
                             # data is different enough to appear valid
@@ -406,7 +409,7 @@ class WeatherQC:
                 # This function is safe to use after correcting because it tracks what variable was provided by the data
                 # and recalculates appropriately. It doesn't overwrite provided variables with calculated versions.
                 # Ex. if only TDew is provided, it recalculates ea while returning original provided tdew
-                (self.data_ea, self.data_tdew) = calc_functions.\
+                (self.data_ea, self.data_tdew) = calc_functions. \
                     calc_humidity_variables(self.data_tmax, self.data_tmin, self.data_tavg, self.data_ea,
                                             self.column_ser.ea, self.data_tdew, self.column_ser.tdew,
                                             self.data_rhmax, self.column_ser.rhmax, self.data_rhmin,

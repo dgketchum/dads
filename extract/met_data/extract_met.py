@@ -4,6 +4,7 @@ import configparser
 
 import numpy as np
 import pandas as pd
+import geopandas as gpd
 import pynldas2 as nld
 from refet import calcs
 
@@ -20,9 +21,15 @@ RESAMPLE_MAP = {'rsds': 'mean',
                 'wind': 'mean'}
 
 
-def extract_gridded(stations, obs_dir, gridded_dir, source='agrimet'):
+def extract_gridded(stations, obs_dir, gridded_dir, source='agrimet', overwrite=False):
     kw = station_par_map('agri')
-    station_list = pd.read_csv(stations, index_col=kw['index'])
+
+    if stations.endswith('.csv'):
+        station_list = pd.read_csv(stations, index_col=kw['index'])
+    else:
+        station_list = gpd.read_file(stations, index_col=kw['index'])
+        station_list.drop(columns=['url', 'title', 'install', 'geometry'], inplace=True)
+        station_list.index = station_list['siteid']
 
     ws = os.path.dirname(__file__)
     template = os.path.join(ws, 'qaqc', '{}_template.ini'.format(source))
@@ -30,7 +37,7 @@ def extract_gridded(stations, obs_dir, gridded_dir, source='agrimet'):
 
     for i, (fid, row) in enumerate(station_list.iterrows()):
 
-        if fid != 'bfam':
+        if fid == 'covm':
             continue
 
         lat, lon, elv = row[kw['lon']], row[kw['lat']], row[kw['elev']]
@@ -39,22 +46,34 @@ def extract_gridded(stations, obs_dir, gridded_dir, source='agrimet'):
         if not os.path.isdir(station_dir):
             os.mkdir(station_dir)
 
-        if source == 'agrimet':
-            ag = Agrimet(start_date='1989-01-01', end_date='2023-12-31', station=fid)
-            ag.region = 'great_plains'
-            sta_df = ag.fetch_met_data()
-            file_unproc = os.path.join(station_dir, '{}_input.csv'.format(fid))
-            sta_df.to_csv(file_unproc, index=False)
-            ini = os.path.join(station_dir, '{}_input.ini'.format(fid))
-            modify_config(template, ini, file_unproc, lat, lon, elv)
+        _file = os.path.join(station_dir, 'correction_files', 'output_data', '{}_output.csv'.format(fid))
+        if os.path.exists(_file) and not overwrite:
+            continue
 
-        qaqc = WeatherQC(ini)
-        qaqc.process_station()
+        if source == 'agrimet':
+
+            try:
+                ag = Agrimet(start_date='1989-01-01', end_date='2023-12-31', station=fid)
+                ag.region = 'great_plains'
+                sta_df = ag.fetch_met_data()
+                file_unproc = os.path.join(station_dir, '{}.csv'.format(fid))
+                sta_df.to_csv(file_unproc, index=False)
+                ini = os.path.join(station_dir, '{}.ini'.format(fid))
+                modify_config(template, ini, file_unproc, lat, lon, elv)
+
+                qaqc = WeatherQC(ini)
+                qaqc.process_station()
+            except Exception as e:
+                print(fid, e)
+                continue
 
         df = get_nldas(lat, lon, elv)
-        df.to_csv(gridded_dir, 'nldas2', index=False)
+        _file = os.path.join(gridded_dir, 'nldas2', '{}.csv'.format(fid))
+        df.to_csv(_file)
+
         df = get_gridmet(lat, lon, elv)
-        df.to_csv(gridded_dir, 'gridmet', index=False)
+        _file = os.path.join(gridded_dir, 'gridmet', '{}.csv'.format(fid))
+        df.to_csv(_file)
 
 
 def get_nldas(lon, lat, elev, start='1989-01-01', end='2023-12-31'):
@@ -143,9 +162,9 @@ def station_par_map(station_type):
                 'end': 'END DATE'}
     elif station_type == 'agri':
         return {'index': 'id',
-                'lat': 'latitude',
-                'lon': 'longitude',
-                'elev': 'elev_m',
+                'lat': 'lat',
+                'lon': 'lon',
+                'elev': 'elev',
                 'start': 'record_start',
                 'end': 'record_end'}
     else:
@@ -158,11 +177,11 @@ if __name__ == '__main__':
         home = os.path.expanduser('~')
         d = os.path.join(home, 'data', 'IrrigationGIS', 'dads')
 
-    station_meta = os.path.join(d, 'met', 'stations', 'smm_stations.csv')
+    station_meta = os.path.join(d, 'met', 'stations', 'mt_agrimet_elev.shp')
 
     obs = os.path.join(d, 'met', 'obs')
 
-    grid_dir = os.path.join(d, 'weather_station_data_processing', 'gridded')
+    grid_dir = os.path.join(d, 'met', 'gridded')
 
     extract_gridded(station_meta, obs, grid_dir, source='agrimet')
 # ========================= EOF ====================================================================
