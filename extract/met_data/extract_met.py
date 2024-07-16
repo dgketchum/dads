@@ -48,24 +48,32 @@ def extract_gridded(stations, obs_dir, gridded_dir, source='agrimet', overwrite=
 
         _file = os.path.join(station_dir, 'correction_files', 'output_data', '{}_output.csv'.format(fid))
         if os.path.exists(_file) and not overwrite:
+            print('Agweather-QAQC file {} already exists, skipping'.format(_file))
             continue
 
         if source == 'agrimet':
 
-            try:
-                ag = Agrimet(start_date='1989-01-01', end_date='2023-12-31', station=fid)
-                ag.region = 'great_plains'
-                sta_df = ag.fetch_met_data()
-                file_unproc = os.path.join(station_dir, '{}.csv'.format(fid))
-                sta_df.to_csv(file_unproc, index=False)
-                ini = os.path.join(station_dir, '{}.ini'.format(fid))
-                modify_config(template, ini, file_unproc, lat, lon, elv)
-
-                qaqc = WeatherQC(ini)
-                qaqc.process_station()
-            except Exception as e:
-                print(fid, e)
+            agri_file = os.path.join(station_dir, '{}.csv'.format(fid))
+            if os.path.exists(agri_file):
                 continue
+
+            ag = Agrimet(start_date='1989-01-01', end_date='2023-12-31', station=fid)
+            ag.region = 'great_plains'
+            sta_df = ag.fetch_met_data()
+
+            df = sta_df.copy()
+            cols = df.columns[df.dtypes.eq('object')]
+            df[cols] = df[cols].apply(pd.to_numeric, errors='coerce')
+            if np.count_nonzero(np.isnan(df.values.flatten())) == df.values.size:
+                print('Agrimet {} returned no data'.format(fid))
+                continue
+
+            sta_df.to_csv(agri_file, index=False)
+            ini = os.path.join(station_dir, '{}.ini'.format(fid))
+            modify_config(template, ini, agri_file, lat, lon, elv)
+
+            qaqc = WeatherQC(ini)
+            qaqc.process_station()
 
         df = get_nldas(lat, lon, elv)
         _file = os.path.join(gridded_dir, 'nldas2', '{}.csv'.format(fid))
@@ -177,7 +185,7 @@ if __name__ == '__main__':
         home = os.path.expanduser('~')
         d = os.path.join(home, 'data', 'IrrigationGIS', 'dads')
 
-    station_meta = os.path.join(d, 'met', 'stations', 'mt_agrimet_elev.shp')
+    station_meta = os.path.join(d, 'met', 'agrimet_aea_elev.shp')
 
     obs = os.path.join(d, 'met', 'obs')
 
