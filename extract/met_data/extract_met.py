@@ -21,7 +21,7 @@ RESAMPLE_MAP = {'rsds': 'mean',
                 'wind': 'mean'}
 
 
-def extract_gridded(stations, obs_dir, gridded_dir, source='agrimet', overwrite=False):
+def extract_met_data(stations, obs_dir, gridded_dir, source='agrimet', overwrite=False):
     kw = station_par_map('agri')
 
     if stations.endswith('.csv'):
@@ -31,49 +31,9 @@ def extract_gridded(stations, obs_dir, gridded_dir, source='agrimet', overwrite=
         station_list.drop(columns=['url', 'title', 'install', 'geometry'], inplace=True)
         station_list.index = station_list['siteid']
 
-    ws = os.path.dirname(__file__)
-    template = os.path.join(ws, 'qaqc', '{}_template.ini'.format(source))
-    ini = None
-
     for i, (fid, row) in enumerate(station_list.iterrows()):
 
-        if fid == 'covm':
-            continue
-
         lat, lon, elv = row[kw['lon']], row[kw['lat']], row[kw['elev']]
-
-        station_dir = os.path.join(obs_dir, source, fid)
-        if not os.path.isdir(station_dir):
-            os.mkdir(station_dir)
-
-        _file = os.path.join(station_dir, 'correction_files', 'output_data', '{}_output.csv'.format(fid))
-        if os.path.exists(_file) and not overwrite:
-            print('Agweather-QAQC file {} already exists, skipping'.format(_file))
-            continue
-
-        if source == 'agrimet':
-
-            agri_file = os.path.join(station_dir, '{}.csv'.format(fid))
-            if os.path.exists(agri_file):
-                continue
-
-            ag = Agrimet(start_date='1989-01-01', end_date='2023-12-31', station=fid)
-            ag.region = 'great_plains'
-            sta_df = ag.fetch_met_data()
-
-            df = sta_df.copy()
-            cols = df.columns[df.dtypes.eq('object')]
-            df[cols] = df[cols].apply(pd.to_numeric, errors='coerce')
-            if np.count_nonzero(np.isnan(df.values.flatten())) == df.values.size:
-                print('Agrimet {} returned no data'.format(fid))
-                continue
-
-            sta_df.to_csv(agri_file, index=False)
-            ini = os.path.join(station_dir, '{}.ini'.format(fid))
-            modify_config(template, ini, agri_file, lat, lon, elv)
-
-            qaqc = WeatherQC(ini)
-            qaqc.process_station()
 
         df = get_nldas(lat, lon, elv)
         _file = os.path.join(gridded_dir, 'nldas2', '{}.csv'.format(fid))
@@ -84,7 +44,7 @@ def extract_gridded(stations, obs_dir, gridded_dir, source='agrimet', overwrite=
         df.to_csv(_file)
 
 
-def get_nldas(lon, lat, elev, start='1989-01-01', end='2023-12-31'):
+def get_nldas(lon, lat, elev, start='2000-01-01', end='2023-12-31'):
     df = nld.get_bycoords((lon, lat), start_date=start, end_date=end, source='grib',
                           variables=['temp', 'wind_u', 'wind_v', 'humidity', 'rsds'])
 
@@ -106,7 +66,7 @@ def get_nldas(lon, lat, elev, start='1989-01-01', end='2023-12-31'):
     return df
 
 
-def get_gridmet(lon, lat, elev, start='1989-01-01', end='2023-12-31'):
+def get_gridmet(lon, lat, elev, start='2000-01-01', end='2023-12-31'):
     df, cols = pd.DataFrame(), gridmet_par_map()
 
     for thredds_var, variable in cols.items():
@@ -185,11 +145,11 @@ if __name__ == '__main__':
         home = os.path.expanduser('~')
         d = os.path.join(home, 'data', 'IrrigationGIS', 'dads')
 
-    station_meta = os.path.join(d, 'met', 'agrimet_aea_elev.shp')
+    station_meta = os.path.join(d, 'met', 'stations', 'openet_gridwxcomp_input.csv')
 
     obs = os.path.join(d, 'met', 'obs')
 
     grid_dir = os.path.join(d, 'met', 'gridded')
 
-    extract_gridded(station_meta, obs, grid_dir, source='agrimet')
+    extract_met_data(station_meta, obs, grid_dir, source='agrimet')
 # ========================= EOF ====================================================================
