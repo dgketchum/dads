@@ -18,8 +18,8 @@ if __name__ == '__main__':
         home = os.path.expanduser('~')
         r = os.path.join(home, 'data', 'IrrigationGIS')
 
-    fields = os.path.join(r, 'climate', 'agrimet', 'agrimet_mt_aea.shp')
-    out_fields = os.path.join(r, 'climate', 'agrimet', 'agrimet_mt_aea_elev.shp')
+    fields = os.path.join(r, 'climate', 'agrimet', 'agrimet_aea.shp')
+    out_fields = os.path.join(r, 'dads', 'met', 'agrimet_aea_elev.shp')
 
     gdf = gpd.read_file(fields)
     elev = elevation_from_coordinate(gdf.loc[0, 'lat'], gdf.loc[0, 'lon'])
