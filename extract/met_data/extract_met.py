@@ -21,27 +21,40 @@ RESAMPLE_MAP = {'rsds': 'mean',
                 'wind': 'mean'}
 
 
-def extract_met_data(stations, obs_dir, gridded_dir, source='agrimet', overwrite=False):
-    kw = station_par_map('agri')
+def extract_met_data(stations, obs_dir, gridded_dir, overwrite=False, transfer=None):
+    kw = station_par_map('openet')
 
     if stations.endswith('.csv'):
         station_list = pd.read_csv(stations, index_col=kw['index'])
+
     else:
         station_list = gpd.read_file(stations, index_col=kw['index'])
         station_list.drop(columns=['url', 'title', 'install', 'geometry'], inplace=True)
-        station_list.index = station_list['siteid']
+
+        station_list.index = station_list[kw['index']]
 
     for i, (fid, row) in enumerate(station_list.iterrows()):
 
+        sta_file = os.path.join(obs_dir, '{}_data.xlsx'.format(fid))
+
+        if transfer:
+            df = pd.read_excel(sta_file, index_col='date')
+            dst_file = os.path.join(transfer, '{}.csv'.format(fid))
+            df.to_csv(dst_file)
+            print(fid)
+            continue
+
         lat, lon, elv = row[kw['lon']], row[kw['lat']], row[kw['elev']]
 
-        df = get_nldas(lat, lon, elv)
         _file = os.path.join(gridded_dir, 'nldas2', '{}.csv'.format(fid))
-        df.to_csv(_file)
+        if not os.path.exists(_file) and not overwrite:
+            df = get_nldas(lat, lon, elv)
+            df.to_csv(_file)
 
-        df = get_gridmet(lat, lon, elv)
         _file = os.path.join(gridded_dir, 'gridmet', '{}.csv'.format(fid))
-        df.to_csv(_file)
+        if not os.path.exists(_file) and not overwrite:
+            df = get_gridmet(lat, lon, elv)
+            df.to_csv(_file)
 
 
 def get_nldas(lon, lat, elev, start='2000-01-01', end='2023-12-31'):
@@ -121,11 +134,11 @@ def gridmet_par_map():
 
 
 def station_par_map(station_type):
-    if station_type == 'ec':
-        return {'index': 'SITE_ID',
-                'lat': 'LATITUDE',
-                'lon': 'LONGITUDE',
-                'elev': 'ELEVATION (METERS)',
+    if station_type == 'openet':
+        return {'index': 'STATION_ID',
+                'lat': 'LAT',
+                'lon': 'LON',
+                'elev': 'ELEV_M',
                 'start': 'START DATE',
                 'end': 'END DATE'}
     elif station_type == 'agri':
@@ -147,9 +160,10 @@ if __name__ == '__main__':
 
     station_meta = os.path.join(d, 'met', 'stations', 'openet_gridwxcomp_input.csv')
 
-    obs = os.path.join(d, 'met', 'obs')
+    obs = os.path.join(d, 'met', 'obs', 'corrected_station_data')
+    dst_obs = os.path.join(d, 'met', 'obs', 'openet_data')
 
     grid_dir = os.path.join(d, 'met', 'gridded')
 
-    extract_met_data(station_meta, obs, grid_dir, source='agrimet')
+    extract_met_data(station_meta, obs, grid_dir, transfer=dst_obs)
 # ========================= EOF ====================================================================
