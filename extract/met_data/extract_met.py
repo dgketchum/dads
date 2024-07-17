@@ -38,11 +38,16 @@ def extract_met_data(stations, obs_dir, gridded_dir, overwrite=False, transfer=N
         sta_file = os.path.join(obs_dir, '{}_data.xlsx'.format(fid))
 
         if transfer:
-            df = pd.read_excel(sta_file, index_col='date')
-            dst_file = os.path.join(transfer, '{}.csv'.format(fid))
-            df.to_csv(dst_file)
-            print(fid)
-            continue
+            try:
+                dst_file = os.path.join(transfer, '{}.csv'.format(fid))
+                if os.path.exists(dst_file):
+                    print(fid, 'exists')
+                    continue
+                df = pd.read_excel(sta_file, index_col='date')
+                df.to_csv(dst_file)
+                print(fid)
+            except FileNotFoundError as e:
+                print(fid, e)
 
         lat, lon, elv = row[kw['lon']], row[kw['lat']], row[kw['elev']]
 
@@ -55,6 +60,8 @@ def extract_met_data(stations, obs_dir, gridded_dir, overwrite=False, transfer=N
         if not os.path.exists(_file) and not overwrite:
             df = get_gridmet(lat, lon, elv)
             df.to_csv(_file)
+
+        print(fid)
 
 
 def get_nldas(lon, lat, elev, start='2000-01-01', end='2023-12-31'):
@@ -165,5 +172,5 @@ if __name__ == '__main__':
 
     grid_dir = os.path.join(d, 'met', 'gridded')
 
-    extract_met_data(station_meta, obs, grid_dir, transfer=dst_obs)
+    extract_met_data(station_meta, obs, grid_dir, transfer=dst_obs, overwrite=False)
 # ========================= EOF ====================================================================

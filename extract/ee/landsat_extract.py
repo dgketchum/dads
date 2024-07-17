@@ -1,7 +1,8 @@
 import os
 import sys
-
+from datetime import datetime
 import ee
+import pandas as pd
 import geopandas as gpd
 
 from extract.ee.ee_utils import landsat_masked, is_authorized
@@ -27,24 +28,23 @@ def get_flynn():
                                            {'key': 'Flynn_Ex'}))
 
 
-def multipoint_landsat(shapefile, bucket=None, debug=False, check_dir=None):
-    df = gpd.read_file(shapefile)
+def multipoint_landsat(shapefile, bucket=None, debug=False, check_dir=None, index='FID'):
+    df = pd.read_csv(shapefile, parse_dates=True)
 
-    assert df.crs.srs == 'EPSG:5071'
-
-    df = df.to_crs(epsg=4326)
-
-    s, e = '1987-01-01', '2021-12-31'
-    irr_coll = ee.ImageCollection(IRR)
-    coll = irr_coll.filterDate(s, e).select('classification')
-    remap = coll.map(lambda img: img.lt(1))
-    irr_min_yr_mask = remap.sum().gte(5)
+    fmt = '%m/%d/%Y %H:%M'
+    df['record_start'] = [datetime.strptime(v, fmt) for v in df['record_start']]
+    df['record_end'] = [datetime.strptime(v, fmt) for v in df['record_end']]
 
     for fid, row in df.iterrows():
 
-        for year in range(1990, 2025):
+        s, e = row['record_start'], row['record_end']
 
-            site = row['FID']
+        for year in range(s.year, e.year + 1):
+
+            site = row[index]
+
+            if 'MT' in site:
+                continue
 
             desc = 'bands_{}_{}'.format(site, year)
             if check_dir:
@@ -53,9 +53,9 @@ def multipoint_landsat(shapefile, bucket=None, debug=False, check_dir=None):
                     print(desc, 'exists, skipping')
                     continue
 
-            point = ee.Geometry.Point([row['lon'], row['lat']])
-            geo = point.buffer(500.)
-            fc = ee.FeatureCollection(ee.Feature(geo, {'FID': site}))
+            point = ee.Geometry.Point([row['LON'], row['LAT']])
+            geo = point.buffer(2000.)
+            fc = ee.FeatureCollection(ee.Feature(geo, {index: site}))
 
             coll = landsat_masked(year, fc).select(SELECT)
             scenes = coll.aggregate_histogram('system:index').getInfo()
@@ -107,9 +107,8 @@ if __name__ == '__main__':
 
     is_authorized()
     bucket_ = 'wudr'
-    fields = os.path.join(d, 'climate', 'agrimet', 'agrimet_aea.shp')
-
+    fields = os.path.join(d, 'dads', 'met', 'stations', 'openet_gridwxcomp_input.csv')
     chk = os.path.join(d, 'dads', 'landsat', 'agrimet_locations', 'ee_extracts')
-    multipoint_landsat(fields, bucket_, debug=False, check_dir=chk)
+    multipoint_landsat(fields, bucket_, debug=False, check_dir=chk, index='STATION_ID')
 
 # ========================= EOF ====================================================================
