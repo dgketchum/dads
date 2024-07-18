@@ -38,12 +38,16 @@ def multipoint_landsat(shapefile, bucket=None, debug=False, check_dir=None, inde
 
     for i, (fid, row) in enumerate(df.iterrows(), start=1):
 
+        site = row[index]
+        state = site.split('_')[-1]
+
+        if state not in STATES:
+            continue
+
         s, e = row['record_start'], row['record_end']
         print('{} of {}: {}'.format(i, df.shape[0], fid))
 
         for year in range(s.year, e.year + 1):
-
-            site = row[index]
 
             desc = 'bands_{}_{}'.format(site, year)
             if check_dir:
@@ -96,8 +100,8 @@ def multipoint_landsat(shapefile, bucket=None, debug=False, check_dir=None, inde
             try:
                 task.start()
                 print(desc)
-            except Exception:
-                print('waiting on ', desc)
+            except ee.ee_exception.EEException:
+                print('waiting on ', desc, '......')
                 time.sleep(600)
                 task.start()
                 print(desc)

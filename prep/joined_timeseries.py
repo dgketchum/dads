@@ -2,11 +2,8 @@ import datetime
 import os
 import warnings
 
-import matplotlib.pyplot as plt
 import pandas as pd
 from refet import Daily, calcs
-from sklearn.metrics import r2_score
-import matplotlib.pyplot as plt
 
 warnings.filterwarnings("ignore", category=FutureWarning)
 VAR_MAP = {'rsds': 'Rs (w/m2)',
@@ -21,22 +18,29 @@ RENAME_MAP = {v: k for k, v in VAR_MAP.items()}
 
 COMPARISON_VARS = ['vpd', 'rsds', 'min_temp', 'max_temp', 'mean_temp', 'wind', 'eto']
 
+STATES = ['AZ', 'CA', 'CO', 'ID', 'MT', 'NM', 'NV', 'OR', 'UT', 'WA', 'WY']
 
-def join_daily_timeseries(fields, gridmet_dir, rs_dir, sta_dir, dst_dir, overwrite=False, index='FID', **kwargs):
+
+def join_daily_timeseries(fields, gridmet_dir, rs_dir, sta_dir, dst_dir, index='FID'):
     fields = pd.read_csv(fields, index_col=index)
+    fields = fields.loc[[i for i, r in fields.iterrows() if r['State'] in STATES]]
     df = pd.DataFrame()
-    for f, row in fields.iterrows():
-
-        # if 'MT' not in f:
-        #     continue
+    for i, (f, row) in enumerate(fields.iterrows(), start=1):
 
         lst = join_landsat(rs_dir, f)
+        if lst is None:
+            continue
         lst_cols = lst.columns
 
         gridmet_file = os.path.join(gridmet_dir, '{}.csv'.format(f))
 
-        # TODO: remove the tz application in the data extract code
-        gdf = pd.read_csv(gridmet_file, index_col=0, parse_dates=True)
+        try:
+            # TODO: remove the tz application in the data extract code
+            gdf = pd.read_csv(gridmet_file, index_col=0, parse_dates=True)
+        except FileNotFoundError:
+            print('{} does not exist'.format(gridmet_file))
+            continue
+
         gdf.index = pd.DatetimeIndex([datetime.date(i.year, i.month, i.day) for i in gdf.index])
         match_idx = [i for i in lst.index if i in gdf.index]
         gdf = gdf.loc[match_idx]
@@ -56,6 +60,9 @@ def join_daily_timeseries(fields, gridmet_dir, rs_dir, sta_dir, dst_dir, overwri
             sdf = pd.read_csv(sta_file, index_col='Unnamed: 0', parse_dates=True)
         except ValueError:
             sdf = pd.read_csv(sta_file, index_col='date', parse_dates=True)
+        except FileNotFoundError:
+            print('{} does not exist'.format(sta_file))
+            continue
 
         match_idx = [i for i in match_idx if i in sdf.index]
         sdf = sdf.loc[match_idx]
@@ -74,38 +81,9 @@ def join_daily_timeseries(fields, gridmet_dir, rs_dir, sta_dir, dst_dir, overwri
         sdf['FID'] = f
         sdf = sdf[all_cols]
         df = pd.concat([df, sdf])
-        print(f)
+        print(f, '{} of {}'.format(i, fields.shape[0]))
 
-    variables = ['rsds', 'vpd', 'min_temp', 'max_temp', 'mean_temp', 'wind', 'eto']
-    bands = ['B10', 'B2', 'B3', 'B4', 'B5', 'B6', 'B7']
-    results = {}
-
-    for var in variables:
-        for month in range(1, 13):
-            idx = [i for i in df.index if i.month == month]
-            sub = df.loc[idx, [f"{var}_obs", f"{var}_gm"] + bands].copy()
-            sub.dropna(how='any', inplace=True, axis=0)
-            sub['residual'] = sub[f"{var}_obs"] - sub[f"{var}_gm"]
-            sub[bands] = sub[bands].apply(lambda x: (x - x.min()) / (x.max() - x.min()))
-
-            if sub.shape[0] == 0:
-                continue
-
-            for band in bands:
-
-                r_squared = r2_score(sub['residual'], sub[band])
-
-                if r_squared > 0.:
-                    print('r2: {:.2f}, {}, {}, month {}, n {}'.format(r_squared, var, band, month, sub.shape[0]))
-                    plt.scatter(sub[band], sub['residual'])
-                    plt.xlabel(band)
-                    plt.ylabel(var)
-                    plt.savefig(os.path.join(dst_dir, '{}_{}_{}.png'.format(month, var, band)))
-                    plt.close()
-
-                results[f"{var}_residual_vs_{band}"] = r_squared
-
-    cf = pd.DataFrame.from_dict(results, orient='index', columns=['correlation'])
+    df.to_csv(os.path.join(dst_dir))
 
 
 def join_landsat(dir_, glob):
@@ -117,6 +95,7 @@ def join_landsat(dir_, glob):
         df['band'] = [i[-1] for i in splt]
     except Exception as e:
         print(glob, e)
+        return None
 
     df.index = [pd.to_datetime(i[-2]) for i in splt]
 
@@ -170,7 +149,9 @@ if __name__ == '__main__':
     sta = os.path.join(d, 'met', 'obs', 'gwx')
     gm = os.path.join(d, 'met', 'gridded', 'gridmet')
     rs = os.path.join(d, 'rs', 'gwx_stations')
-    joined = os.path.join(d, 'tables', 'gridmet')
+    joined = os.path.join(d, 'tables', 'gridmet', 'western_lst_metvars.csv')
+    plots = os.path.join(d, 'plots', 'gridmet')
 
     join_daily_timeseries(fields, gm, rs, sta, joined, index='STATION_ID')
+
 # ========================= EOF ====================================================================
