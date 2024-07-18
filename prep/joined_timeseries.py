@@ -109,12 +109,17 @@ def join_daily_timeseries(fields, gridmet_dir, rs_dir, sta_dir, dst_dir, overwri
 
 
 def join_landsat(dir_, glob):
-    l = [os.path.join(dir_, x) for x in os.listdir(dir_) if glob in x]
-    df = pd.concat([pd.read_csv(f).T for f in l])
-    df.dropna(how='any', axis=0, inplace=True)
-    splt = [i.split('_') for i in df.index]
-    df['band'] = [i[-1] for i in splt]
+    try:
+        l = [os.path.join(dir_, x) for x in os.listdir(dir_) if glob in x]
+        df = pd.concat([pd.read_csv(f).T for f in l])
+        df.dropna(how='any', axis=0, inplace=True)
+        splt = [i.split('_') for i in df.index]
+        df['band'] = [i[-1] for i in splt]
+    except Exception as e:
+        print(glob, e)
+
     df.index = [pd.to_datetime(i[-2]) for i in splt]
+
     try:
         df = df.pivot(columns=['band'])
     except ValueError:

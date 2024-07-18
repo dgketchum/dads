@@ -1,5 +1,6 @@
 import os
 import sys
+import time
 from datetime import datetime
 import ee
 import pandas as pd
@@ -35,22 +36,19 @@ def multipoint_landsat(shapefile, bucket=None, debug=False, check_dir=None, inde
     df['record_start'] = [datetime.strptime(v, fmt) for v in df['record_start']]
     df['record_end'] = [datetime.strptime(v, fmt) for v in df['record_end']]
 
-    for fid, row in df.iterrows():
+    for i, (fid, row) in enumerate(df.iterrows(), start=1):
 
         s, e = row['record_start'], row['record_end']
+        print('{} of {}: {}'.format(i, df.shape[0], fid))
 
         for year in range(s.year, e.year + 1):
 
             site = row[index]
 
-            if 'MT' in site:
-                continue
-
             desc = 'bands_{}_{}'.format(site, year)
             if check_dir:
                 f = os.path.join(check_dir, '{}.csv'.format(desc))
                 if os.path.exists(f):
-                    print(desc, 'exists, skipping')
                     continue
 
             point = ee.Geometry.Point([row['LON'], row['LAT']])
@@ -95,8 +93,14 @@ def multipoint_landsat(shapefile, bucket=None, debug=False, check_dir=None, inde
                 fileFormat='CSV',
                 selectors=selectors)
 
-            task.start()
-            print(desc)
+            try:
+                task.start()
+                print(desc)
+            except Exception:
+                print('waiting on ', desc)
+                time.sleep(600)
+                task.start()
+                print(desc)
 
 
 if __name__ == '__main__':
@@ -107,8 +111,10 @@ if __name__ == '__main__':
 
     is_authorized()
     bucket_ = 'wudr'
+
     fields = os.path.join(d, 'dads', 'met', 'stations', 'openet_gridwxcomp_input.csv')
-    chk = os.path.join(d, 'dads', 'landsat', 'agrimet_locations', 'ee_extracts')
+    chk = os.path.join(d, 'dads', 'rs', 'gwx_stations')
+
     multipoint_landsat(fields, bucket_, debug=False, check_dir=chk, index='STATION_ID')
 
 # ========================= EOF ====================================================================
