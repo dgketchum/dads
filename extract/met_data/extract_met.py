@@ -6,7 +6,8 @@ import numpy as np
 import pandas as pd
 import geopandas as gpd
 import pynldas2 as nld
-from refet import calcs
+from refet import calcs, Daily
+from pandarallel import pandarallel
 
 from thredds import GridMet
 from qaqc.agweatherqaqc import WeatherQC
@@ -14,11 +15,21 @@ from agrimet import Agrimet
 
 PACIFIC = pytz.timezone('US/Pacific')
 
-RESAMPLE_MAP = {'rsds': 'mean',
-                'humidity': 'mean',
-                'min_temp': 'min',
-                'max_temp': 'max',
-                'wind': 'mean'}
+GRIDMET_RESAMPLE_MAP = {'rsds': 'mean',
+                        'humidity': 'mean',
+                        'min_temp': 'min',
+                        'max_temp': 'max',
+                        'wind': 'mean'}
+
+NLDAS_RESAMPLE_MAP = {'rsds': 'sum',
+                      'rlds': 'sum',
+                      'humidity': 'mean',
+                      'min_temp': 'min',
+                      'max_temp': 'max',
+                      'wind': 'mean',
+                      'ea': 'mean'}
+
+REQUIRED_GRID_COLS = ['tmean', 'vpd', 'rn', 'u2', 'eto']
 
 
 def extract_met_data(stations, obs_dir, gridded_dir, overwrite=False, transfer=None):
@@ -40,24 +51,22 @@ def extract_met_data(stations, obs_dir, gridded_dir, overwrite=False, transfer=N
         if transfer:
             try:
                 dst_file = os.path.join(transfer, '{}.csv'.format(fid))
-                if os.path.exists(dst_file):
-                    print(fid, 'exists')
-                    continue
-                df = pd.read_excel(sta_file, index_col='date')
-                df.to_csv(dst_file)
-                print(fid)
+                if not os.path.exists(dst_file):
+                    df = pd.read_excel(sta_file, index_col='date')
+                    df.to_csv(dst_file)
+                    print(fid)
             except FileNotFoundError as e:
                 print(fid, e)
 
         lat, lon, elv = row[kw['lon']], row[kw['lat']], row[kw['elev']]
 
         _file = os.path.join(gridded_dir, 'nldas2', '{}.csv'.format(fid))
-        if not os.path.exists(_file) and not overwrite:
+        if not os.path.exists(_file) or overwrite:
             df = get_nldas(lat, lon, elv)
             df.to_csv(_file)
 
         _file = os.path.join(gridded_dir, 'gridmet', '{}.csv'.format(fid))
-        if not os.path.exists(_file) and not overwrite:
+        if not os.path.exists(_file) or overwrite:
             df = get_gridmet(lat, lon, elv)
             df.to_csv(_file)
 
@@ -66,23 +75,58 @@ def extract_met_data(stations, obs_dir, gridded_dir, overwrite=False, transfer=N
 
 def get_nldas(lon, lat, elev, start='2000-01-01', end='2023-12-31'):
     df = nld.get_bycoords((lon, lat), start_date=start, end_date=end, source='grib',
-                          variables=['temp', 'wind_u', 'wind_v', 'humidity', 'rsds'])
+                          variables=['temp', 'wind_u', 'wind_v', 'rlds', 'rsds', 'humidity'])
 
     df = df.tz_convert(PACIFIC)
     wind_u = df['wind_u']
     wind_v = df['wind_v']
     df['wind'] = np.sqrt(wind_v ** 2 + wind_u ** 2)
 
-    df['min_temp'] = df['temp'] - 273.15
-    df['max_temp'] = df['temp'] - 273.15
+    df['temp'] = df['temp'] - 273.15
 
-    df = df.resample('D').agg(RESAMPLE_MAP)
+    df['rsds'] *= 0.0036
+    df['rlds'] *= 0.0036
 
-    df['doy'] = [i.dayofyear for i in df.index]
-    df['year'] = [i.year for i in df.index]
+    df['hour'] = [i.hour for i in df.index]
 
     df['ea'] = calcs._actual_vapor_pressure(pair=calcs._air_pressure(elev),
                                             q=df['humidity'])
+
+    df['max_temp'] = df['temp'].copy()
+    df['min_temp'] = df['temp'].copy()
+
+    df = df.resample('D').agg(NLDAS_RESAMPLE_MAP)
+
+    df['doy'] = [i.dayofyear for i in df.index]
+
+    def calc_asce_params(r, zw, lat, lon, elev):
+        asce = Daily(tmin=r['min_temp'],
+                     tmax=r['max_temp'],
+                     rs=r['rsds'],
+                     ea=r['ea'],
+                     uz=r['wind'],
+                     zw=zw,
+                     doy=r['doy'],
+                     elev=elev,
+                     lat=lat,
+                     method='asce')
+
+        vpd = asce.vpd[0]
+        rn = asce.rn[0]
+        u2 = asce.u2[0]
+        tmean = asce.tmean[0]
+        eto = asce.eto()[0]
+
+        return tmean, vpd, rn, u2, eto
+
+    asce_params = df.parallel_apply(calc_asce_params, lat=lat, lon=lon, elev=elev, zw=10, axis=1)
+    df[['tmean', 'vpd', 'rn', 'u2', 'eto']] = pd.DataFrame(asce_params.tolist(),
+                                                           index=df.index)
+    df['year'] = [i.year for i in df.index]
+    df['date_str'] = [i.strftime('%Y-%m-%d') for i in df.index]
+
+    df = df[REQUIRED_GRID_COLS]
+
     return df
 
 
@@ -111,6 +155,10 @@ def get_gridmet(lon, lat, elev, start='2000-01-01', end='2023-12-31'):
 
     df['ea'] = calcs._actual_vapor_pressure(pair=calcs._air_pressure(elev),
                                             q=df['q'])
+    es = calcs._sat_vapor_pressure(df['mean_temp'])
+    df['vpd'] = es - df['ea']
+
+    df = df[REQUIRED_GRID_COLS]
 
     return df
 
@@ -165,12 +213,15 @@ if __name__ == '__main__':
         home = os.path.expanduser('~')
         d = os.path.join(home, 'data', 'IrrigationGIS', 'dads')
 
-    station_meta = os.path.join(d, 'met', 'stations', 'openet_gridwxcomp_input.csv')
+    pandarallel.initialize(nb_workers=8)
+
+    station_meta = os.path.join(d, 'met', 'stations', 'gwx_stations.csv')
 
     obs = os.path.join(d, 'met', 'obs', 'corrected_station_data')
-    dst_obs = os.path.join(d, 'met', 'obs', 'openet_data')
+    dst_obs = os.path.join(d, 'met', 'obs', 'gwx')
 
     grid_dir = os.path.join(d, 'met', 'gridded')
 
-    extract_met_data(station_meta, obs, grid_dir, transfer=dst_obs, overwrite=False)
+    extract_met_data(station_meta, obs, grid_dir, transfer=dst_obs, overwrite=True)
+
 # ========================= EOF ====================================================================

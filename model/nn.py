@@ -8,7 +8,7 @@ import torch.nn as nn
 import torch.optim as optim
 from pytorch_lightning.callbacks.early_stopping import EarlyStopping
 from sklearn.metrics import r2_score, root_mean_squared_error
-from torch.utils.data import DataLoader, TensorDataset, random_split
+from torch.utils.data import DataLoader, TensorDataset
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 
 if torch.cuda.is_available():

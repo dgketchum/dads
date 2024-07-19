@@ -21,9 +21,9 @@ COMPARISON_VARS = ['vpd', 'rsds', 'min_temp', 'max_temp', 'mean_temp', 'wind', '
 STATES = ['AZ', 'CA', 'CO', 'ID', 'MT', 'NM', 'NV', 'OR', 'UT', 'WA', 'WY']
 
 
-def join_daily_timeseries(stations, gridmet_dir, rs_dir, sta_dir, dst_dir, index='FID'):
+def join_daily_timeseries(stations, sta_dir, nldas_dir, rs_dir, gridmet_dir, dst_dir, index='FID'):
     stations = pd.read_csv(stations, index_col=index)
-    # stations = stations.loc[[i for i, r in stations.iterrows() if r['State'] in STATES]]
+    stations = stations.loc[[i for i, r in stations.iterrows() if r['State'] in STATES]]
     df = pd.DataFrame()
     for i, (f, row) in enumerate(stations.iterrows(), start=1):
 
@@ -32,10 +32,26 @@ def join_daily_timeseries(stations, gridmet_dir, rs_dir, sta_dir, dst_dir, index
             continue
         lst_cols = lst.columns
 
+        nldas_file = os.path.join(nldas_dir, '{}.csv'.format(f))
+
+        try:
+            ndf = pd.read_csv(nldas_file, index_col=0, parse_dates=True)
+        except FileNotFoundError:
+            print('{} does not exist'.format(nldas_file))
+            continue
+
+        ndf.index = pd.DatetimeIndex([datetime.date(i.year, i.month, i.day) for i in ndf.index])
+        match_idx = [i for i in lst.index if i in ndf.index]
+        ndf = ndf.loc[match_idx]
+        ndf['rsds'] *= 0.0864
+        ndf['mean_temp'] = (ndf['min_temp'] + ndf['max_temp']) * 0.5
+        ndf['vpd'] = ndf.apply(_vpd, axis=1)
+        ndf['rn'] = ndf.apply(_rn, lat=row['STATION_LAT'], elev=row['STATION_ELEV_M'], zw=10, axis=1)
+        ndf = ndf[COMPARISON_VARS]
+
         gridmet_file = os.path.join(gridmet_dir, '{}.csv'.format(f))
 
         try:
-            # TODO: remove the tz application in the data extract code
             gdf = pd.read_csv(gridmet_file, index_col=0, parse_dates=True)
         except FileNotFoundError:
             print('{} does not exist'.format(gridmet_file))
@@ -53,6 +69,11 @@ def join_daily_timeseries(stations, gridmet_dir, rs_dir, sta_dir, dst_dir, index
         grd_cols = ['{}_gm'.format(c) for c in gdf.columns]
         gdf.columns = grd_cols
         gdf.loc[match_idx, lst.columns] = lst.loc[match_idx]
+
+
+        grd_cols = ['{}_gm'.format(c) for c in ndf.columns]
+        ndf.columns = grd_cols
+        ndf.loc[match_idx, lst.columns] = lst.loc[match_idx]
 
         sta_file = os.path.join(sta_dir, '{}.csv'.format(f))
 
@@ -148,10 +169,11 @@ if __name__ == '__main__':
     fields = os.path.join(d, 'met', 'stations', 'gwx_stations.csv')
     sta = os.path.join(d, 'met', 'obs', 'gwx')
     gm = os.path.join(d, 'met', 'gridded', 'gridmet')
+    nl = os.path.join(d, 'met', 'gridded', 'nldas2')
     rs = os.path.join(d, 'rs', 'gwx_stations')
     joined = os.path.join(d, 'tables', 'gridmet', 'western_lst_metvars_all.csv')
     plots = os.path.join(d, 'plots', 'gridmet')
 
-    join_daily_timeseries(fields, gm, rs, sta, joined, index='STATION_ID')
+    join_daily_timeseries(fields, sta, nl, rs, gm, joined, index='STATION_ID')
 
 # ========================= EOF ====================================================================

@@ -15,17 +15,12 @@
 # =============================================================================================
 from __future__ import print_function, absolute_import
 
-import io
 import json
-from pprint import pprint
-from copy import deepcopy
+from datetime import datetime
 
 import requests
+from pandas import DataFrame
 from requests.compat import urlencode, OrderedDict
-from datetime import datetime
-from fiona import collection
-from fiona.crs import from_epsg
-from pandas import read_table, to_datetime, date_range, to_numeric, DataFrame
 
 STATION_INFO_URL = 'https://www.usbr.gov/pn/agrimet/agrimetmap/usbr_map.json'
 AGRIMET_MET_REQ_SCRIPT_PN = 'https://www.usbr.gov/pn-bin/agrimet.pl'
@@ -140,42 +135,6 @@ class Agrimet(object):
         data = {name: [x.split(',')[i].strip() for x in content[1:]] for i, name in enumerate(names)}
         df = DataFrame(data)
         return df
-
-    @staticmethod
-    def write_agrimet_sation_shp(json_data, epsg, out):
-        agri_schema = {'geometry': 'Point',
-                       'properties': {
-                           'program': 'str',
-                           'url': 'str',
-                           'siteid': 'str',
-                           'title': 'str',
-                           'state': 'str',
-                           'type': 'str',
-                           'region': 'str',
-                           'install': 'str'}}
-
-        cord_ref = from_epsg(epsg)
-        shp_driver = 'ESRI Shapefile'
-
-        with collection(out, mode='w', driver=shp_driver, schema=agri_schema,
-                        crs=cord_ref) as output:
-            for rec in json_data['features']:
-                try:
-                    output.write({'geometry': {'type': 'Point',
-                                               'coordinates':
-                                                   (rec['geometry']['coordinates'][0],
-                                                    rec['geometry']['coordinates'][1])},
-                                  'properties': {
-                                      'program': rec['properties']['program'],
-                                      'url': rec['properties']['url'],
-                                      'siteid': rec['properties']['siteid'],
-                                      'title': rec['properties']['title'],
-                                      'state': rec['properties']['state'],
-                                      'type': rec['properties']['type'],
-                                      'region': rec['properties']['region'],
-                                      'install': rec['properties']['install']}})
-                except KeyError:
-                    pass
 
 
 def load_stations():
