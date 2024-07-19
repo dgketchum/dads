@@ -21,11 +21,11 @@ COMPARISON_VARS = ['vpd', 'rsds', 'min_temp', 'max_temp', 'mean_temp', 'wind', '
 STATES = ['AZ', 'CA', 'CO', 'ID', 'MT', 'NM', 'NV', 'OR', 'UT', 'WA', 'WY']
 
 
-def join_daily_timeseries(fields, gridmet_dir, rs_dir, sta_dir, dst_dir, index='FID'):
-    fields = pd.read_csv(fields, index_col=index)
-    fields = fields.loc[[i for i, r in fields.iterrows() if r['State'] in STATES]]
+def join_daily_timeseries(stations, gridmet_dir, rs_dir, sta_dir, dst_dir, index='FID'):
+    stations = pd.read_csv(stations, index_col=index)
+    # stations = stations.loc[[i for i, r in stations.iterrows() if r['State'] in STATES]]
     df = pd.DataFrame()
-    for i, (f, row) in enumerate(fields.iterrows(), start=1):
+    for i, (f, row) in enumerate(stations.iterrows(), start=1):
 
         lst = join_landsat(rs_dir, f)
         if lst is None:
@@ -81,7 +81,7 @@ def join_daily_timeseries(fields, gridmet_dir, rs_dir, sta_dir, dst_dir, index='
         sdf['FID'] = f
         sdf = sdf[all_cols]
         df = pd.concat([df, sdf])
-        print(f, '{} of {}'.format(i, fields.shape[0]))
+        print(f, '{} of {}'.format(i, stations.shape[0]))
 
     df.to_csv(os.path.join(dst_dir))
 
@@ -149,7 +149,7 @@ if __name__ == '__main__':
     sta = os.path.join(d, 'met', 'obs', 'gwx')
     gm = os.path.join(d, 'met', 'gridded', 'gridmet')
     rs = os.path.join(d, 'rs', 'gwx_stations')
-    joined = os.path.join(d, 'tables', 'gridmet', 'western_lst_metvars.csv')
+    joined = os.path.join(d, 'tables', 'gridmet', 'western_lst_metvars_all.csv')
     plots = os.path.join(d, 'plots', 'gridmet')
 
     join_daily_timeseries(fields, gm, rs, sta, joined, index='STATION_ID')

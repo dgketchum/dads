@@ -39,10 +39,6 @@ def multipoint_landsat(shapefile, bucket=None, debug=False, check_dir=None, inde
     for i, (fid, row) in enumerate(df.iterrows(), start=1):
 
         site = row[index]
-        state = site.split('_')[-1]
-
-        if state not in STATES:
-            continue
 
         s, e = row['record_start'], row['record_end']
         print('{} of {}: {}'.format(i, df.shape[0], fid))
