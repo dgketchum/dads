@@ -31,7 +31,7 @@ TEST_YEARS = [2005]
 ALL_YEARS = [x for x in range(1986, 2021)]
 
 
-def request_band_extract(file_prefix, points_layer, region, years, buffer, diagnose=False, properties=None):
+def request_band_extract(file_prefix, points_layer, region, years, buffer, check_dir=None):
     """
 
     """
@@ -40,38 +40,20 @@ def request_band_extract(file_prefix, points_layer, region, years, buffer, diagn
     points = points.map(lambda x: x.buffer(buffer))
 
     for yr in years:
+        desc = '{}_{}'.format(file_prefix, yr)
+        if check_dir:
+            outfile = os.path.join(check_dir, str(buffer), '{}.csv'.format(desc))
+            if os.path.exists(outfile):
+                print('{} exists'.format(outfile))
+                continue
+
         stack = stack_bands(yr, roi)
-
-        # if tables are coming out empty, use this to find missing bands
-        if diagnose:
-            filtered = ee.FeatureCollection([points.first()])
-            bad_ = []
-            bands = stack.bandNames().getInfo()
-            for b in bands:
-                stack_ = stack.select([b])
-
-                def sample_regions(i, points):
-                    red = ee.Reducer.toCollection(i.bandNames())
-                    reduced = i.reduceRegions(points, red, 30, stack_.select(b).projection())
-                    fc = reduced.map(lambda f: ee.FeatureCollection(f.get('features'))
-                                     .map(lambda q: q.copyProperties(f, None, ['features'])))
-                    return fc.flatten()
-
-                data = sample_regions(stack_, filtered)
-                try:
-                    print(b, data.getInfo()['features'][0]['properties'][b])
-                except Exception as e:
-                    print(b, 'not there', e)
-                    bad_.append(b)
-            print(bad_)
-            return None
 
         data = stack.reduceRegions(collection=points,
                                    reducer=ee.Reducer.mean(),
                                    scale=30,
                                    tileScale=16)
 
-        desc = '{}_{}'.format(file_prefix, yr)
         task = ee.batch.Export.table.toCloudStorage(
             collection=data,
             description=desc,
@@ -91,7 +73,6 @@ def stack_bands(yr, roi):
     :return:
     """
 
-
     winter_s, winter_e = '{}-01-01'.format(yr), '{}-03-01'.format(yr),
     spring_s, spring_e = '{}-03-01'.format(yr), '{}-05-01'.format(yr),
     late_spring_s, late_spring_e = '{}-05-01'.format(yr), '{}-07-15'.format(yr)
@@ -103,7 +84,6 @@ def stack_bands(yr, roi):
 
     pprev_s, pprev_e = '{}-05-01'.format(yr - 2), '{}-09-30'.format(yr - 2),
     pp_summer_s, pp_summer_e = '{}-07-15'.format(yr - 2), '{}-09-30'.format(yr - 2)
-
 
     periods = [('gs', spring_e, fall_s),
                ('0', winter_s, spring_s),
@@ -162,7 +142,6 @@ def stack_bands(yr, roi):
 
     input_bands = input_bands.clip(roi)
 
-
     return input_bands
 
 
@@ -179,12 +158,14 @@ def is_authorized():
 if __name__ == '__main__':
     is_authorized()
     _bucket = 'gs://wudr'
-    buffer_ = 2000
-    file_ = 'bands_{}'.format(buffer_)
     pts = 'projects/ee-dgketchum/assets/dads/openet_gwx'
     geo = 'users/dgketchum/boundaries/western_states_expanded_union'
+    chk = '/media/research/IrrigationGIS/dads/rs/gwx_stations/ee_extracts'
     years_ = list(range(2000, 2021))
     years_.reverse()
-    request_band_extract(file_, pts, region=geo, years=years_[:1], buffer=buffer_, diagnose=False)
+
+    for buffer_ in [100, 500, 1000, 2000]:
+        file_ = 'bands_{}'.format(buffer_)
+        request_band_extract(file_, pts, region=geo, years=years_, buffer=buffer_, check_dir=chk)
 
 # ========================= EOF ====================================================================
