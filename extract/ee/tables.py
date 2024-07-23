@@ -1,5 +1,6 @@
 import os
 
+import numpy as np
 from pandas import read_csv, concat, errors
 
 
@@ -8,24 +9,24 @@ def concatenate_band_extract(root, out_dir, glob='None', sample=None, nd_only=Fa
     l.sort()
     first = True
     for csv in l:
+        year = csv.split('.')[0][-4:]
         try:
             if first:
-                df = read_csv(csv)
-                cols = list(df.columns)
-                df.columns = cols
-                print(df.shape, csv)
+                df = read_csv(csv, index_col='STATION_ID')
+                sites = np.unique(df.index)
+                df.drop(columns=['.geo', 'system:index'], inplace=True)
+                df.dropna(how='all', inplace=True, axis=0)
+                df['year'] = year
                 first = False
             else:
-                c = read_csv(csv)
-                cols = list(c.columns)
-                c.columns = cols
+                c = read_csv(csv, index_col='STATION_ID')
+                c.drop(columns=['.geo', 'system:index'], inplace=True)
+                c.dropna(how='all', inplace=True, axis=0)
+                c['year'] = year
                 df = concat([df, c], sort=False)
-                print(c.shape, csv)
         except errors.EmptyDataError:
             print('{} is empty'.format(csv))
             pass
-
-    df = df.drop(columns=['system:index', '.geo'])
 
     if nd_only:
         drop_cols = []
