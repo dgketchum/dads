@@ -6,7 +6,7 @@ import ee
 import pandas as pd
 import geopandas as gpd
 
-from extract.ee.ee_utils import landsat_masked, is_authorized
+from extract.ee.ee_utils_ import landsat_masked, is_authorized
 
 sys.path.insert(0, os.path.abspath('../..'))
 sys.setrecursionlimit(5000)
@@ -52,7 +52,7 @@ def multipoint_landsat(shapefile, bucket=None, debug=False, check_dir=None, inde
                     continue
 
             point = ee.Geometry.Point([row['LON'], row['LAT']])
-            geo = point.buffer(2000.)
+            geo = point.buffer(500.0)
             fc = ee.FeatureCollection(ee.Feature(geo, {index: site}))
 
             coll = landsat_masked(year, fc).select(SELECT)
@@ -113,7 +113,7 @@ if __name__ == '__main__':
     bucket_ = 'wudr'
 
     fields = os.path.join(d, 'dads', 'met', 'stations', 'openet_gridwxcomp_input.csv')
-    chk = os.path.join(d, 'dads', 'rs', 'gwx_stations')
+    chk = os.path.join(d, 'dads', 'rs', 'gwx_stations', 'lst_500')
 
     multipoint_landsat(fields, bucket_, debug=False, check_dir=chk, index='STATION_ID')
 
