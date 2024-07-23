@@ -115,6 +115,6 @@ if __name__ == '__main__':
     fields = os.path.join(d, 'dads', 'met', 'stations', 'openet_gridwxcomp_input.csv')
     chk = os.path.join(d, 'dads', 'rs', 'gwx_stations')
 
-    multipoint_landsat(fields, bucket_, debug=False, check_dir=chk, index='STATION_ID')
+    # multipoint_landsat(fields, bucket_, debug=False, check_dir=chk, index='STATION_ID')
 
 # ========================= EOF ====================================================================

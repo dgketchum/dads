@@ -4,6 +4,7 @@ import warnings
 
 import pandas as pd
 from refet import Daily, calcs
+from extract.met_data.extract_met import calcs_ as clc
 
 warnings.filterwarnings("ignore", category=FutureWarning)
 VAR_MAP = {'rsds': 'Rs (w/m2)',
@@ -16,7 +17,7 @@ VAR_MAP = {'rsds': 'Rs (w/m2)',
 
 RENAME_MAP = {v: k for k, v in VAR_MAP.items()}
 
-COMPARISON_VARS = ['vpd', 'rsds', 'min_temp', 'max_temp', 'mean_temp', 'wind', 'eto']
+COMPARISON_VARS = ['mean_temp', 'vpd', 'rn', 'u2', 'eto']
 
 STATES = ['AZ', 'CA', 'CO', 'ID', 'MT', 'NM', 'NV', 'OR', 'UT', 'WA', 'WY']
 
@@ -33,7 +34,6 @@ def join_daily_timeseries(stations, sta_dir, nldas_dir, rs_dir, gridmet_dir, dst
         lst_cols = lst.columns
 
         nldas_file = os.path.join(nldas_dir, '{}.csv'.format(f))
-
         try:
             ndf = pd.read_csv(nldas_file, index_col=0, parse_dates=True)
         except FileNotFoundError:
@@ -43,14 +43,9 @@ def join_daily_timeseries(stations, sta_dir, nldas_dir, rs_dir, gridmet_dir, dst
         ndf.index = pd.DatetimeIndex([datetime.date(i.year, i.month, i.day) for i in ndf.index])
         match_idx = [i for i in lst.index if i in ndf.index]
         ndf = ndf.loc[match_idx]
-        ndf['rsds'] *= 0.0864
-        ndf['mean_temp'] = (ndf['min_temp'] + ndf['max_temp']) * 0.5
-        ndf['vpd'] = ndf.apply(_vpd, axis=1)
-        ndf['rn'] = ndf.apply(_rn, lat=row['STATION_LAT'], elev=row['STATION_ELEV_M'], zw=10, axis=1)
         ndf = ndf[COMPARISON_VARS]
 
         gridmet_file = os.path.join(gridmet_dir, '{}.csv'.format(f))
-
         try:
             gdf = pd.read_csv(gridmet_file, index_col=0, parse_dates=True)
         except FileNotFoundError:
@@ -60,16 +55,10 @@ def join_daily_timeseries(stations, sta_dir, nldas_dir, rs_dir, gridmet_dir, dst
         gdf.index = pd.DatetimeIndex([datetime.date(i.year, i.month, i.day) for i in gdf.index])
         match_idx = [i for i in lst.index if i in gdf.index]
         gdf = gdf.loc[match_idx]
-        gdf['rsds'] *= 0.0864
-        gdf['mean_temp'] = (gdf['min_temp'] + gdf['max_temp']) * 0.5
-        gdf['vpd'] = gdf.apply(_vpd, axis=1)
-        gdf['rn'] = gdf.apply(_rn, lat=row['STATION_LAT'], elev=row['STATION_ELEV_M'],
-                              zw=row['Anemom_height_m'], axis=1)
         gdf = gdf[COMPARISON_VARS]
         grd_cols = ['{}_gm'.format(c) for c in gdf.columns]
         gdf.columns = grd_cols
         gdf.loc[match_idx, lst.columns] = lst.loc[match_idx]
-
 
         grd_cols = ['{}_gm'.format(c) for c in ndf.columns]
         ndf.columns = grd_cols
@@ -89,14 +78,21 @@ def join_daily_timeseries(stations, sta_dir, nldas_dir, rs_dir, gridmet_dir, dst
         sdf = sdf.loc[match_idx]
         sdf.rename(columns=RENAME_MAP, inplace=True)
         sdf['doy'] = [i.dayofyear for i in sdf.index]
-        sdf['rsds'] *= 0.0864
-        sdf['vpd'] = sdf.apply(_vpd, axis=1)
-        sdf['rn'] = sdf.apply(_rn, lat=row['STATION_LAT'], elev=row['STATION_ELEV_M'],
-                              zw=row['Anemom_height_m'], axis=1)
+
+        params = None
+        try:
+            params = sdf.apply(clc, lat=row['STATION_LAT'], elev=row['STATION_ELEV_M'], zw=row['Anemom_height_m'],
+                               axis=1)
+            sdf[['rn', 'u2', 'vpd']] = pd.DataFrame(params.tolist(), index=sdf.index)
+        except ValueError as e:
+            df.to_csv(os.path.join(dst_dir))
+            print('{} error getting {} from returned value: {}'.format(e, ['rn', 'u2', 'vpd'], len(params)))
+            continue
 
         sdf = sdf[COMPARISON_VARS]
         obs_cols = ['{}_obs'.format(c) for c in sdf.columns]
         sdf.columns = obs_cols
+
         all_cols = ['FID'] + obs_cols + grd_cols + list(lst_cols)
         sdf = pd.concat([sdf, gdf], ignore_index=False, axis=1)
         sdf['FID'] = f
@@ -137,27 +133,6 @@ def join_landsat(dir_, glob):
     upper_bound = q3 + 1.5 * iqr
     df = df[~((df < lower_bound) | (df > upper_bound)).any(axis=1)]
     return df
-
-
-def _vpd(r):
-    es = calcs._sat_vapor_pressure(r['mean_temp'])
-    vpd = es - r['ea']
-    return vpd[0]
-
-
-def _rn(r, lat, elev, zw):
-    asce = Daily(tmin=r['min_temp'],
-                 tmax=r['max_temp'],
-                 rs=r['rsds'],
-                 ea=r['ea'],
-                 uz=r['wind'],
-                 zw=zw,
-                 doy=r['doy'],
-                 elev=elev,
-                 lat=lat)
-
-    rn = asce.rn[0]
-    return rn
 
 
 if __name__ == '__main__':
