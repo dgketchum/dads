@@ -1,33 +1,6 @@
-from datetime import datetime, timedelta
+from datetime import datetime
 
 import ee
-
-
-def add_doy(image):
-    """ Add day-of-year image """
-    mask = ee.Date(image.get('system:time_start'))
-    day = ee.Image.constant(image.date().getRelative('day', 'year')).clip(image.geometry())
-    i = image.addBands(day.rename('DOY')).int().updateMask(mask)
-    return i
-
-
-def get_world_climate(proj, months, param='prec'):
-    if months[0] > months[1]:
-        months = [x for x in range(months[0], 13)] + [x for x in range(1, months[1] + 1)]
-    else:
-        months = [x for x in range(months[0], months[1] + 1)]
-    months = [str(x).zfill(2) for x in months]
-    assert param in ['tavg', 'prec']
-    combinations = [(m, param) for m in months]
-
-    l = [ee.Image('WORLDCLIM/V1/MONTHLY/{}'.format(m)).
-         select(param).resample('bilinear').reproject(crs=proj['crs'], scale=30) for m, p in combinations]
-    i = ee.ImageCollection(l)
-    if param == 'prec':
-        i = i.sum()
-    else:
-        i = i.mean()
-    return i
 
 
 def landsat_c2_sr(input_img):
@@ -97,35 +70,6 @@ def landsat_masked(yr, roi):
     return lsSR_masked
 
 
-def long_term_ndvi_stats(roi):
-    start = '1987-01-01'
-    end_date = '2022-12-31'
-
-    l5_coll = ee.ImageCollection('LANDSAT/LT05/C02/T1_L2').filterBounds(
-        roi).filterDate(start, end_date).map(landsat_c2_sr)
-    l7_coll = ee.ImageCollection('LANDSAT/LE07/C02/T1_L2').filterBounds(
-        roi).filterDate(start, end_date).map(landsat_c2_sr)
-    l8_coll = ee.ImageCollection('LANDSAT/LC08/C02/T1_L2').filterBounds(
-        roi).filterDate(start, end_date).map(landsat_c2_sr)
-    l9_coll = ee.ImageCollection('LANDSAT/LC09/C02/T1_L2').filterBounds(
-        roi).filterDate(start, end_date).map(landsat_c2_sr)
-
-    landsat = ee.ImageCollection(l7_coll.merge(l8_coll).merge(l9_coll).merge(l5_coll))
-
-    nd_max = []
-    for yr in range(1987, 2023):
-        s, e = '{}-01-01'.format(yr), '{}-12-31'.format(yr)
-        ndvi_mx = ee.Image(landsat.filterDate(s, e).map(
-            lambda x: x.normalizedDifference(['B5', 'B4'])).max()).rename('nd_max'.format(yr))
-        nd_max.append(ndvi_mx)
-
-    coll = ee.ImageCollection(nd_max)
-    mean_, max_, std_ = coll.mean().rename('nd_lt_mn'), coll.max().rename('nd_lt_mx'), \
-        coll.reduce(ee.Reducer.stdDev()).rename('nd_lt_std')
-
-    return mean_, max_, std_
-
-
 def landsat_composites(year, start, end, roi, append_name, composites_only=False):
     start_year = datetime.strptime(start, '%Y-%m-%d').year
     if start_year != year:
@@ -180,6 +124,16 @@ def landsat_composites(year, start, end, roi, append_name, composites_only=False
         bands = bands_means.addBands([ndvi, ndwi, evi, gi])
 
     return bands
+
+
+def is_authorized():
+    try:
+        ee.Initialize(project='ee-dgketchum')
+        print('Authorized')
+    except Exception as e:
+        print('You are not authorized: {}'.format(e))
+        exit(1)
+    return None
 
 
 if __name__ == '__main__':

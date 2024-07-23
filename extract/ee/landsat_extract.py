@@ -6,7 +6,7 @@ import ee
 import pandas as pd
 import geopandas as gpd
 
-from extract.ee.ee_utils_ import landsat_masked, is_authorized
+from extract.ee.ee_utils import landsat_masked, is_authorized
 
 sys.path.insert(0, os.path.abspath('../..'))
 sys.setrecursionlimit(5000)

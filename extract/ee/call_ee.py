@@ -1,34 +1,15 @@
 import os
 import sys
-from datetime import datetime, date
-
-from numpy import ceil, linspace
-from pprint import pprint
 
 import ee
-from numpy import ceil, linspace
 
 sys.path.insert(0, os.path.abspath('..'))
-from ee_utils import get_world_climate, landsat_composites, landsat_masked
-from cdl import get_cdl
+from extract.ee.cdl import get_cdl
+from extract.ee.ee_utils import is_authorized, landsat_composites
 
 sys.setrecursionlimit(2000)
 
 BOUNDARIES = 'users/dgketchum/boundaries'
-IRRIGATION_TABLE = 'users/dgketchum/western_states_irr/NV_agpoly'
-RF_ASSET = 'projects/ee-dgketchum/assets/IrrMapper/IrrMapperComp'
-
-TARGET_STATES = ['AZ', 'CA', 'CO', 'ID', 'MT', 'NM', 'NV', 'OR', 'UT', 'WA', 'WY']
-E_STATES = ['ND', 'SD', 'NE', 'KS', 'OK', 'TX']
-
-# list of years we have verified irrigated fields
-YEARS = [1986, 1987, 1988, 1989, 1993, 1994, 1995, 1996, 1997,
-         1998, 1999, 2000, 2001, 2002, 2003, 2004, 2005, 2006,
-         2007, 2008, 2009, 2010, 2011, 2012, 2013, 2014, 2015,
-         2016, 2017, 2018, 2019]
-
-TEST_YEARS = [2005]
-ALL_YEARS = [x for x in range(1986, 2021)]
 
 
 def request_band_extract(file_prefix, points_layer, region, years, buffer, check_dir=None):
@@ -143,16 +124,6 @@ def stack_bands(yr, roi):
     input_bands = input_bands.clip(roi)
 
     return input_bands
-
-
-def is_authorized():
-    try:
-        ee.Initialize(project='ee-dgketchum')
-        print('Authorized')
-    except Exception as e:
-        print('You are not authorized: {}'.format(e))
-        exit(1)
-    return None
 
 
 if __name__ == '__main__':
