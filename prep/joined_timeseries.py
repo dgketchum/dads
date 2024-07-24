@@ -2,7 +2,9 @@ import datetime
 import os
 import warnings
 
+import numpy as np
 import pandas as pd
+import ast
 from refet import Daily, calcs
 from extract.met_data.extract_met import calcs_ as clc
 
@@ -22,72 +24,95 @@ COMPARISON_VARS = ['mean_temp', 'vpd', 'rn', 'u2', 'eto']
 STATES = ['AZ', 'CA', 'CO', 'ID', 'MT', 'NM', 'NV', 'OR', 'UT', 'WA', 'WY']
 
 
-def join_daily_timeseries(stations, sta_dir, nldas_dir, rs_data, gridmet_dir, dst_dir, index='FID'):
+def join_daily_timeseries(stations, sta_dir, nldas_dir, gridmet_dir, dst_dir, index='FID'):
     stations = pd.read_csv(stations, index_col=index)
     stations = stations.loc[[i for i, r in stations.iterrows() if r['State'] in STATES]]
-    df = pd.DataFrame()
-    for i, (f, row) in enumerate(stations.iterrows(), start=1):
 
-        nldas_file = os.path.join(nldas_dir, '{}.csv'.format(f))
-        try:
-            ndf = pd.read_csv(nldas_file, index_col=0, parse_dates=True)
-        except FileNotFoundError:
-            print('{} does not exist'.format(nldas_file))
-            continue
+    for year in range(2000, 2021):
 
-        ndf.index = pd.DatetimeIndex([datetime.date(i.year, i.month, i.day) for i in ndf.index])
-        ndf = ndf[COMPARISON_VARS]
+        df = pd.DataFrame()
+        for i, (f, row) in enumerate(stations.iterrows(), start=1):
 
-        gridmet_file = os.path.join(gridmet_dir, '{}.csv'.format(f))
-        try:
-            gdf = pd.read_csv(gridmet_file, index_col=0, parse_dates=True)
-        except FileNotFoundError:
-            print('{} does not exist'.format(gridmet_file))
-            continue
+            nldas_file = os.path.join(nldas_dir, '{}.csv'.format(f))
+            try:
+                ndf = pd.read_csv(nldas_file, index_col=0, parse_dates=True)
+            except FileNotFoundError:
+                print('{} does not exist'.format(nldas_file))
+                continue
 
-        gdf.index = pd.DatetimeIndex([datetime.date(i.year, i.month, i.day) for i in gdf.index])
-        gdf = gdf[COMPARISON_VARS]
-        grd_cols = ['{}_gm'.format(c) for c in gdf.columns]
-        gdf.columns = grd_cols
+            ndf.index = pd.DatetimeIndex([datetime.date(i.year, i.month, i.day) for i in ndf.index])
+            ndf = ndf[COMPARISON_VARS]
 
-        grd_cols = ['{}_gm'.format(c) for c in ndf.columns]
-        ndf.columns = grd_cols
+            gridmet_file = os.path.join(gridmet_dir, '{}.csv'.format(f))
+            try:
+                gdf = pd.read_csv(gridmet_file, index_col=0, parse_dates=True)
+            except FileNotFoundError:
+                print('{} does not exist'.format(gridmet_file))
+                continue
 
-        sta_file = os.path.join(sta_dir, '{}.csv'.format(f))
+            gdf.index = pd.DatetimeIndex([datetime.date(i.year, i.month, i.day) for i in gdf.index])
+            gdf = gdf[COMPARISON_VARS]
+            grd_cols = ['{}_gm'.format(c) for c in gdf.columns]
+            # TODO: remove this after running gridmet extract again
+            gdf['vpd'] = gdf['vpd'].apply(ast.literal_eval).apply(lambda x: x[0])
+            gdf.columns = grd_cols
 
-        try:
-            sdf = pd.read_csv(sta_file, index_col='Unnamed: 0', parse_dates=True)
-        except ValueError:
-            sdf = pd.read_csv(sta_file, index_col='date', parse_dates=True)
-        except FileNotFoundError:
-            print('{} does not exist'.format(sta_file))
-            continue
+            nld_cols = ['{}_nl'.format(c) for c in ndf.columns]
+            ndf.columns = nld_cols
 
-        sdf.rename(columns=RENAME_MAP, inplace=True)
-        sdf['doy'] = [i.dayofyear for i in sdf.index]
+            sta_file = os.path.join(sta_dir, '{}.csv'.format(f))
 
-        params = None
-        try:
-            params = sdf.apply(clc, lat=row['STATION_LAT'], elev=row['STATION_ELEV_M'], zw=row['Anemom_height_m'],
-                               axis=1)
-            sdf[['rn', 'u2', 'vpd']] = pd.DataFrame(params.tolist(), index=sdf.index)
-        except ValueError as e:
-            df.to_csv(os.path.join(dst_dir))
-            print('{} error getting {} from returned value: {}'.format(e, ['rn', 'u2', 'vpd'], len(params)))
-            continue
+            try:
+                sdf = pd.read_csv(sta_file, index_col='Unnamed: 0', parse_dates=True)
+            except ValueError:
+                sdf = pd.read_csv(sta_file, index_col='date', parse_dates=True)
+            except FileNotFoundError:
+                print('{} does not exist'.format(sta_file))
+                continue
 
-        sdf = sdf[COMPARISON_VARS]
-        obs_cols = ['{}_obs'.format(c) for c in sdf.columns]
-        sdf.columns = obs_cols
+            sdf.rename(columns=RENAME_MAP, inplace=True)
+            sdf['doy'] = [i.dayofyear for i in sdf.index]
 
-        all_cols = ['FID'] + obs_cols + grd_cols
-        sdf = pd.concat([sdf, gdf, ndf], ignore_index=False, axis=1)
-        sdf['FID'] = f
-        sdf = sdf[all_cols]
-        df = pd.concat([df, sdf])
-        print(f, '{} of {}'.format(i, stations.shape[0]))
+            params = None
+            try:
+                params = sdf.apply(clc, lat=row['STATION_LAT'], elev=row['STATION_ELEV_M'], zw=row['Anemom_height_m'],
+                                   axis=1)
+                sdf[['rn', 'u2', 'vpd']] = pd.DataFrame(params.tolist(), index=sdf.index)
+            except ValueError as e:
+                print('{} error getting {} from returned value: {}'.format(e, ['rn', 'u2', 'vpd'], len(params)))
+                continue
 
-    df.to_csv(os.path.join(dst_dir))
+            sdf = sdf[COMPARISON_VARS]
+            obs_cols = ['{}_obs'.format(c) for c in sdf.columns]
+            sdf.columns = obs_cols
+
+            all_cols = ['FID'] + obs_cols + grd_cols + nld_cols
+
+            try:
+                sdf = pd.concat([sdf, gdf, ndf], ignore_index=False, axis=1)
+            except pd.errors.InvalidIndexError:
+                print('Non-unique index in {}'.format(f))
+                continue
+            sdf['FID'] = f
+            sdf = sdf[all_cols]
+
+            idx = [i for i in sdf.index if i.year == year]
+            sdf = sdf.loc[idx]
+
+            df = pd.concat([df, sdf])
+            print(f, '{} of {}, df: {} rows'.format(i, stations.shape[0], df.shape[0]))
+            fids = np.unique(df['FID'])
+            for fid in fids:
+                c = df[df['FID'] == fid]
+                idx = [i for i in c.index if i.year == year]
+                c = c.loc[idx]
+                c.dropna(subset=['mean_temp_obs', 'vpd_obs', 'rn_obs', 'u2_obs', 'eto_obs'], inplace=True, axis=0)
+                if c.empty:
+                    continue
+                else:
+                    out = os.path.join(dst_dir, 'obs_grid', '{}_{}.csv'.format(fid, year))
+                    c.to_csv(out)
+                print(fid, year)
 
 
 if __name__ == '__main__':
@@ -103,9 +128,9 @@ if __name__ == '__main__':
     # rs = os.path.join(d, 'rs', 'gwx_stations', 'concatenated', 'bands.csv')
 
     rs = os.path.join(d, 'rs', 'gwx_stations')
-    joined = os.path.join(d, 'tables', 'gridmet', 'western_lst_metvars_all.csv')
+    joined = os.path.join(d, 'tables')
     plots = os.path.join(d, 'plots', 'gridmet')
 
-    join_daily_timeseries(fields, sta, nl, rs, gm, joined, index='STATION_ID')
+    join_daily_timeseries(fields, sta, nl, gm, joined, index='STATION_ID')
 
 # ========================= EOF ====================================================================
