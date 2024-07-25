@@ -4,6 +4,25 @@ import pandas as pd
 import io
 
 
+def get_madis():
+
+    base_url = "https://madis-data.ncep.noaa.gov/madis/v1/"
+    endpoint = "metar/netcdf"
+    params = {
+        "startDate": "20240724",
+        "endDate": "20240725",
+        "station": "KBZN"  # Example station ID
+    }
+
+    response = requests.get(base_url + endpoint, params=params)
+    response.raise_for_status()  # Raise an error if request fails
+
+    # Save the downloaded NetCDF data
+    with open("metar_data.nc", "wb") as file:
+        file.write(response.content)
+
+
+
 def download_raws_data(state, year, month):
     """Downloads RAWS data for a given state, year, and month."""
 
@@ -73,6 +92,9 @@ def get_acis():
 
 
 if __name__ == '__main__':
-    pass
+    st = 'MT'
+    yr = 2020
+    m = 7
+    download_raws_data(st, yr, m)
 
 # ========================= EOF ====================================================================
