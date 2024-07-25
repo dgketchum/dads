@@ -24,6 +24,7 @@ GRIDMET_RESAMPLE_MAP = {'rsds': 'mean',
 
 NLDAS_RESAMPLE_MAP = {'rsds': 'sum',
                       'rlds': 'sum',
+                      'prcp': 'sum',
                       'humidity': 'mean',
                       'min_temp': 'min',
                       'max_temp': 'max',
@@ -31,57 +32,48 @@ NLDAS_RESAMPLE_MAP = {'rsds': 'sum',
                       'wind': 'mean',
                       'ea': 'mean'}
 
-REQUIRED_GRID_COLS = ['mean_temp', 'vpd', 'rn', 'u2', 'eto']
+REQUIRED_GRID_COLS = ['prcp', 'mean_temp', 'vpd', 'rn', 'u2', 'eto']
 
 
 # TODO: add precip
-def extract_met_data(stations, obs_dir, gridded_dir, overwrite=False, transfer=None):
-    kw = station_par_map('openet')
+def extract_met_data(stations, gridded_dir, overwrite=False, station_type='openet'):
+    kw = station_par_map(station_type)
 
     if stations.endswith('.csv'):
         station_list = pd.read_csv(stations, index_col=kw['index'])
 
     else:
         station_list = gpd.read_file(stations, index_col=kw['index'])
-        station_list.drop(columns=['url', 'title', 'install', 'geometry'], inplace=True)
+        try:  # for GWX stations
+            station_list.drop(columns=['url', 'title', 'install', 'geometry'], inplace=True)
+        except KeyError:  # for GHCN
+            station_list.drop(columns=['geometry'], inplace=True)
 
         station_list.index = station_list[kw['index']]
 
     for i, (fid, row) in enumerate(station_list.iterrows()):
 
-        sta_file = os.path.join(obs_dir, '{}_data.xlsx'.format(fid))
-
-        if transfer:
-            try:
-                dst_file = os.path.join(transfer, '{}.csv'.format(fid))
-                if not os.path.exists(dst_file):
-                    df = pd.read_excel(sta_file, index_col='date')
-                    df.to_csv(dst_file)
-                    print(fid)
-            except FileNotFoundError as e:
-                print(fid, e)
-
-        lat, lon, elv, anemom = row[kw['lon']], row[kw['lat']], row[kw['elev']], row['Anemom_height_m']
+        lon, lat, elv = row[kw['lon']], row[kw['lat']], row[kw['elev']]
 
         _file = os.path.join(gridded_dir, 'nldas2', '{}.csv'.format(fid))
         if not os.path.exists(_file) or overwrite:
-            df = get_nldas(lat, lon, elv)
+            df = get_nldas(lon, lat, elv)
             if df is None:
                 print('Empty Dataframe from {}, {:.2f}, {:.2f}'.format(fid, lat, lon))
                 continue
             df.to_csv(_file)
 
-        _file = os.path.join(gridded_dir, 'gridmet', '{}.csv'.format(fid))
-        if not os.path.exists(_file) or overwrite:
-            df = get_gridmet(lat, lon, elv, anemom_hgt=anemom)
-            df.to_csv(_file)
+        # _file = os.path.join(gridded_dir, 'gridmet', '{}.csv'.format(fid))
+        # if not os.path.exists(_file) or overwrite:
+        #     df = get_gridmet(lat, lon, elv, anemom_hgt=anemom)
+        #     df.to_csv(_file)
 
         print(fid)
 
 
 def get_nldas(lon, lat, elev, start='2000-01-01', end='2023-12-31'):
     df = nld.get_bycoords((lon, lat), start_date=start, end_date=end, source='grib',
-                          variables=['temp', 'wind_u', 'wind_v', 'rlds', 'rsds', 'humidity'])
+                          variables=['prcp', 'temp', 'wind_u', 'wind_v', 'rlds', 'rsds', 'humidity'])
 
     if df.empty:
         return None
@@ -130,6 +122,7 @@ def get_nldas(lon, lat, elev, start='2000-01-01', end='2023-12-31'):
         return tmean, vpd, rn, u2, eto
 
     asce_params = df.parallel_apply(calc_asce_params, lat=lat, lon=lon, elev=elev, zw=10, axis=1)
+    # asce_params = df.apply(calc_asce_params, lat=lat, lon=lon, elev=elev, zw=10, axis=1)
 
     df[['tmean', 'vpd', 'rn', 'u2', 'eto']] = pd.DataFrame(asce_params.tolist(),
                                                            index=df.index)
@@ -190,9 +183,9 @@ def calcs_(r, lat, elev, zw):
                  lat=lat)
     u2 = asce.u2[0]
     rn = asce.rn[0]
-
     es = calcs._sat_vapor_pressure(r['mean_temp'])
     vpd = es - r['ea']
+    vpd = vpd[0]
 
     return rn, u2, vpd
 
@@ -237,6 +230,13 @@ def station_par_map(station_type):
                 'elev': 'elev',
                 'start': 'record_start',
                 'end': 'record_end'}
+    if station_type == 'ghcn':
+        return {'index': 'STAID',
+                'lat': 'LAT',
+                'lon': 'LON',
+                'elev': 'ELEV',
+                'start': 'START DATE',
+                'end': 'END DATE'}
     else:
         raise NotImplementedError
 
@@ -247,15 +247,11 @@ if __name__ == '__main__':
         home = os.path.expanduser('~')
         d = os.path.join(home, 'data', 'IrrigationGIS', 'dads')
 
-    pandarallel.initialize(nb_workers=8)
+    pandarallel.initialize(nb_workers=6)
 
-    station_meta = os.path.join(d, 'met', 'stations', 'gwx_stations.csv')
-
-    obs = os.path.join(d, 'met', 'obs', 'corrected_station_data')
-    dst_obs = os.path.join(d, 'met', 'obs', 'gwx')
-
+    fields = os.path.join(d, 'met', 'obs', 'ghcn', 'ghcn_MT_stations_select.shp')
     grid_dir = os.path.join(d, 'met', 'gridded')
 
-    extract_met_data(station_meta, obs, grid_dir, transfer=dst_obs, overwrite=False)
+    extract_met_data(fields, grid_dir, overwrite=False, station_type='ghcn')
 
 # ========================= EOF ====================================================================

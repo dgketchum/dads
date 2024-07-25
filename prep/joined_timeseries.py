@@ -100,7 +100,6 @@ def join_daily_timeseries(stations, sta_dir, nldas_dir, gridmet_dir, dst_dir, in
             sdf = sdf.loc[idx]
 
             df = pd.concat([df, sdf])
-            print(f, '{} of {}, df: {} rows'.format(i, stations.shape[0], df.shape[0]))
             fids = np.unique(df['FID'])
             for fid in fids:
                 c = df[df['FID'] == fid]

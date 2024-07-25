@@ -129,14 +129,17 @@ def stack_bands(yr, roi):
 if __name__ == '__main__':
     is_authorized()
     _bucket = 'gs://wudr'
-    pts = 'projects/ee-dgketchum/assets/dads/openet_gwx'
+
+    stations = 'ghcn_MT_stations_select'
+    pts = 'projects/ee-dgketchum/assets/dads/{}'.format(stations)
+
     geo = 'users/dgketchum/boundaries/western_states_expanded_union'
     chk = '/media/research/IrrigationGIS/dads/rs/gwx_stations/ee_extracts'
     years_ = list(range(2000, 2021))
     years_.reverse()
 
-    for buffer_ in [100, 500, 1000, 2000]:
-        file_ = 'bands_{}'.format(buffer_)
+    for buffer_ in [500]:
+        file_ = '{}_{}'.format(stations, buffer_)
         request_band_extract(file_, pts, region=geo, years=years_, buffer=buffer_, check_dir=chk)
 
 # ========================= EOF ====================================================================

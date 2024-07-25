@@ -1,12 +1,13 @@
-import os
 import json
-import numpy as np
+import os
+
 import pandas as pd
-from sklearn.preprocessing import MinMaxScaler
+import geopandas as gpd
 
 
 def process_climate_data(stations, climate_data_dir, output_dir):
-    df_stations = pd.read_csv(stations)
+    df_stations = gpd.read_file(stations)
+    df_stations.index = df_stations['STAID'].copy()
     station_ids = df_stations['STAID'].values
 
     coverage_by_day, exclude = {}, []
@@ -60,6 +61,11 @@ def process_climate_data(stations, climate_data_dir, output_dir):
     coverage_df = coverage_df[filtered_ids]
     coverage_df.to_csv(os.path.join(output_dir, 'daily_station_coverage.csv'))
 
+    outshp = os.path.join(output_dir, os.path.basename(stations).replace('.shp', '_select.shp'))
+    out_stations = df_stations.loc[filtered_ids]
+    out_stations.index = list(range(out_stations.shape[0]))
+    out_stations.to_file(outshp, epsg='EPSG:4326', engine='fiona')
+
     js = os.path.join(output_dir, 'metadata.json')
     with open(js, 'w') as f:
         json.dump(metadata, f)
@@ -73,7 +79,7 @@ if __name__ == '__main__':
         d = '/home/dgketchum/data/IrrigationGIS/dads'
         clim = '/home/dgketchum/data/IrrigationGIS/climate'
 
-    fields = os.path.join(d, 'met', 'stations', 'ghcn_gallatin.csv')
+    fields = os.path.join(clim, 'stations', 'ghcn_MT_stations.shp')
     ghcn = os.path.join(clim, 'ghcn', 'ghcn_daily_summaries_4FEB2022')
     ghcn_out = os.path.join(d, 'met', 'obs', 'ghcn')
 
