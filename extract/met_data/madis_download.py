@@ -99,13 +99,6 @@ def download_and_extract(dataset, start_time, end_time, madis_data_dir, username
 
         current_dt += timedelta(days=1)
 
-    gz_files = [f for f in os.listdir(local_dir) if f.endswith(".gz")]
-    for gz_file in gz_files:
-        with gzip.open(os.path.join(local_dir, gz_file), 'rb') as f_in:
-            with open(os.path.join(local_dir, gz_file[:-3]), 'wb') as f_out:  # Remove .gz extension
-                f_out.write(f_in.read())
-        os.remove(os.path.join(local_dir, gz_file))
-
 
 if __name__ == "__main__":
     username, password = 'usr', 'pswd'
