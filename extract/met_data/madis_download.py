@@ -1,13 +1,17 @@
-import toml
-from datetime import datetime
+import glob
 import gzip
 import os
 import subprocess
 import time
+import warnings
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from extract.met_data.madis_proc import read_madis_hourly
+import geopandas as gpd
+import pandas as pd
+import xarray as xr
+
+warnings.filterwarnings("ignore", category=xr.SerializationWarning)
 
 BASE_URL = "https://madis-data.ncep.noaa.gov/madisPublic/data"
 
@@ -38,6 +42,14 @@ DATASET_PATHS = {
     "RWIS": "LDAD/rwis/netCDF",
 }
 
+SUBHOUR_RESAMPLE_MAP = {'relHumidity': 'mean',
+                        'precipAccum': 'sum',
+                        'solarRadiation': 'mean',
+                        'temperature': 'mean',
+                        'windSpeed': 'mean',
+                        'longitude': 'mean',
+                        'latitude': 'mean'}
+
 
 def generate_monthly_time_tuples(start_year, end_year):
     time_tuples = []
@@ -62,20 +74,16 @@ def generate_monthly_time_tuples(start_year, end_year):
 def download_and_extract(dataset, start_time, end_time, madis_data_dir, username, password):
     """Download and extract data for a given dataset."""
 
-    # Construct dataset path (relative to MADIS_DATA)
     dataset_path = DATASET_PATHS.get(dataset.upper().replace(" ", "_"))
     if not dataset_path:
         raise ValueError(f"Unknown dataset: {dataset}")
 
-    # Ensure local directory exists
     local_dir = os.path.join(madis_data_dir, dataset_path)
     Path(local_dir).mkdir(parents=True, exist_ok=True)
 
-    # Convert start/end times to datetime objects
     start_dt = datetime.strptime(start_time, "%Y%m%d %H")
     end_dt = datetime.strptime(end_time, "%Y%m%d %H")
 
-    # Iterate over days in the specified time range
     current_dt = start_dt
     download_count = 0
     while current_dt <= end_dt:
@@ -88,7 +96,7 @@ def download_and_extract(dataset, start_time, end_time, madis_data_dir, username
             wget_cmd = [
                 "wget", "--user", username, "--password", password,
                 "--no-check-certificate", "--no-directories", "--recursive", "--level=1",
-                "--accept", "*.gz", "--timeout=600", f"{BASE_URL}{remote_dir}/"
+                "--accept", "*.gz", "-q", "--timeout=600", f"{BASE_URL}{remote_dir}/"
             ]
             subprocess.run(wget_cmd, check=True, cwd=local_dir)
             download_count += 1
@@ -100,6 +108,86 @@ def download_and_extract(dataset, start_time, end_time, madis_data_dir, username
             time.sleep(60)
 
         current_dt += timedelta(days=1)
+
+
+def read_madis_hourly(data_directory, date, output_directory, shapefile=None):
+    file_pattern = os.path.join(data_directory, f"*{date}*.gz")
+    file_list = sorted(glob.glob(file_pattern))
+    if not file_list:
+        print(f"No files found for date: {date}")
+        return
+    required_vars = ['stationId', 'relHumidity', 'precipAccum', 'solarRadiation', 'temperature',
+                     'windSpeed', 'latitude', 'longitude']
+
+    first = True
+    data, sites = {}, pd.DataFrame().to_dict()
+
+    for filename in file_list:
+
+        dt = os.path.basename(filename).split('.')[0].replace('_', '')
+
+        try:
+            with gzip.open(filename) as fp:
+                ds = xr.open_dataset(fp)
+                valid_data = ds[required_vars]
+                df = valid_data.to_dataframe()
+                df['stationId'] = df['stationId'].astype(str)
+                df = df[(df['latitude'] < 49.1) & (df['latitude'] >= 25.0)]
+                df = df[(df['longitude'] < -65) & (df['longitude'] >= -125.0)]
+                df.dropna(how='any', inplace=True)
+                df.set_index('stationId', inplace=True, drop=True)
+
+                if first and shapefile:
+                    sites = df[['latitude', 'longitude']]
+                    sites = sites.groupby(sites.index).mean()
+                    sites = sites.to_dict(orient='index')
+                elif shapefile:
+                    for i, r in df.iterrows():
+                        if i not in sites.keys():
+                            sites[i] = {'latitude': r['latitude'], 'longitude': r['longitude']}
+
+                df = df.groupby(df.index).agg(SUBHOUR_RESAMPLE_MAP)
+                df['v'] = df.apply(lambda row: [float(row[v]) for v in required_vars[1:6]], axis=1)
+                df.drop(columns=required_vars[1:], inplace=True)
+                dct = df.to_dict(orient='index')
+
+                for k, v in dct.items():
+                    if not k in data.keys():
+
+                        data[k] = {dt: v['v']}
+                    else:
+                        data[k][dt] = v['v']
+
+                if first and shapefile:
+                    write_locations(sites, shapefile)
+                    first = False
+                else:
+                    first = False
+
+                print('Wrote {} records from {}'.format(len(df), os.path.basename(filename)))
+
+        except EOFError as e:
+            print('{}: {}'.format(os.path.basename(filename), e))
+            continue
+
+    for k, v in data.items():
+        d = os.path.join(output_directory, k)
+        if not os.path.exists(d):
+            os.makedirs(d)
+        f = os.path.join(d, '{}_{}.csv'.format(k, dt[:4]))
+        df = pd.DataFrame.from_dict(v, orient='index')
+        df.columns = required_vars[1:6]
+        if os.path.exists(f):
+            df.to_csv(f, mode='a', header=False)
+        else:
+            df.to_csv(f)
+
+
+def write_locations(loc, shp):
+    df = pd.DataFrame.from_dict(loc, orient='index')
+    gdf = gpd.GeoDataFrame(df, geometry=gpd.points_from_xy(df.longitude, df.latitude), crs='EPSG:4326')
+    gdf.to_file(shp)
+    print('Wrote {}'.format(os.path.basename(shp)))
 
 
 if __name__ == "__main__":
@@ -119,6 +207,7 @@ if __name__ == "__main__":
 
             mesonet_dir = '/home/dgketchum/data/IrrigationGIS/climate/madis/LDAD/mesonet/netCDF'
             out_dir = '/home/dgketchum/data/IrrigationGIS/climate/madis/LDAD/mesonet/csv'
-            read_madis_hourly(mesonet_dir, s[:6], out_dir)
+            outshp = '/home/dgketchum/data/IrrigationGIS/climate/madis/LDAD/mesonet/integrated_mesonet.shp'
+            read_madis_hourly(mesonet_dir, s[:6], out_dir, shapefile=outshp)
 
 # ========================= EOF ====================================================================
