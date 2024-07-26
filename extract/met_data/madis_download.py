@@ -2,6 +2,7 @@ import glob
 import gzip
 import os
 import subprocess
+import multiprocessing
 import time
 import warnings
 from datetime import datetime, timedelta
@@ -87,6 +88,7 @@ def download_and_extract(dataset, start_time, end_time, madis_data_dir, username
     current_dt = start_dt
     download_count = 0
     while current_dt <= end_dt:
+        start = time.perf_counter()
         date_str = current_dt.strftime("%Y/%m/%d")
         remote_dir = f"/archive/{date_str}/{dataset_path}"
         print(f"{BASE_URL}{remote_dir}/")
@@ -108,6 +110,8 @@ def download_and_extract(dataset, start_time, end_time, madis_data_dir, username
             time.sleep(60)
 
         current_dt += timedelta(days=1)
+        end = time.perf_counter()
+        print(f"Download for dataset '{dataset}' took {end - start:0.4f} seconds")
 
 
 def read_madis_hourly(data_directory, date, output_directory, shapefile=None):
@@ -122,6 +126,7 @@ def read_madis_hourly(data_directory, date, output_directory, shapefile=None):
     first = True
     data, sites = {}, pd.DataFrame().to_dict()
 
+    start = time.perf_counter()
     for filename in file_list:
 
         dt = os.path.basename(filename).split('.')[0].replace('_', '')
@@ -182,6 +187,9 @@ def read_madis_hourly(data_directory, date, output_directory, shapefile=None):
         else:
             df.to_csv(f)
 
+    end = time.perf_counter()
+    print(f"Processing {len(file_list)} files took {end - start:0.4f} seconds")
+
 
 def write_locations(loc, shp):
     df = pd.DataFrame.from_dict(loc, orient='index')
@@ -190,24 +198,28 @@ def write_locations(loc, shp):
     print('Wrote {}'.format(os.path.basename(shp)))
 
 
+def process_time_chunk(time_tuple):
+    start_time, end_time = time_tuple
+    download_and_extract(dataset, start_time, end_time, madis_data_dir, username, password)
+
+    mesonet_dir = os.path.join(madis_data_dir, 'LDAD', 'mesonet', 'netCDF')
+    out_dir = os.path.join(madis_data_dir, 'LDAD', 'mesonet', 'csv')
+    outshp = os.path.join(madis_data_dir, 'LDAD', 'mesonet', 'integrated_mesonet_{}.shp'.format(start_time))
+    read_madis_hourly(mesonet_dir, start_time[:6], out_dir, shapefile=outshp)
+
+
 if __name__ == "__main__":
     username, password = 'usr', 'pswd'
-
     madis_data_dir = '/home/dgketchum/data/IrrigationGIS/climate/madis'
     conf = '/home/dgketchum/PycharmProjects/dads/extract/met_data/madis_config.toml'
 
     times = generate_monthly_time_tuples(2001, 2023)
-    times.reverse()
+    num_processes = 3
 
     for dataset in DATASET_PATHS.keys():
+        print(f"Processing dataset: {dataset} with {num_processes} processes")
 
-        for s, e in times:
-
-            download_and_extract(dataset, s, e, madis_data_dir, username, password)
-
-            mesonet_dir = '/home/dgketchum/data/IrrigationGIS/climate/madis/LDAD/mesonet/netCDF'
-            out_dir = '/home/dgketchum/data/IrrigationGIS/climate/madis/LDAD/mesonet/csv'
-            outshp = '/home/dgketchum/data/IrrigationGIS/climate/madis/LDAD/mesonet/integrated_mesonet.shp'
-            read_madis_hourly(mesonet_dir, s[:6], out_dir, shapefile=outshp)
-
+        # Create the pool within the dataset loop
+        with multiprocessing.Pool(processes=num_processes) as pool:
+            pool.map(process_time_chunk, times)
 # ========================= EOF ====================================================================
