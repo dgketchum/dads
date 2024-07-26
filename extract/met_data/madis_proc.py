@@ -1,56 +1,23 @@
-import os
-import gzip
-import tempfile
-import xarray as xr
-
-import xarray as xr
-import pandas as pd
 import glob
-import os
 import gzip
+import os
 import tempfile
-import pandas as pd
 from pathlib import Path
-import numpy as np
+import geopandas as gpd
+from shapely.geometry import Point
+import warnings
+import json
+import pandas as pd
+import xarray as xr
 
+warnings.filterwarnings("ignore", category=xr.SerializationWarning)
 
-def process_single_file(filename, required_vars, output_directory, chunk_size=5000):
-    """Process a single gzipped NetCDF file, filter by variables,
-       and write to a CSV in chunks."""
+SUBHOUR_RESAMPLE_MAP = {'relHumidity': 'mean',
+                        'precipAccum': 'sum',
+                        'solarRadiation': 'mean',
+                        'temperature': 'mean',
+                        'windSpeed': 'mean'}
 
-    Path(output_directory).mkdir(parents=True, exist_ok=True)
-
-    # Decompress the gzipped file into a temporary file
-    with gzip.open(filename, 'rb') as f_in:
-        with tempfile.NamedTemporaryFile(delete=False) as tmp_file:
-            tmp_file.write(f_in.read())
-            tmp_file_path = tmp_file.name
-
-    try:
-        with xr.open_dataset(tmp_file_path, engine="netcdf4") as ds:
-            station_dim = 'recNum'
-            num_records = ds.dims[station_dim]
-            first = True
-            for i in range(0, num_records, chunk_size):
-                chunk = ds.isel({station_dim: slice(i, i + chunk_size)})
-                valid_data = chunk[required_vars[0]].notnull()
-                for var in required_vars[1:]:
-                    valid_data = valid_data & chunk[var].notnull()
-                filtered_chunk = chunk.where(valid_data, drop=True)
-                data_array = filtered_chunk[required_vars].to_array().values.T
-                c = pd.DataFrame(data_array, columns=required_vars)
-                c['stationId'] = c['stationId'].astype(str)
-                c.index = c['stationId']
-                if first:
-                    df = c
-                    first = False
-                else:
-                    df = pd.concat([df, c], axis=0)
-
-    finally:
-        os.remove(tmp_file_path)
-
-    return df
 
 
 def read_madis_hourly(data_directory, date, output_directory):
@@ -59,14 +26,50 @@ def read_madis_hourly(data_directory, date, output_directory):
     if not file_list:
         print(f"No files found for date: {date}")
         return
-    required_vars = ['relHumidity', 'precipAccum', 'solarRadiation', 'stationId', 'temperature', 'windSpeed']
+    required_vars = ['stationId', 'relHumidity', 'precipAccum', 'solarRadiation', 'temperature',
+                     'windSpeed', 'latitude', 'longitude']
+
+    first = True
+    data, sites = {}, pd.DataFrame().to_dict()
+
     for filename in file_list:
-        process_single_file(filename, required_vars, output_directory)  # Call the new function
+
+        dt = os.path.basename(filename).split('.')[0].replace('_', '')
+        data[dt] = {}
+
+        with gzip.open(filename) as fp:
+            ds = xr.open_dataset(fp)
+            valid_data = ds[required_vars]
+            df = valid_data.to_dataframe()
+            df['stationId'] = df['stationId'].astype(str)
+            df = df[(df['latitude'] < 49.1) & (df['latitude'] >= 25.0)]
+            df = df[(df['longitude'] < -65) & (df['longitude'] >= -125.0)]
+            if first:
+                sites = df[['stationId', 'latitude', 'longitude']]
+            df.drop(columns=['latitude', 'longitude'], inplace=True)
+            df.dropna(how='any', inplace=True)
+            df.set_index('stationId', inplace=True, drop=True)
+            df = df.groupby(df.index).agg(SUBHOUR_RESAMPLE_MAP)
+            df['v'] = df.apply(lambda row: [float(row[v]) for v in required_vars[1:6]], axis=1)
+            df.drop(columns=required_vars[1:6], inplace=True)
+            data[dt] = df.to_dict(orient='index')
+            shp = os.path.join(output_directory, 'madis_coords.shp'.format(date))
+            write_locations(sites, shp)
+            first = False
+
+    js = os.path.join(output_directory, '{}.json'.format(date))
+    with open(js, 'w') as f:
+        json.dump(data, f)
+
+
+def write_locations(loc, shp):
+    gdf = gpd.GeoDataFrame(loc, geometry=gpd.points_from_xy(loc.longitude, loc.latitude), crs='EPSG:4326')
+    gdf.to_file(shp)
 
 
 if __name__ == "__main__":
-    madis_data_dir = '/home/dgketchum/data/IrrigationGIS/climate/madis/LDAD/mesonet/netCDF'
+    mesonet_dir = '/home/dgketchum/data/IrrigationGIS/climate/madis/LDAD/mesonet/netCDF'
     out_dir = '/home/dgketchum/data/IrrigationGIS/climate/madis/LDAD/mesonet/csv'
-    read_madis_hourly(madis_data_dir, '20191001', out_dir)
+    read_madis_hourly(mesonet_dir, '20191001', out_dir)
 
 # ========================= EOF ====================================================================

@@ -1,5 +1,5 @@
 import toml
-import datetime
+from datetime import datetime
 import gzip
 import os
 import subprocess
@@ -7,15 +7,17 @@ import time
 from datetime import datetime, timedelta
 from pathlib import Path
 
+from extract.met_data.madis_proc import read_madis_hourly
+
 BASE_URL = "https://madis-data.ncep.noaa.gov/madisPublic/data"
 
 DATASET_PATHS = {
+    "INTEGRATED_MESONET": "LDAD/mesonet/netCDF",
     "METAR": "point/metar/netcdf",
     "SAO": "point/sao/netcdf",
     "MARITIME": "point/maritime/netcdf",
     "MODERNIZED_COOP": "LDAD/coop/netCDF",
     "URBANET": "LDAD/urbanet/netCDF",
-    "INTEGRATED_MESONET": "LDAD/mesonet/netCDF",
     "HYDROLOGICAL_SURFACE": "LDAD/hydro/netCDF",
     "MULTI_AGENCY_PROFILER": "LDAD/profiler/netCDF",
     "SNOW": "LDAD/snow/netCDF",
@@ -37,27 +39,27 @@ DATASET_PATHS = {
 }
 
 
+def generate_monthly_time_tuples(start_year, end_year):
+    time_tuples = []
 
-def parse_config(filename):
-    """Parse TOML configuration file to get datasets and time range."""
+    for year in range(start_year, end_year + 1):
+        for month in range(1, 13):
+            start_day = 1
+            end_day = (
+                (datetime(year, month + 1, 1) - timedelta(days=1)).day
+                if month < 12
+                else 31
+            )
 
-    with open(filename, "r") as f:
-        config = toml.load(f)
+            start_time_str = f"{year}{month:02}{start_day:02} 00"
+            end_time_str = f"{year}{month:02}{end_day:02} 23"
 
-    # Time range
-    start_time = config["time"]["start"]
-    end_time = config["time"]["end"]
+            time_tuples.append((start_time_str, end_time_str))
 
-    # Selected datasets (filtering for True values)
-    datasets = [ds for ds, selected in config["datasets"].items() if selected]
-
-    # FTP server location
-    ftp_location = config["ftp"]["server_location"]
-
-    return datasets, start_time, end_time, ftp_location
+    return time_tuples
 
 
-def download_and_extract(dataset, start_time, end_time, madis_data_dir, username, password, ftp_location):
+def download_and_extract(dataset, start_time, end_time, madis_data_dir, username, password):
     """Download and extract data for a given dataset."""
 
     # Construct dataset path (relative to MADIS_DATA)
@@ -106,11 +108,17 @@ if __name__ == "__main__":
     madis_data_dir = '/home/dgketchum/data/IrrigationGIS/climate/madis'
     conf = '/home/dgketchum/PycharmProjects/dads/extract/met_data/madis_config.toml'
 
-    # Parse configuration file to get parameters
-    datasets, start_time, end_time, ftpLoc = parse_config(conf)
+    times = generate_monthly_time_tuples(2001, 2023)
+    times.reverse()
 
-    # Iterate over datasets and download/extract
-    for dataset in datasets:
-        download_and_extract(dataset, start_time, end_time, madis_data_dir, username, password, ftpLoc)
+    for dataset in DATASET_PATHS.keys():
+
+        for s, e in times:
+
+            download_and_extract(dataset, s, e, madis_data_dir, username, password)
+
+            mesonet_dir = '/home/dgketchum/data/IrrigationGIS/climate/madis/LDAD/mesonet/netCDF'
+            out_dir = '/home/dgketchum/data/IrrigationGIS/climate/madis/LDAD/mesonet/csv'
+            read_madis_hourly(mesonet_dir, s[:6], out_dir)
 
 # ========================= EOF ====================================================================
