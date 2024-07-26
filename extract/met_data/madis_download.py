@@ -209,17 +209,22 @@ def process_time_chunk(time_tuple):
 
 
 if __name__ == "__main__":
-    username, password = 'usr', 'pswd'
-    madis_data_dir = '/home/dgketchum/data/IrrigationGIS/climate/madis'
-    conf = '/home/dgketchum/PycharmProjects/dads/extract/met_data/madis_config.toml'
 
+    d = '/media/research/IrrigationGIS'
+    if not os.path.exists(d):
+        d = '/home/dgketchum/data/IrrigationGIS'
+
+    username, password = 'usr', 'pswd'
+    madis_data_dir = os.path.join(d, 'climate', 'madis')
+
+    # the FTP we're currently using is from 2001-07-01
     times = generate_monthly_time_tuples(2001, 2023)
+    times = [t for t in times if int(t[0][:6]) >= 200107]
     num_processes = 3
 
     for dataset in DATASET_PATHS.keys():
         print(f"Processing dataset: {dataset} with {num_processes} processes")
 
-        # Create the pool within the dataset loop
         with multiprocessing.Pool(processes=num_processes) as pool:
             pool.map(process_time_chunk, times)
 # ========================= EOF ====================================================================
