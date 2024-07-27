@@ -33,20 +33,7 @@ NLDAS_RESAMPLE_MAP = {'rsds': 'sum',
 REQUIRED_GRID_COLS = ['prcp', 'mean_temp', 'vpd', 'rn', 'u2', 'eto']
 
 
-def process_row(args):
-    fid, lon, lat, elv, dir_, overwrite_ = args
-
-    _file = os.path.join(dir_, 'nldas2', '{}.csv'.format(fid))
-    if not os.path.exists(_file) or overwrite_:
-        df = get_nldas(lon, lat, elv)
-        if df is None:
-            print('Empty Dataframe from {}, {:.2f}, {:.2f}'.format(fid, lat, lon))
-            return
-        df.to_csv(_file)
-        print(os.path.basename(_file))
-
-
-def extract_met_data(stations, gridded_dir, overwrite=False, station_type='openet', gridmet=False, n_proc=1):
+def extract_met_data(stations, gridded_dir, overwrite=False, station_type='openet', gridmet=False, shuffle=True):
     kw = station_par_map(station_type)
 
     if stations.endswith('.csv'):
@@ -56,6 +43,8 @@ def extract_met_data(stations, gridded_dir, overwrite=False, station_type='opene
 
         station_list = gpd.read_file(stations)
         station_list.index = station_list[kw['index']]
+        if shuffle:
+            station_list = station_list.sample(frac=1)
 
         try:  # for GWX stations
             station_list.drop(columns=['url', 'title', 'install', 'geometry'], inplace=True)
@@ -64,25 +53,25 @@ def extract_met_data(stations, gridded_dir, overwrite=False, station_type='opene
 
         station_list.index = station_list[kw['index']]
 
-    args, fail_ct = [], 0
-    for i, r in station_list.iterrows():
+    for i, (fid, row) in enumerate(station_list.iterrows()):
 
-        try:
-            lon, lat, elv = r[kw['lon']], r[kw['lat']], r[kw['elev']]
-        except Exception as e:
-            print(i, e)
-            continue
+        lon, lat, elv = row[kw['lon']], row[kw['lat']], row[kw['elev']]
 
-        args.append((i, lon, lat, elv, gridded_dir, overwrite))
+        _file = os.path.join(gridded_dir, 'nldas2', '{}.csv'.format(fid))
+        if not os.path.exists(_file) or overwrite:
+            df = get_nldas(lon, lat, elv)
+            if df is None:
+                print('Empty Dataframe from {}, {:.2f}, {:.2f}'.format(fid, lat, lon))
+                continue
+            df.to_csv(_file)
 
         if gridmet:
-            _file = os.path.join(gridded_dir, 'gridmet', '{}.csv'.format(i))
+            _file = os.path.join(gridded_dir, 'gridmet', '{}.csv'.format(fid))
             if not os.path.exists(_file) or overwrite:
                 df = get_gridmet(lat, lon, elv, anemom_hgt=10.0)
                 df.to_csv(_file)
 
-    with Pool(n_proc) as pool:
-        pool.map(process_row, args)
+        print(fid)
 
 
 def get_nldas(lon, lat, elev, start='2000-01-01', end='2023-12-31'):
@@ -274,6 +263,6 @@ if __name__ == '__main__':
 
     grid_dir = os.path.join(d, 'dads', 'met', 'gridded')
 
-    extract_met_data(sites, grid_dir, overwrite=False, station_type='madis', n_proc=1)
+    extract_met_data(sites, grid_dir, overwrite=False, station_type='madis', shuffle=True)
 
 # ========================= EOF ====================================================================
