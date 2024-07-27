@@ -3,7 +3,9 @@ import gzip
 import os
 import subprocess
 import multiprocessing
+import urllib
 import time
+from urllib.parse import urljoin
 import warnings
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -72,12 +74,12 @@ def generate_monthly_time_tuples(start_year, end_year):
     return time_tuples
 
 
-def download_and_extract(dataset, start_time, end_time, madis_data_dir, username, password):
+def download_and_extract(data_source, start_time, end_time, madis_data_dir, username, password, downloader='wget'):
     """Download and extract data for a given dataset."""
 
-    dataset_path = DATASET_PATHS.get(dataset.upper().replace(" ", "_"))
+    dataset_path = DATASET_PATHS.get(data_source.upper().replace(" ", "_"))
     if not dataset_path:
-        raise ValueError(f"Unknown dataset: {dataset}")
+        raise ValueError(f"Unknown dataset: {data_source}")
 
     local_dir = os.path.join(madis_data_dir, dataset_path)
     Path(local_dir).mkdir(parents=True, exist_ok=True)
@@ -87,31 +89,54 @@ def download_and_extract(dataset, start_time, end_time, madis_data_dir, username
 
     current_dt = start_dt
     download_count = 0
+
     while current_dt <= end_dt:
         start = time.perf_counter()
         date_str = current_dt.strftime("%Y/%m/%d")
         remote_dir = f"/archive/{date_str}/{dataset_path}"
-        print(f"{BASE_URL}{remote_dir}/")
-        print(f"Downloading data to {local_dir} for day {current_dt.strftime('%Y%m%d')}")
 
-        try:
-            wget_cmd = [
-                "wget", "--user", username, "--password", password,
-                "--no-check-certificate", "--no-directories", "--recursive", "--level=1",
-                "--accept", "*.gz", "-q", "--timeout=600", f"{BASE_URL}{remote_dir}/"
-            ]
-            subprocess.run(wget_cmd, check=True, cwd=local_dir)
-            download_count += 1
-        except subprocess.CalledProcessError as e:
-            print(f"Error downloading data: {e}")
+        hr_files = ['{}_{}.gz'.format(current_dt.strftime("%Y%m%d"),
+                                      str(hr).rjust(2, '0').ljust(4, '0')) for hr in range(0, 24)]
+        targets = [os.path.join(local_dir, hrfile) for hrfile in hr_files]
 
-        if download_count % 10 == 0:
-            print('sleep wait')
-            time.sleep(60)
+        if not all([os.path.exists(f) for f in targets]):
+            try:
+                if downloader == 'wget':
+                    wget_cmd = [
+                        "wget", "--user", username, "--password", password,
+                        "--no-check-certificate", "--no-directories", "--recursive", "--level=1",
+                        "--accept", "*.gz", "-q", "--timeout=600", f"{BASE_URL}{remote_dir}/"]
+                    subprocess.run(wget_cmd, check=True, cwd=local_dir)
+                    download_count += 1
+                elif downloader == 'aria2c':
+                    input_file = "aria2c_input.txt"
+                    with open(input_file, "w") as f:
+                        for file_name in hr_files:
+                            strfile = "{}\n".format(''.join([BASE_URL, remote_dir, '/', file_name]))
+                            f.write(strfile)
+                    aria2c_cmd = [
+                        "aria2c", "-x", "16", "-s", "16", "--http-user", username, "--http-passwd", password,
+                        "--allow-overwrite=true", "--dir", local_dir, "--input-file", input_file,
+                    ]
+                    subprocess.run(aria2c_cmd, check=True)
+                else:
+                    raise NotImplementedError('Choose wget or aria2c to download')
+
+            except subprocess.CalledProcessError as e:
+                print(f"{BASE_URL}{remote_dir}/")
+                print(f"Failed download to {local_dir} for day {current_dt.strftime('%Y%m%d')} {e}")
+
+            if download_count % 10 == 0:
+                print('sleep wait')
+                time.sleep(0.5)
+
+            end = time.perf_counter()
+            print(f"Download {data_source} {current_dt} took {end - start:0.2f} seconds")
+
+        else:
+            print(f'{current_dt} exists, skipping')
 
         current_dt += timedelta(days=1)
-        end = time.perf_counter()
-        print(f"Download for dataset '{dataset}' took {end - start:0.4f} seconds")
 
 
 def read_madis_hourly(data_directory, date, output_directory, shapefile=None):
@@ -133,7 +158,7 @@ def read_madis_hourly(data_directory, date, output_directory, shapefile=None):
 
         try:
             with gzip.open(filename) as fp:
-                ds = xr.open_dataset(fp)
+                ds = xr.open_dataset(fp, engine='scipy')
                 valid_data = ds[required_vars]
                 df = valid_data.to_dataframe()
                 df['stationId'] = df['stationId'].astype(str)
@@ -175,6 +200,10 @@ def read_madis_hourly(data_directory, date, output_directory, shapefile=None):
             print('{}: {}'.format(os.path.basename(filename), e))
             continue
 
+        except ValueError as e:
+            print('{}: {}'.format(os.path.basename(filename), e))
+            continue
+
     for k, v in data.items():
         d = os.path.join(output_directory, k)
         if not os.path.exists(d):
@@ -200,11 +229,12 @@ def write_locations(loc, shp):
 
 def process_time_chunk(time_tuple):
     start_time, end_time = time_tuple
-    download_and_extract(dataset, start_time, end_time, madis_data_dir, username, password)
+    # aria gives a speedup of at least 50%
+    download_and_extract(dataset, start_time, end_time, madis_data_dir_, usr, pswd, downloader='aria2c')
 
-    mesonet_dir = os.path.join(madis_data_dir, 'LDAD', 'mesonet', 'netCDF')
-    out_dir = os.path.join(madis_data_dir, 'LDAD', 'mesonet', 'csv')
-    outshp = os.path.join(madis_data_dir, 'LDAD', 'mesonet', 'integrated_mesonet_{}.shp'.format(start_time))
+    mesonet_dir = os.path.join(madis_data_dir_, 'LDAD', 'mesonet', 'netCDF')
+    out_dir = os.path.join(madis_data_dir_, 'LDAD', 'mesonet', 'csv')
+    outshp = os.path.join(madis_data_dir_, 'LDAD', 'mesonet', 'integrated_mesonet_{}.shp'.format(start_time))
     read_madis_hourly(mesonet_dir, start_time[:6], out_dir, shapefile=outshp)
 
 
@@ -214,17 +244,24 @@ if __name__ == "__main__":
     if not os.path.exists(d):
         d = '/home/dgketchum/data/IrrigationGIS'
 
-    username, password = 'usr', 'pswd'
-    madis_data_dir = os.path.join(d, 'climate', 'madis')
+    usr, pswd = 'usr', 'pswd'
+    madis_data_dir_ = os.path.join(d, 'climate', 'madis')
 
-    # the FTP we're currently using is from 2001-07-01
+    # the FTP we're currently using has from 2001-07-01
     times = generate_monthly_time_tuples(2001, 2023)
     times = [t for t in times if int(t[0][:6]) >= 200107]
-    num_processes = 3
 
-    for dataset in DATASET_PATHS.keys():
-        print(f"Processing dataset: {dataset} with {num_processes} processes")
+    num_processes = 1
+    # num_processes = 8
 
-        with multiprocessing.Pool(processes=num_processes) as pool:
-            pool.map(process_time_chunk, times)
+    dataset = 'INTEGRATED_MESONET'
+
+    # debug
+    process_time_chunk(times[-1])
+
+    print(f"Processing dataset: {dataset} with {num_processes} processes")
+
+    # with multiprocessing.Pool(processes=num_processes) as pool:
+    #     pool.map(process_time_chunk, times)
+
 # ========================= EOF ====================================================================
