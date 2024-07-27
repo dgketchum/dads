@@ -2,10 +2,7 @@ import glob
 import gzip
 import os
 import subprocess
-import multiprocessing
-import urllib
 import time
-from urllib.parse import urljoin
 import warnings
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -13,6 +10,8 @@ from pathlib import Path
 import geopandas as gpd
 import pandas as pd
 import xarray as xr
+
+from elevation import elevation_from_coordinate
 
 warnings.filterwarnings("ignore", category=xr.SerializationWarning)
 
@@ -238,6 +237,41 @@ def process_time_chunk(time_tuple):
     read_madis_hourly(mesonet_dir, start_time[:6], out_dir, shapefile=outshp)
 
 
+def madis_station_shapefile(mesonet_dir, meta_file, outfile):
+    """"""
+    meta = pd.read_csv(meta_file, index_col='STAID')
+    meta = meta.groupby(meta.index).first()
+    unique_ids = set()
+    unique_id_gdf = gpd.GeoDataFrame()
+    shapefiles = [os.path.join(mesonet_dir, f) for f in os.listdir(mesonet_dir) if f.endswith('.shp')]
+    for shapefile in shapefiles:
+        print(os.path.basename(shapefile))
+        gdf = gpd.read_file(shapefile)
+        if 'index' in gdf.columns:
+            unique_rows = gdf[~gdf['index'].isin(unique_ids)]
+            unique_rows.index = unique_rows['index']
+            idx = [i for i in meta.index if i in unique_rows.index]
+            try:
+                unique_rows.loc[idx, 'ELEV'] = meta.loc[idx, 'ELEV']
+                for i, r in unique_rows.iterrows():
+                    if isinstance(r['ELEV'], type(None)):
+                        r['ELEV'] = elevation_from_coordinate(r['longitude'], r['latitude'])
+
+                unique_rows['ELEV'] = unique_rows['ELEV'].astype(float)
+                unique_rows.loc[idx, 'NET'] = meta.loc[idx, 'NET']
+                unique_rows.loc[idx, 'NAME'] = meta.loc[idx, 'NAME']
+                unique_ids.update(unique_rows['index'].unique())
+            except ValueError:
+                a = 1
+            if unique_id_gdf.empty:
+                unique_id_gdf = unique_rows
+            else:
+                unique_id_gdf = pd.concat([unique_id_gdf, unique_rows])
+    unique_id_gdf.drop(columns=['index'], inplace=True)
+    unique_id_gdf.to_file(outfile)
+    print(outfile)
+
+
 if __name__ == "__main__":
 
     d = '/media/research/IrrigationGIS'
@@ -246,6 +280,8 @@ if __name__ == "__main__":
 
     usr, pswd = 'usr', 'pswd'
     madis_data_dir_ = os.path.join(d, 'climate', 'madis')
+    stn_meta = os.path.join(d, 'climate', 'madis', 'public_stn_list.csv')
+    mesonet_dir = os.path.join(madis_data_dir_, 'LDAD', 'mesonet')
 
     # the FTP we're currently using has from 2001-07-01
     times = generate_monthly_time_tuples(2001, 2023)
@@ -257,11 +293,14 @@ if __name__ == "__main__":
     dataset = 'INTEGRATED_MESONET'
 
     # debug
-    process_time_chunk(times[-1])
+    # process_time_chunk(times[-1])
 
     print(f"Processing dataset: {dataset} with {num_processes} processes")
 
     # with multiprocessing.Pool(processes=num_processes) as pool:
     #     pool.map(process_time_chunk, times)
+
+    sites = os.path.join(madis_data_dir_, 'mesonet_sites.shp')
+    madis_station_shapefile(mesonet_dir, stn_meta, sites)
 
 # ========================= EOF ====================================================================
