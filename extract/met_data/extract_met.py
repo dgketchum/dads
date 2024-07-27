@@ -1,6 +1,7 @@
 import os
 import pytz
 import configparser
+from multiprocessing import Pool
 
 import numpy as np
 import pandas as pd
@@ -10,9 +11,6 @@ from refet import calcs, Daily
 from pandarallel import pandarallel
 
 from extract.met_data.thredds import GridMet
-
-# from qaqc.agweatherqaqc import WeatherQC
-# from agrimet import Agrimet
 
 PACIFIC = pytz.timezone('US/Pacific')
 
@@ -35,15 +33,30 @@ NLDAS_RESAMPLE_MAP = {'rsds': 'sum',
 REQUIRED_GRID_COLS = ['prcp', 'mean_temp', 'vpd', 'rn', 'u2', 'eto']
 
 
-# TODO: add precip
-def extract_met_data(stations, gridded_dir, overwrite=False, station_type='openet'):
+def process_row(args):
+    fid, lon, lat, elv, dir_, overwrite_ = args
+
+    _file = os.path.join(dir_, 'nldas2', '{}.csv'.format(fid))
+    if not os.path.exists(_file) or overwrite_:
+        df = get_nldas(lon, lat, elv)
+        if df is None:
+            print('Empty Dataframe from {}, {:.2f}, {:.2f}'.format(fid, lat, lon))
+            return
+        df.to_csv(_file)
+        print(os.path.basename(_file))
+
+
+def extract_met_data(stations, gridded_dir, overwrite=False, station_type='openet', gridmet=False, n_proc=1):
     kw = station_par_map(station_type)
 
     if stations.endswith('.csv'):
         station_list = pd.read_csv(stations, index_col=kw['index'])
 
     else:
-        station_list = gpd.read_file(stations, index_col=kw['index'])
+
+        station_list = gpd.read_file(stations)
+        station_list.index = station_list[kw['index']]
+
         try:  # for GWX stations
             station_list.drop(columns=['url', 'title', 'install', 'geometry'], inplace=True)
         except KeyError:  # for GHCN
@@ -51,24 +64,25 @@ def extract_met_data(stations, gridded_dir, overwrite=False, station_type='opene
 
         station_list.index = station_list[kw['index']]
 
-    for i, (fid, row) in enumerate(station_list.iterrows()):
+    args, fail_ct = [], 0
+    for i, r in station_list.iterrows():
 
-        lon, lat, elv = row[kw['lon']], row[kw['lat']], row[kw['elev']]
+        try:
+            lon, lat, elv = r[kw['lon']], r[kw['lat']], r[kw['elev']]
+        except Exception as e:
+            print(i, e)
+            continue
 
-        _file = os.path.join(gridded_dir, 'nldas2', '{}.csv'.format(fid))
-        if not os.path.exists(_file) or overwrite:
-            df = get_nldas(lon, lat, elv)
-            if df is None:
-                print('Empty Dataframe from {}, {:.2f}, {:.2f}'.format(fid, lat, lon))
-                continue
-            df.to_csv(_file)
+        args.append((i, lon, lat, elv, gridded_dir, overwrite))
 
-        # _file = os.path.join(gridded_dir, 'gridmet', '{}.csv'.format(fid))
-        # if not os.path.exists(_file) or overwrite:
-        #     df = get_gridmet(lat, lon, elv, anemom_hgt=anemom)
-        #     df.to_csv(_file)
+        if gridmet:
+            _file = os.path.join(gridded_dir, 'gridmet', '{}.csv'.format(i))
+            if not os.path.exists(_file) or overwrite:
+                df = get_gridmet(lat, lon, elv, anemom_hgt=10.0)
+                df.to_csv(_file)
 
-        print(fid)
+    with Pool(n_proc) as pool:
+        pool.map(process_row, args)
 
 
 def get_nldas(lon, lat, elev, start='2000-01-01', end='2023-12-31'):
@@ -237,21 +251,29 @@ def station_par_map(station_type):
                 'elev': 'ELEV',
                 'start': 'START DATE',
                 'end': 'END DATE'}
+
+    if station_type == 'madis':
+        return {'index': 'index',
+                'lat': 'latitude',
+                'lon': 'longitude',
+                'elev': 'ELEV'}
     else:
         raise NotImplementedError
 
 
 if __name__ == '__main__':
-    d = '/media/research/IrrigationGIS/dads'
+    d = '/media/research/IrrigationGIS'
     if not os.path.isdir(d):
         home = os.path.expanduser('~')
-        d = os.path.join(home, 'data', 'IrrigationGIS', 'dads')
+        d = os.path.join(home, 'data', 'IrrigationGIS')
 
     pandarallel.initialize(nb_workers=6)
 
-    fields = os.path.join(d, 'met', 'obs', 'ghcn', 'ghcn_MT_stations_select.shp')
-    grid_dir = os.path.join(d, 'met', 'gridded')
+    madis_data_dir_ = os.path.join(d, 'climate', 'madis')
+    sites = os.path.join(madis_data_dir_, 'mesonet_sites.shp')
 
-    extract_met_data(fields, grid_dir, overwrite=False, station_type='ghcn')
+    grid_dir = os.path.join(d, 'dads', 'met', 'gridded')
+
+    extract_met_data(sites, grid_dir, overwrite=False, station_type='madis', n_proc=1)
 
 # ========================= EOF ====================================================================
