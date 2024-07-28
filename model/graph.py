@@ -2,17 +2,17 @@ import json
 import os
 import pandas as pd
 
-import torch
 import geopandas as gpd
 import numpy as np
 from shapely.geometry import LineString, Point
 from sklearn.metrics.pairwise import cosine_similarity
 from sklearn.preprocessing import MinMaxScaler
+# import torch
 import networkx as nx
 
 
-class NodePrep:
-    def __init__(self, stations, meteorology_dir, output_dir, k_nearest=2, index_col='FID'):
+class Graph:
+    def __init__(self, stations, meteorology_dir, output_dir, k_nearest=2, index_col='FID', bounds=None):
         self.fields = stations
         self.valid_target_stations = None
         self.meteorology_dir = meteorology_dir
@@ -20,6 +20,7 @@ class NodePrep:
         self.k_nearest = k_nearest
         self.index_col = index_col
         self.pth_stations = []
+        self.bounds = bounds
 
     def preprocess_data(self):
         edge_list, gdf, index_to_staid = self.generate_edge_index()
@@ -91,6 +92,11 @@ class NodePrep:
     def generate_edge_index(self):
         gdf = gpd.read_file(self.fields)
         gdf.index = gdf[self.index_col]
+        if self.bounds:
+            w, s, e, n = self.bounds
+            gdf = gdf[(gdf['latitude'] < n) & (gdf['latitude'] >= s)]
+            gdf = gdf[(gdf['longitude'] < e) & (gdf['longitude'] >= w)]
+
         if self.valid_target_stations:
             with open(self.valid_target_stations, 'r') as f:
                 select = json.load(f)
@@ -110,7 +116,7 @@ class NodePrep:
         spatial_edges = np.column_stack([row_indices, k_nearest_indices.ravel()])
 
         try:
-            features = gdf[['ELEV', 'LON', 'LAT']].values
+            features = gdf[['ELEV', 'longitude', 'latitude']].values
         except KeyError:
             features = gdf[['STATION_EL', 'STATION_LO', 'STATION_LA']].values
         scaler = MinMaxScaler()
@@ -177,11 +183,15 @@ if __name__ == '__main__':
         d = '/home/dgketchum/data/IrrigationGIS/dads'
         clim = '/home/dgketchum/data/IrrigationGIS/climate'
 
-    stations_ = os.path.join(d, 'met', 'stations', 'openet_gridwxcomp_input.shp')
-    output_dir_ = os.path.join(d, 'graphs', 'gwx')
+    # stations_ = os.path.join(d, 'met', 'stations', 'openet_gridwxcomp_input.shp')
+    stations_ = os.path.join(clim, 'madis', 'mesonet_sites.shp')
+    # output_dir_ = os.path.join(d, 'graphs', 'gwx')
+    output_dir_ = os.path.join(d, 'graphs', 'mesonet')
     meteorology_dir_ = os.path.join(d, 'met', 'tables', 'obs_grid')
 
-    node_prep = NodePrep(stations_, meteorology_dir_, output_dir_, k_nearest=5, index_col='STATION_ID')
-    node_prep.preprocess_data()
+    node_prep = Graph(stations_, meteorology_dir_, output_dir_, k_nearest=5, index_col='index',
+                      bounds=(-116., 46., -111., 49.))
+    node_prep.generate_edge_index()
+    # node_prep.preprocess_data()
 
 # ========================= EOF ====================================================================

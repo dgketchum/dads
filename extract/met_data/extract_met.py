@@ -33,7 +33,8 @@ NLDAS_RESAMPLE_MAP = {'rsds': 'sum',
 REQUIRED_GRID_COLS = ['prcp', 'mean_temp', 'vpd', 'rn', 'u2', 'eto']
 
 
-def extract_met_data(stations, gridded_dir, overwrite=False, station_type='openet', gridmet=False, shuffle=True):
+def extract_met_data(stations, gridded_dir, overwrite=False, station_type='openet', gridmet=False, shuffle=True,
+                     bounds=None):
     kw = station_par_map(station_type)
 
     if stations.endswith('.csv'):
@@ -43,8 +44,6 @@ def extract_met_data(stations, gridded_dir, overwrite=False, station_type='opene
 
         station_list = gpd.read_file(stations)
         station_list.index = station_list[kw['index']]
-        if shuffle:
-            station_list = station_list.sample(frac=1)
 
         try:  # for GWX stations
             station_list.drop(columns=['url', 'title', 'install', 'geometry'], inplace=True)
@@ -52,6 +51,14 @@ def extract_met_data(stations, gridded_dir, overwrite=False, station_type='opene
             station_list.drop(columns=['geometry'], inplace=True)
 
         station_list.index = station_list[kw['index']]
+
+    if shuffle:
+        station_list = station_list.sample(frac=1)
+
+    if bounds:
+        w, s, e, n = bounds
+        station_list = station_list[(station_list['latitude'] < n) & (station_list['latitude'] >= s)]
+        station_list = station_list[(station_list['longitude'] < e) & (station_list['longitude'] >= w)]
 
     for i, (fid, row) in enumerate(station_list.iterrows()):
 
@@ -64,6 +71,8 @@ def extract_met_data(stations, gridded_dir, overwrite=False, station_type='opene
                 print('Empty Dataframe from {}, {:.2f}, {:.2f}'.format(fid, lat, lon))
                 continue
             df.to_csv(_file)
+        else:
+            print('Skipping {}, exists'.format(fid))
 
         if gridmet:
             _file = os.path.join(gridded_dir, 'gridmet', '{}.csv'.format(fid))
@@ -263,6 +272,7 @@ if __name__ == '__main__':
 
     grid_dir = os.path.join(d, 'dads', 'met', 'gridded')
 
-    extract_met_data(sites, grid_dir, overwrite=False, station_type='madis', shuffle=True)
+    extract_met_data(sites, grid_dir, overwrite=False, station_type='madis',
+                     shuffle=True, bounds=(-116., 46., -111., 49.))
 
 # ========================= EOF ====================================================================
