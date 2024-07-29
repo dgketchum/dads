@@ -71,6 +71,8 @@ def extract_met_data(stations, gridded_dir, overwrite=False, station_type='opene
                 print('Empty Dataframe from {}, {:.2f}, {:.2f}'.format(fid, lat, lon))
                 continue
             df.to_csv(_file)
+            print(fid)
+
         else:
             print('Skipping {}, exists'.format(fid))
 
@@ -79,8 +81,6 @@ def extract_met_data(stations, gridded_dir, overwrite=False, station_type='opene
             if not os.path.exists(_file) or overwrite:
                 df = get_gridmet(lat, lon, elv, anemom_hgt=10.0)
                 df.to_csv(_file)
-
-        print(fid)
 
 
 def get_nldas(lon, lat, elev, start='2000-01-01', end='2023-12-31'):

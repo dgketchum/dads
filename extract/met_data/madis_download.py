@@ -11,7 +11,7 @@ import geopandas as gpd
 import pandas as pd
 import xarray as xr
 
-from elevation import elevation_from_coordinate
+from utils.elevation import elevation_from_coordinate
 
 warnings.filterwarnings("ignore", category=xr.SerializationWarning)
 
