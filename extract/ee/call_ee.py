@@ -130,12 +130,12 @@ if __name__ == '__main__':
     is_authorized()
     _bucket = 'gs://wudr'
 
-    stations = 'ghcn_MT_stations_select'
+    stations = 'dads_stations_WMT'
     pts = 'projects/ee-dgketchum/assets/dads/{}'.format(stations)
 
     geo = 'users/dgketchum/boundaries/western_states_expanded_union'
     chk = '/media/research/IrrigationGIS/dads/rs/gwx_stations/ee_extracts'
-    years_ = list(range(2000, 2021))
+    years_ = list(range(2000, 2024))
     years_.reverse()
 
     for buffer_ in [500]:
