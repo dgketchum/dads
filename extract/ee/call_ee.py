@@ -4,6 +4,7 @@ import time
 
 import ee
 import pandas as pd
+import geopandas as gpd
 
 sys.path.insert(0, os.path.abspath('..'))
 from extract.ee.cdl import get_cdl
@@ -171,15 +172,47 @@ def extract_modis(file_prefix, points_layer, years, check_dir=None):
                 print(desc)
 
 
+def export_dem(shapefile):
+    """"""
+    gdf = gpd.read_file(shapefile)
+    ned = ee.Image('USGS/SRTMGL1_003').select(['elevation'])
+    elev = ee.Terrain.products(ned).select(['elevation'])
+    for i, r in gdf.iterrows():
+        geo = r['geometry']
+        img = elev.clip(geo)
+        desc = r['MGRS_TILE']
+        task = ee.batch.Export.image.toCloudStorage(
+            image=img,
+            description=desc,
+            bucket='wudr',
+            fileNamePrefix=desc,
+            scale=30,
+            maxPixels=1e13)
+
+        try:
+            task.start()
+            print(desc)
+        except ee.ee_exception.EEException:
+            print('waiting on ', desc, '......')
+            time.sleep(600)
+            task.start()
+            print(desc)
+
+
 if __name__ == '__main__':
     is_authorized()
+
+    d = '/media/research/IrrigationGIS'
+    if not os.path.exists(d):
+        d = '/home/dgketchum/data/IrrigationGIS'
+
     _bucket = 'gs://wudr'
 
     stations = 'dads_stations_WMT'
     pts = 'projects/ee-dgketchum/assets/dads/{}'.format(stations)
 
     geo = 'users/dgketchum/boundaries/western_states_expanded_union'
-    chk = '/media/research/IrrigationGIS/dads/rs/gwx_stations/ee_extracts'
+    chk = os.path.join(d, 'dads', 'rs', 'gwx_stations', 'ee_extracts')
     years_ = list(range(2000, 2024))
     years_.reverse()
 
@@ -187,6 +220,7 @@ if __name__ == '__main__':
     #     file_ = '{}_{}'.format(stations, buffer_)
     #     request_band_extract(file_, pts, region=geo, years=years_, buffer=buffer_, check_dir=chk)
 
-    extract_modis(stations, pts, years=years_, check_dir=chk)
+    mgrs = os.path.join(d, 'boundaries', 'mgrs', 'mgrs_aea.shp')
+    export_dem(mgrs)
 
 # ========================= EOF ====================================================================
