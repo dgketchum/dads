@@ -5,6 +5,7 @@ import time
 import ee
 import pandas as pd
 import geopandas as gpd
+from shapely.geometry import Polygon
 
 sys.path.insert(0, os.path.abspath('..'))
 from extract.ee.cdl import get_cdl
@@ -172,15 +173,18 @@ def extract_modis(file_prefix, points_layer, years, check_dir=None):
                 print(desc)
 
 
-def export_dem(shapefile):
+def export_dem(csv):
     """"""
-    gdf = gpd.read_file(shapefile)
+    df = pd.read_csv(csv)
+    tiles = list(df['MGRS_TILE'])
     ned = ee.Image('USGS/SRTMGL1_003').select(['elevation'])
     elev = ee.Terrain.products(ned).select(['elevation'])
-    for i, r in gdf.iterrows():
-        geo = r['geometry']
-        img = elev.clip(geo)
-        desc = r['MGRS_TILE']
+    mgrs = ee.FeatureCollection('users/dgketchum/boundaries/MGRS_TILE')
+
+    for tile in tiles:
+        clip = mgrs.filterMetadata('MGRS_TILE', 'equals', tile)
+        img = elev.clip(clip.first().geometry().buffer(1000))
+        desc = 'dem_{}'.format(tile)
         task = ee.batch.Export.image.toCloudStorage(
             image=img,
             description=desc,
@@ -192,11 +196,16 @@ def export_dem(shapefile):
         try:
             task.start()
             print(desc)
-        except ee.ee_exception.EEException:
-            print('waiting on ', desc, '......')
+        except ee.ee_exception.EEException as e:
+            print('{}, waiting on '.format(e), desc, '......')
             time.sleep(600)
             task.start()
             print(desc)
+
+
+def shapely_to_ee_polygon(shapely_geom):
+    geojson = shapely_geom.__geo_interface__
+    return ee.Geometry.Polygon(geojson)
 
 
 if __name__ == '__main__':
@@ -213,14 +222,16 @@ if __name__ == '__main__':
 
     geo = 'users/dgketchum/boundaries/western_states_expanded_union'
     chk = os.path.join(d, 'dads', 'rs', 'gwx_stations', 'ee_extracts')
-    years_ = list(range(2000, 2024))
+    years_ = list(range(2000, 2015))
     years_.reverse()
 
     # for buffer_ in [500]:
     #     file_ = '{}_{}'.format(stations, buffer_)
     #     request_band_extract(file_, pts, region=geo, years=years_, buffer=buffer_, check_dir=chk)
 
-    mgrs = os.path.join(d, 'boundaries', 'mgrs', 'mgrs_aea.shp')
+    mgrs = '/home/dgketchum/Downloads/mgrs_wmt.csv'
     export_dem(mgrs)
+
+    extract_modis(stations, pts, years=years_, check_dir=chk)
 
 # ========================= EOF ====================================================================
