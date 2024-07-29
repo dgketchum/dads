@@ -1,7 +1,9 @@
 import os
 import sys
+import time
 
 import ee
+import pandas as pd
 
 sys.path.insert(0, os.path.abspath('..'))
 from extract.ee.cdl import get_cdl
@@ -126,6 +128,49 @@ def stack_bands(yr, roi):
     return input_bands
 
 
+def extract_modis(file_prefix, points_layer, years, check_dir=None):
+    """
+
+    """
+    points = ee.FeatureCollection(points_layer)
+    desc = None
+    d_str = None
+
+    for yr in years:
+        dt = pd.date_range(f'{yr}-01-01', f'{yr}-12-31', freq='D')
+
+        for d in dt:
+            if check_dir:
+                outfile = os.path.join(check_dir, '{}.csv'.format(desc))
+                if os.path.exists(outfile):
+                    print('{} exists'.format(outfile))
+                    continue
+
+            desc = '{}_{}'.format(file_prefix, d_str)
+            d_str = d.strftime('%Y_%m_%d')
+            stack = ee.Image('MODIS/061/MCD18A1/{}'.format(d_str)).select('DSR').rename('DSR')
+            data = stack.sampleRegions(
+                collection=points,
+                scale=30,
+                tileScale=16)
+
+            task = ee.batch.Export.table.toCloudStorage(
+                collection=data,
+                description=desc,
+                selectors=['DSR', 'fid'],
+                bucket='wudr',
+                fileFormat='CSV')
+
+            try:
+                task.start()
+                print(desc)
+            except ee.ee_exception.EEException:
+                print('waiting on ', desc, '......')
+                time.sleep(600)
+                task.start()
+                print(desc)
+
+
 if __name__ == '__main__':
     is_authorized()
     _bucket = 'gs://wudr'
@@ -138,8 +183,10 @@ if __name__ == '__main__':
     years_ = list(range(2000, 2024))
     years_.reverse()
 
-    for buffer_ in [500]:
-        file_ = '{}_{}'.format(stations, buffer_)
-        request_band_extract(file_, pts, region=geo, years=years_, buffer=buffer_, check_dir=chk)
+    # for buffer_ in [500]:
+    #     file_ = '{}_{}'.format(stations, buffer_)
+    #     request_band_extract(file_, pts, region=geo, years=years_, buffer=buffer_, check_dir=chk)
+
+    extract_modis(stations, pts, years=years_, check_dir=chk)
 
 # ========================= EOF ====================================================================
