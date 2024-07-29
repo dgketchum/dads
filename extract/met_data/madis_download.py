@@ -243,6 +243,7 @@ def madis_station_shapefile(mesonet_dir, meta_file, outfile):
     meta = meta.groupby(meta.index).first()
     unique_ids = set()
     unique_id_gdf = gpd.GeoDataFrame()
+
     shapefiles = [os.path.join(mesonet_dir, f) for f in os.listdir(mesonet_dir) if f.endswith('.shp')]
     for shapefile in shapefiles:
         print(os.path.basename(shapefile))
@@ -251,22 +252,22 @@ def madis_station_shapefile(mesonet_dir, meta_file, outfile):
             unique_rows = gdf[~gdf['index'].isin(unique_ids)]
             unique_rows.index = unique_rows['index']
             idx = [i for i in meta.index if i in unique_rows.index]
-            try:
-                unique_rows.loc[idx, 'ELEV'] = meta.loc[idx, 'ELEV']
-                for i, r in unique_rows.iterrows():
-                    if isinstance(r['ELEV'], type(None)):
-                        r['ELEV'] = elevation_from_coordinate(r['longitude'], r['latitude'])
 
-                unique_rows['ELEV'] = unique_rows['ELEV'].astype(float)
-                unique_rows.loc[idx, 'NET'] = meta.loc[idx, 'NET']
-                unique_rows.loc[idx, 'NAME'] = meta.loc[idx, 'NAME']
-                unique_ids.update(unique_rows['index'].unique())
-            except ValueError:
-                a = 1
+            unique_rows.loc[idx, 'ELEV'] = meta.loc[idx, 'ELEV']
+            for i, r in unique_rows.iterrows():
+                if isinstance(r['ELEV'], type(None)):
+                    r['ELEV'] = elevation_from_coordinate(r['longitude'], r['latitude'])
+
+            unique_rows['ELEV'] = unique_rows['ELEV'].astype(float)
+            unique_rows.loc[idx, 'NET'] = meta.loc[idx, 'NET']
+            unique_rows.loc[idx, 'NAME'] = meta.loc[idx, 'NAME']
+            unique_ids.update(unique_rows['index'].unique())
+
             if unique_id_gdf.empty:
                 unique_id_gdf = unique_rows
             else:
                 unique_id_gdf = pd.concat([unique_id_gdf, unique_rows])
+
     unique_id_gdf.drop(columns=['index'], inplace=True)
     unique_id_gdf.to_file(outfile)
     print(outfile)
