@@ -130,26 +130,25 @@ def stack_bands(yr, roi):
     return input_bands
 
 
-def extract_modis(file_prefix, points_layer, years, check_dir=None):
+def extract_modis(glb, points_layer, years, check_dir=None):
     """
-
     """
     points = ee.FeatureCollection(points_layer)
-    desc = None
-    d_str = None
 
     for yr in years:
         dt = pd.date_range(f'{yr}-01-01', f'{yr}-12-31', freq='D')
 
         for d in dt:
+
+            d_str = d.strftime('%Y_%m_%d')
+            desc = '{}_{}'.format(glb, d_str)
+
             if check_dir:
                 outfile = os.path.join(check_dir, '{}.csv'.format(desc))
                 if os.path.exists(outfile):
                     print('{} exists'.format(outfile))
                     continue
 
-            desc = '{}_{}'.format(file_prefix, d_str)
-            d_str = d.strftime('%Y_%m_%d')
             stack = ee.Image('MODIS/061/MCD18A1/{}'.format(d_str)).select('DSR').rename('DSR')
             data = stack.sampleRegions(
                 collection=points,
@@ -169,8 +168,12 @@ def extract_modis(file_prefix, points_layer, years, check_dir=None):
             except ee.ee_exception.EEException:
                 print('waiting on ', desc, '......')
                 time.sleep(600)
-                task.start()
-                print(desc)
+                try:
+                    task.start()
+                    print(desc)
+                except ee.ee_exception.EEException as e:
+                    print(e, desc)
+                    continue
 
 
 def export_dem(csv):
@@ -221,17 +224,18 @@ if __name__ == '__main__':
     pts = 'projects/ee-dgketchum/assets/dads/{}'.format(stations)
 
     geo = 'users/dgketchum/boundaries/western_states_expanded_union'
-    chk = os.path.join(d, 'dads', 'rs', 'gwx_stations', 'ee_extracts')
-    years_ = list(range(2000, 2015))
+    years_ = list(range(2000, 2003))
     years_.reverse()
 
+    # chk = os.path.join(d, 'dads', 'rs', 'gwx_stations', 'ee_extracts')
     # for buffer_ in [500]:
     #     file_ = '{}_{}'.format(stations, buffer_)
     #     request_band_extract(file_, pts, region=geo, years=years_, buffer=buffer_, check_dir=chk)
 
-    mgrs = '/home/dgketchum/Downloads/mgrs_wmt.csv'
-    export_dem(mgrs)
+    # mgrs = '/home/dgketchum/Downloads/mgrs_wmt.csv'
+    # export_dem(mgrs)
 
+    chk = os.path.join(d, 'dads', 'rs', 'dads_stations', 'modis')
     extract_modis(stations, pts, years=years_, check_dir=chk)
 
 # ========================= EOF ====================================================================
