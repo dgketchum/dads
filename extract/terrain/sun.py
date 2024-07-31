@@ -1,5 +1,6 @@
 import os
 import subprocess
+from pprint import pprint
 
 
 def calculate_terrain_irradiance(terrain_dir, mapset='PERMANENT', overwrite=False):
@@ -15,34 +16,37 @@ def calculate_terrain_irradiance(terrain_dir, mapset='PERMANENT', overwrite=Fals
     for dem_name, dem_file in zip(dem_names, dem_files):
         tile = dem_name.split('_')[-1]
 
-        # if tile != '12TTS':
-        #     continue
+        result = subprocess.run(['g.list', f'type=raster', f'pattern=irradiance_day_*_{tile}'],
+                                capture_output=True, text=True)
+        if result.returncode == 0:
+            raster_list = result.stdout.strip().split('\n')
+        else:
+            print("Error:", result.stderr)
+            continue
+
+        if len(raster_list) >= 365 and not overwrite:
+            print(tile, 'is processed, skipping')
+            continue
 
         tile_dir = os.path.join(r, tile)
         if not os.path.isdir(tile_dir):
             os.mkdir(tile_dir)
 
         slope_output_path = os.path.join(s, 'slope_{0}.tif'.format(tile))
-        if os.path.exists(slope_output_path) and not overwrite:
-            print(slope_output_path, 'exists, skipping')
-        else:
-            subprocess.call(['gdaldem', 'slope', f'{dem_file}', slope_output_path])
-            slope_name = f'slope_{tile}'
-            subprocess.call(['r.in.gdal', f'input={slope_output_path}', f'output={slope_name}'])
+        subprocess.call(['gdaldem', 'slope', f'{dem_file}', slope_output_path])
+        slope_name = f'slope_{tile}'
+        subprocess.call(['r.in.gdal', f'input={slope_output_path}', f'output={slope_name}'])
 
         aspect_output_path = os.path.join(a, 'aspect_{0}.tif'.format(tile))
-        if os.path.exists(aspect_output_path) and not overwrite:
-            print(aspect_output_path, 'exists, skipping')
-        else:
-            subprocess.call(['gdaldem', 'aspect', f'{dem_file}', aspect_output_path])
-            aspect_name = f'aspect_{tile}'
-            subprocess.call(['r.in.gdal', f'input={aspect_output_path}', f'output={aspect_name}'])
+        subprocess.call(['gdaldem', 'aspect', f'{dem_file}', aspect_output_path])
+        aspect_name = f'aspect_{tile}'
+        subprocess.call(['r.in.gdal', f'input={aspect_output_path}', f'output={aspect_name}'])
 
         subprocess.call(['g.region', f'rast=dem_{tile}@{mapset}'])
 
         for day in range(1, 366):
             irradiance_output_path = 'irradiance_day_{0}_{1}'.format(day, tile)
-
+            print('processing', irradiance_output_path)
             subprocess.call(['r.sun',
                              'elevation={0}@{1}'.format(dem_name, mapset),
                              'slope={0}@{1}'.format(slope_name, mapset),
@@ -92,7 +96,7 @@ if __name__ == '__main__':
         root = '/home/dgketchum/data/IrrigationGIS/dads'
 
     dem_d = os.path.join(root, 'dem')
-    calculate_terrain_irradiance(dem_d, mapset="dads_map", overwrite=True)
+    calculate_terrain_irradiance(dem_d, mapset="dads_map", overwrite=False)
 
     # remove_rasters(dem_d, resolution=30)
 
