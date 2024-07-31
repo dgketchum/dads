@@ -165,18 +165,17 @@ def extract_modis(glb, points_layer, years, check_dir=None):
             try:
                 task.start()
                 print(desc)
-            except ee.ee_exception.EEException:
-                print('waiting on ', desc, '......')
-                time.sleep(600)
-                try:
-                    task.start()
-                    print(desc)
-                except ee.ee_exception.EEException as e:
-                    print(e, desc)
+            except ee.ee_exception.EEException as e:
+                if 'Image.load' in e.args[0]:
+                    print(e, desc, 'Image load failure')
                     continue
+                else:
+                    print('waiting on ', desc, '......')
+                    time.sleep(600)
+                    task.start()
 
 
-def export_dem(csv):
+def export_dem(csv, check_dir=None):
     """"""
     df = pd.read_csv(csv)
     tiles = list(df['MGRS_TILE'])
@@ -185,15 +184,25 @@ def export_dem(csv):
     mgrs = ee.FeatureCollection('users/dgketchum/boundaries/MGRS_TILE')
 
     for tile in tiles:
+
+        desc = 'dem_{}'.format(tile)
+
+        if check_dir:
+            outfile = os.path.join(check_dir, '{}.tif'.format(desc))
+            if os.path.exists(outfile):
+                print('{} exists'.format(outfile))
+                continue
+
         clip = mgrs.filterMetadata('MGRS_TILE', 'equals', tile)
         img = elev.clip(clip.first().geometry().buffer(1000))
-        desc = 'dem_{}'.format(tile)
+
         task = ee.batch.Export.image.toCloudStorage(
             image=img,
             description=desc,
             bucket='wudr',
             fileNamePrefix=desc,
-            scale=30,
+            scale=250,
+            crs='EPSG:5071',
             maxPixels=1e13)
 
         try:
@@ -232,10 +241,11 @@ if __name__ == '__main__':
     #     file_ = '{}_{}'.format(stations, buffer_)
     #     request_band_extract(file_, pts, region=geo, years=years_, buffer=buffer_, check_dir=chk)
 
-    # mgrs = '/home/dgketchum/Downloads/mgrs_wmt.csv'
-    # export_dem(mgrs)
+    chk = '/media/nvm/IrrigationGIS/dads/dem/dem_250'
+    mgrs = '/home/dgketchum/Downloads/mgrs_w17.csv'
+    export_dem(mgrs, chk)
 
-    chk = os.path.join(d, 'dads', 'rs', 'dads_stations', 'modis')
-    extract_modis(stations, pts, years=years_, check_dir=chk)
+    # chk = os.path.join(d, 'dads', 'rs', 'dads_stations', 'modis')
+    # extract_modis(stations, pts, years=years_, check_dir=chk)
 
 # ========================= EOF ====================================================================
