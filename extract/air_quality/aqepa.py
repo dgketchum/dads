@@ -18,7 +18,7 @@ TARGET_STATES = ['AZ', 'CA', 'CO', 'ID', 'MT', 'NM', 'NV', 'OR', 'UT', 'WA', 'WY
 
 
 def download_county_air_quality_data(key_file, name, state_fips, county_fips, start_date, end_date, data_dst, meta_js):
-    ''''''
+    """"""
 
     stco_code = '{}{}'.format(state_fips, county_fips)
     st_fips = {v: k for k, v in state_fips_code().items()}
@@ -119,8 +119,7 @@ def write_aqs_shapefile(meta_js, shapefile_out):
             pop.append(k)
     [meta.pop(k) for k in pop]
     gdf = pd.DataFrame().from_dict(meta).T
-    gdf = gpd.GeoDataFrame(gdf)
-    gdf.geometry = gpd.points_from_xy(gdf['lon'], gdf['lat'], crs='EPSG:4326')
+    gdf = gpd.GeoDataFrame(gdf, geometry=gpd.points_from_xy(gdf['lon'], gdf['lat'], crs='EPSG:4326'))
     gdf.to_file(shapefile_out)
 
 
@@ -139,15 +138,12 @@ if __name__ == '__main__':
     fips = state_county_code()
     for state in fips.keys():
 
-        if state not in TARGET_STATES:
-            continue
-
         state_dct = fips[state]
         counties = {v['GEOID']: v['NAME'] for k, v in state_dct.items()}
 
         for geoid, name_ in counties.items():
             st_code, co_code = geoid[:2], geoid[2:]
-            download_county_air_quality_data(js, name_, st_code, co_code, 2022, 2024, data_dst=aq_data, meta_js=aq_meta)
+            download_county_air_quality_data(js, name_, st_code, co_code, 1990, 2024, data_dst=aq_data, meta_js=aq_meta)
 
         write_aqs_shapefile(meta_js=aq_meta, shapefile_out=aq_shp)
 
