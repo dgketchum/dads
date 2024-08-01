@@ -60,7 +60,10 @@ def extract_met_data(stations, gridded_dir, overwrite=False, station_type='opene
         station_list = station_list[(station_list['latitude'] < n) & (station_list['latitude'] >= s)]
         station_list = station_list[(station_list['longitude'] < e) & (station_list['longitude'] >= w)]
 
-    for i, (fid, row) in enumerate(station_list.iterrows()):
+    record_ct = station_list.shape[0]
+    for i, (fid, row) in enumerate(station_list.iterrows(), start=1):
+
+        print('{}: {} of {}'.format(fid, i, record_ct))
 
         lon, lat, elv = row[kw['lon']], row[kw['lat']], row[kw['elev']]
 
@@ -68,19 +71,20 @@ def extract_met_data(stations, gridded_dir, overwrite=False, station_type='opene
         if not os.path.exists(_file) or overwrite:
             df = get_nldas(lon, lat, elv)
             if df is None:
-                print('Empty Dataframe from {}, {:.2f}, {:.2f}'.format(fid, lat, lon))
+                # print('Empty Dataframe from {}, {:.2f}, {:.2f}'.format(fid, lat, lon))
                 continue
             df.to_csv(_file)
-            print(fid)
+            print('nldas', fid)
 
         else:
-            print('Skipping {}, exists'.format(fid))
+            print('{} exists'.format(fid))
 
         if gridmet:
             _file = os.path.join(gridded_dir, 'gridmet', '{}.csv'.format(fid))
             if not os.path.exists(_file) or overwrite:
                 df = get_gridmet(lat, lon, elv, anemom_hgt=10.0)
                 df.to_csv(_file)
+                print('gridmet', fid)
 
 
 def get_nldas(lon, lat, elev, start='2000-01-01', end='2023-12-31'):
@@ -218,6 +222,7 @@ def modify_config(template_file, output_file, data_file_path, latitude, longitud
 
 def gridmet_par_map():
     return {
+        'pr': 'prcp',
         'pet': 'eto',
         'srad': 'rsds',
         'tmmx': 'max_temp',
@@ -255,6 +260,11 @@ def station_par_map(station_type):
                 'lat': 'latitude',
                 'lon': 'longitude',
                 'elev': 'ELEV'}
+    if station_type == 'dads':
+        return {'index': 'fid',
+                'lat': 'latitude',
+                'lon': 'longitude',
+                'elev': 'elevation'}
     else:
         raise NotImplementedError
 
@@ -268,11 +278,13 @@ if __name__ == '__main__':
     pandarallel.initialize(nb_workers=6)
 
     madis_data_dir_ = os.path.join(d, 'climate', 'madis')
-    sites = os.path.join(madis_data_dir_, 'mesonet_sites.shp')
+    sites = os.path.join(d, 'dads', 'met', 'stations', 'dads_stations.shp')
 
     grid_dir = os.path.join(d, 'dads', 'met', 'gridded')
 
-    extract_met_data(sites, grid_dir, overwrite=False, station_type='madis',
-                     shuffle=True, bounds=(-116., 46., -111., 49.))
+    extract_met_data(sites, grid_dir, overwrite=False, station_type='dads',
+                     shuffle=False, bounds=(-116., 45., -109., 49.), gridmet=True)
 
+    extract_met_data(sites, grid_dir, overwrite=False, station_type='dads',
+                     shuffle=False, bounds=None, gridmet=True)
 # ========================= EOF ====================================================================
