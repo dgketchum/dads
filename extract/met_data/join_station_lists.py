@@ -149,8 +149,10 @@ if __name__ == '__main__':
     sno_list = os.path.join(d, 'climate', 'snotel', 'snotel_list.csv')
     meso_list = os.path.join(d, 'climate', 'madis', 'mesonet_sites.csv')
     agrim_list = os.path.join(d, 'dads', 'met', 'stations', 'openet_gridwxcomp_input.csv')
-    out_file_ = os.path.join(d, 'dads', 'met', 'stations', 'dads_stations_WMT.shp')
+    out_file_ = os.path.join(d, 'dads', 'met', 'stations', 'dads_stations.shp')
     join_stations(sno_list, meso_list, agrim_list, out_file_, bounds=(-116., 45., -109., 49.),
-                  fill_elevation=False)
+                  fill_elevation=True)
+    join_stations(sno_list, meso_list, agrim_list, out_file_, bounds=None, fill_elevation=True)
+
 
 # ========================= EOF ====================================================================
