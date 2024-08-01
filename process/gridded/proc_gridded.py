@@ -1,9 +1,9 @@
 import os
+import pytz
 
-import geopandas as gpd
 import numpy as np
 import pandas as pd
-import pytz
+from pandarallel import pandarallel
 from refet import calcs, Daily
 
 from extract.met_data.down_gridded import station_par_map
@@ -26,8 +26,6 @@ NLDAS_RESAMPLE_MAP = {'rsds': 'sum',
                       'wind': 'mean',
                       'ea': 'mean'}
 
-REQUIRED_GRID_COLS = ['prcp', 'mean_temp', 'vpd', 'rn', 'u2', 'eto']
-
 
 def extract_met_data(stations, gridded_dir, overwrite=False, station_type='openet',
                      gridmet=False, shuffle=True, bounds=None):
@@ -45,9 +43,6 @@ def extract_met_data(stations, gridded_dir, overwrite=False, station_type='opene
 
     record_ct = station_list.shape[0]
     for i, (fid, row) in enumerate(station_list.iterrows(), start=1):
-
-        if fid != '15B07':
-            continue
 
         lon, lat, elv = row[kw['lon']], row[kw['lat']], row[kw['elev']]
         print('{}: {} of {}; {:.2f}, {:.2f}'.format(fid, i, record_ct, lat, lon))
@@ -98,34 +93,12 @@ def proc_nldas(in_csv, lat, lon, elev, out_csv):
 
     df['doy'] = [i.dayofyear for i in df.index]
 
-    def calc_asce_params(r, zw, lat, elev):
-        asce = Daily(tmin=r['min_temp'],
-                     tmax=r['max_temp'],
-                     rs=r['rsds'],
-                     ea=r['ea'],
-                     uz=r['wind'],
-                     zw=zw,
-                     doy=r['doy'],
-                     elev=elev,
-                     lat=lat,
-                     method='asce')
-
-        vpd = asce.vpd[0]
-        rn = asce.rn[0]
-        u2 = asce.u2[0]
-        tmean = asce.tmean[0]
-        eto = asce.eto()[0]
-
-        return tmean, vpd, rn, u2, eto
-
-    # asce_params = df.parallel_apply(calc_asce_params, lat=lat, elev=elev, zw=10, axis=1)
-    asce_params = df.apply(calc_asce_params, lat=lat, elev=elev, zw=10, axis=1)
-    df[['tmean', 'vpd', 'rn', 'u2', 'eto']] = pd.DataFrame(asce_params.tolist(),
-                                                           index=df.index)
+    asce_params = df.parallel_apply(calc_asce_params, lat=lat, elev=elev, zw=10, axis=1)
+    # asce_params = df.apply(calc_asce_params, lat=lat, elev=elev, zw=10, axis=1)
+    df[['mean_temp', 'vpd', 'rn', 'u2', 'eto']] = pd.DataFrame(asce_params.tolist(),
+                                                               index=df.index)
     df['year'] = [i.year for i in df.index]
     df['date_str'] = [i.strftime('%Y-%m-%d') for i in df.index]
-
-    df = df[REQUIRED_GRID_COLS]
 
     df.to_csv(out_csv)
 
@@ -134,7 +107,6 @@ def proc_gridmet(in_csv, lat, elev, out_csv):
     df = pd.read_csv(in_csv, index_col=0, parse_dates=True)
     df['min_temp'] = df['min_temp'] - 273.15
     df['max_temp'] = df['max_temp'] - 273.15
-    df['mean_temp'] = (df['max_temp'] + df['min_temp']) * 0.5
 
     df['year'] = [i.year for i in df.index]
     df['doy'] = [i.dayofyear for i in df.index]
@@ -143,20 +115,17 @@ def proc_gridmet(in_csv, lat, elev, out_csv):
     df['ea'] = calcs._actual_vapor_pressure(pair=calcs._air_pressure(elev),
                                             q=df['q'])
 
+    df['rsds'] *= 0.0864
 
-    es = calcs._sat_vapor_pressure(df['mean_temp'])
-    df['vpd'] = es - df['ea']
-
-    # params = df.parallel_apply(calcs_, lat=lat, elev=elev, zw=10., axis=1)
-    params = df.apply(calcs_, lat=lat, elev=elev, zw=10., axis=1)
-    df[['rn', 'u2', 'vpd']] = pd.DataFrame(params.tolist(), index=df.index)
-
-    df = df[REQUIRED_GRID_COLS]
+    asce_params = df.parallel_apply(calc_asce_params, lat=lat, elev=elev, zw=10, axis=1)
+    # asce_params = df.apply(calc_asce_params, lat=lat, elev=elev, zw=10, axis=1)
+    df[['mean_temp', 'vpd', 'rn', 'u2', 'eto']] = pd.DataFrame(asce_params.tolist(),
+                                                               index=df.index)
 
     df.to_csv(out_csv)
 
 
-def calcs_(r, lat, elev, zw):
+def calc_asce_params(r, zw, lat, elev):
     asce = Daily(tmin=r['min_temp'],
                  tmax=r['max_temp'],
                  rs=r['rsds'],
@@ -165,14 +134,16 @@ def calcs_(r, lat, elev, zw):
                  zw=zw,
                  doy=r['doy'],
                  elev=elev,
-                 lat=lat)
-    u2 = asce.u2[0]
-    rn = asce.rn[0]
-    es = calcs._sat_vapor_pressure(r['mean_temp'])
-    vpd = es - r['ea']
-    vpd = vpd[0]
+                 lat=lat,
+                 method='asce')
 
-    return rn, u2, vpd
+    vpd = asce.vpd[0]
+    rn = asce.rn[0]
+    u2 = asce.u2[0]
+    tmean = asce.tmean[0]
+    eto = asce.eto()[0]
+
+    return tmean, vpd, rn, u2, eto
 
 
 if __name__ == '__main__':
@@ -181,14 +152,14 @@ if __name__ == '__main__':
         home = os.path.expanduser('~')
         d = os.path.join(home, 'data', 'IrrigationGIS')
 
-    # pandarallel.initialize(nb_workers=6)
+    pandarallel.initialize(nb_workers=6)
 
     madis_data_dir_ = os.path.join(d, 'climate', 'madis')
     sites = os.path.join(d, 'dads', 'met', 'stations', 'dads_stations.csv')
 
     grid_dir = os.path.join(d, 'dads', 'met', 'gridded')
 
-    extract_met_data(sites, grid_dir, overwrite=False, station_type='dads',
+    extract_met_data(sites, grid_dir, overwrite=True, station_type='dads',
                      shuffle=False, bounds=(-116., 45., -109., 49.), gridmet=True)
 
 # ========================= EOF ====================================================================
