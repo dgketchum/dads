@@ -6,7 +6,7 @@ import numpy as np
 import pandas as pd
 import ast
 from refet import Daily, calcs
-from extract.met_data.extract_met import calcs_ as clc
+from extract.met_data.down_gridded import calcs_ as clc
 
 warnings.filterwarnings("ignore", category=FutureWarning)
 VAR_MAP = {'rsds': 'Rs (w/m2)',
@@ -24,14 +24,17 @@ COMPARISON_VARS = ['mean_temp', 'vpd', 'rn', 'u2', 'eto']
 STATES = ['AZ', 'CA', 'CO', 'ID', 'MT', 'NM', 'NV', 'OR', 'UT', 'WA', 'WY']
 
 
-def join_daily_timeseries(stations, sta_dir, nldas_dir, gridmet_dir, dst_dir, index='FID'):
+def join_daily_timeseries(stations, sta_dir, nldas_dir, dst_dir, gridmet_dir=None, index='FID'):
     stations = pd.read_csv(stations, index_col=index)
-    stations = stations.loc[[i for i, r in stations.iterrows() if r['State'] in STATES]]
+    stations.sort_index(inplace=True)
 
     for year in range(2000, 2021):
 
         df = pd.DataFrame()
         for i, (f, row) in enumerate(stations.iterrows(), start=1):
+
+            if f != 'MSLM8':
+                continue
 
             nldas_file = os.path.join(nldas_dir, '{}.csv'.format(f))
             try:
@@ -75,8 +78,7 @@ def join_daily_timeseries(stations, sta_dir, nldas_dir, gridmet_dir, dst_dir, in
 
             params = None
             try:
-                params = sdf.apply(clc, lat=row['STATION_LAT'], elev=row['STATION_ELEV_M'], zw=row['Anemom_height_m'],
-                                   axis=1)
+                params = sdf.apply(clc, lat=row['latitude'], elev=row['elevation'], zw=2.0, axis=1)
                 sdf[['rn', 'u2', 'vpd']] = pd.DataFrame(params.tolist(), index=sdf.index)
             except ValueError as e:
                 print('{} error getting {} from returned value: {}'.format(e, ['rn', 'u2', 'vpd'], len(params)))
@@ -120,16 +122,16 @@ if __name__ == '__main__':
     if not os.path.exists(d):
         d = '/home/dgketchum/data/IrrigationGIS/dads'
 
-    fields = os.path.join(d, 'met', 'stations', 'gwx_stations.csv')
+    fields = os.path.join(d, 'met', 'stations', 'mesonet_sites.csv')
     sta = os.path.join(d, 'met', 'obs', 'gwx')
     gm = os.path.join(d, 'met', 'gridded', 'gridmet')
     nl = os.path.join(d, 'met', 'gridded', 'nldas2')
     # rs = os.path.join(d, 'rs', 'gwx_stations', 'concatenated', 'bands.csv')
 
-    rs = os.path.join(d, 'rs', 'gwx_stations')
-    joined = os.path.join(d, 'tables')
+    rs = os.path.join(d, 'rs', 'dads_stations', 'landsat')
+    joined = os.path.join(d, 'training')
     plots = os.path.join(d, 'plots', 'gridmet')
 
-    join_daily_timeseries(fields, sta, nl, gm, joined, index='STATION_ID')
+    join_daily_timeseries(fields, sta, nl, joined, gm, index='index')
 
 # ========================= EOF ====================================================================

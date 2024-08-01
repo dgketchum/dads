@@ -137,10 +137,10 @@ if __name__ == '__main__':
 
     dem_d = os.path.join(root, 'dem')
     out_dem = os.path.join(out, 'dem')
-    mgrs = os.path.join(out, 'training', 'wmt_tiles.csv')
+    mgrs = os.path.join(out, 'training', 'w17_tiles.csv')
 
-    # calculate_terrain_irradiance(dem_d, mapset="dads_map", overwrite=False)
-    export_rasters(dem_d, out_dem, mapset="dads_map", overwrite=False, mgrs_list=None)
+    calculate_terrain_irradiance(dem_d, mapset="dads_map", overwrite=False)
+    # export_rasters(dem_d, out_dem, mapset="dads_map", overwrite=False, mgrs_list=None)
 
     # remove_rasters(dem_d, resolution=30)
 

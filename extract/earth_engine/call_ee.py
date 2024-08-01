@@ -8,8 +8,8 @@ import geopandas as gpd
 from shapely.geometry import Polygon
 
 sys.path.insert(0, os.path.abspath('..'))
-from extract.ee.cdl import get_cdl
-from extract.ee.ee_utils import is_authorized, landsat_composites
+from extract.earth_engine.cdl import get_cdl
+from extract.earth_engine.ee_utils import is_authorized, landsat_composites
 
 sys.setrecursionlimit(2000)
 
@@ -242,7 +242,7 @@ if __name__ == '__main__':
     #     request_band_extract(file_, pts, region=geo, years=years_, buffer=buffer_, check_dir=chk)
 
     chk = '/media/nvm/IrrigationGIS/dads/dem/dem_250'
-    mgrs = '/home/dgketchum/Downloads/mgrs_w17.csv'
+    mgrs = '/media/research/IrrigationGIS/dads/training/w17_tiles.csv'
     export_dem(mgrs, chk)
 
     # chk = os.path.join(d, 'dads', 'rs', 'dads_stations', 'modis')
