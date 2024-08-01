@@ -104,6 +104,7 @@ def join_stations(snotel, mesonet, agrimet, out_file, fill_elevation=False, boun
     )
 
     snotel_data = snotel_data[['fid', 'name', 'elevation', 'latitude', 'longitude', 'source']]
+    snotel_data['fid'] = [f.strip() for f in snotel_data['fid']]
     mesonet_data = mesonet_data[['fid', 'name', 'elevation', 'latitude', 'longitude', 'source']]
     agrimet_data = agrimet_data[['fid', 'name', 'elevation', 'latitude', 'longitude', 'source']]
 
@@ -118,11 +119,11 @@ def join_stations(snotel, mesonet, agrimet, out_file, fill_elevation=False, boun
         for i, r in comb_df.iterrows():
             try:
                 if isinstance(r['elevation'], type(None)):
-                    r['elevation'] = elevation_from_coordinate(r['latitude'], r['longitude'])
-                    print(r['fid'], r['elevation'])
+                    comb_df.loc[i, 'elevation'] = elevation_from_coordinate(r['latitude'], r['longitude'])
+                    print(r['fid'], i, 'of', comb_df.shape[0])
                 elif np.isnan(r['elevation']):
-                    r['elevation'] = elevation_from_coordinate(r['latitude'], r['longitude'])
-                    print(r['fid'], r['elevation'])
+                    comb_df.loc[i, 'elevation'] = elevation_from_coordinate(r['latitude'], r['longitude'])
+                    print(r['fid'], i, 'of', comb_df.shape[0])
                 else:
                     pass
             except KeyError:
@@ -142,6 +143,33 @@ def join_stations(snotel, mesonet, agrimet, out_file, fill_elevation=False, boun
     print(out_file)
 
 
+def fill_out_elevation(infile, outfile):
+    """"""
+    gdf = gpd.read_file(infile)
+
+    for i, r in gdf.iterrows():
+        try:
+            if isinstance(r['elevation'], type(None)):
+                r['elevation'] = elevation_from_coordinate(r['latitude'], r['longitude'])
+                print(r['fid'], '{:1f}'.format(r['elevation']), i, 'of', gdf.shape[0])
+            elif np.isnan(r['elevation']):
+                r['elevation'] = elevation_from_coordinate(r['latitude'], r['longitude'])
+                print(r['fid'], '{:1f}'.format(r['elevation']), i, 'of', gdf.shape[0])
+            else:
+                pass
+        except KeyError:
+            print('Elevation error at {}'.format(r['fid']))
+            continue
+        except requests.exceptions.JSONDecodeError:
+            print('Elevation error at {}'.format(r['fid']))
+            continue
+        except Exception as e:
+            print('Elevation error {} at {}'.format(e, r['fid']))
+            continue
+
+    gdf.to_file(outfile)
+
+
 if __name__ == '__main__':
     d = '/media/research/IrrigationGIS'
     if not os.path.exists(d):
@@ -149,10 +177,10 @@ if __name__ == '__main__':
     sno_list = os.path.join(d, 'climate', 'snotel', 'snotel_list.csv')
     meso_list = os.path.join(d, 'climate', 'madis', 'mesonet_sites.csv')
     agrim_list = os.path.join(d, 'dads', 'met', 'stations', 'openet_gridwxcomp_input.csv')
+
     out_file_ = os.path.join(d, 'dads', 'met', 'stations', 'dads_stations.shp')
-    join_stations(sno_list, meso_list, agrim_list, out_file_, bounds=(-116., 45., -109., 49.),
-                  fill_elevation=True)
     join_stations(sno_list, meso_list, agrim_list, out_file_, bounds=None, fill_elevation=True)
+    # join_stations(sno_list, meso_list, agrim_list, out_file_, bounds=None, fill_elevation=True)
 
 
 # ========================= EOF ====================================================================
