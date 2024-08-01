@@ -63,28 +63,28 @@ def extract_met_data(stations, gridded_dir, overwrite=False, station_type='opene
     record_ct = station_list.shape[0]
     for i, (fid, row) in enumerate(station_list.iterrows(), start=1):
 
-        print('{}: {} of {}'.format(fid, i, record_ct))
-
         lon, lat, elv = row[kw['lon']], row[kw['lat']], row[kw['elev']]
+        print('{}: {} of {}; {:.2f}, {:.2f}'.format(fid, i, record_ct, lat, lon))
 
-        _file = os.path.join(gridded_dir, 'nldas2', '{}.csv'.format(fid))
+        _file = os.path.join(gridded_dir, 'nldas2_raw', '{}.csv'.format(fid))
         if not os.path.exists(_file) or overwrite:
             df = get_nldas(lon, lat, elv)
             if df is None:
-                # print('Empty Dataframe from {}, {:.2f}, {:.2f}'.format(fid, lat, lon))
                 continue
             df.to_csv(_file)
             print('nldas', fid)
 
         else:
-            print('{} exists'.format(fid))
+            print('nldas {} exists'.format(fid))
 
         if gridmet:
-            _file = os.path.join(gridded_dir, 'gridmet', '{}.csv'.format(fid))
+            _file = os.path.join(gridded_dir, 'gridmet_raw', '{}.csv'.format(fid))
             if not os.path.exists(_file) or overwrite:
-                df = get_gridmet(lat, lon, elv, anemom_hgt=10.0)
+                df = get_gridmet(lon=lon, lat=lat, elev=elv, anemom_hgt=10.0)
                 df.to_csv(_file)
                 print('gridmet', fid)
+            else:
+                print('gridmet {} exists'.format(fid))
 
 
 def get_nldas(lon, lat, elev, start='2000-01-01', end='2023-12-31'):
@@ -93,7 +93,12 @@ def get_nldas(lon, lat, elev, start='2000-01-01', end='2023-12-31'):
 
     if df.empty:
         return None
+    else:
+        return df
 
+
+def proc_nldas(in_csv, lat, lon, elev, out_csv):
+    df = pd.read_csv(in_csv)
     df = df.tz_convert(PACIFIC)
     wind_u = df['wind_u']
     wind_v = df['wind_v']
@@ -137,8 +142,8 @@ def get_nldas(lon, lat, elev, start='2000-01-01', end='2023-12-31'):
 
         return tmean, vpd, rn, u2, eto
 
-    asce_params = df.parallel_apply(calc_asce_params, lat=lat, lon=lon, elev=elev, zw=10, axis=1)
-    # asce_params = df.apply(calc_asce_params, lat=lat, lon=lon, elev=elev, zw=10, axis=1)
+    # asce_params = df.parallel_apply(calc_asce_params, lat=lat, lon=lon, elev=elev, zw=10, axis=1)
+    asce_params = df.apply(calc_asce_params, lat=lat, lon=lon, elev=elev, zw=10, axis=1)
 
     df[['tmean', 'vpd', 'rn', 'u2', 'eto']] = pd.DataFrame(asce_params.tolist(),
                                                            index=df.index)
@@ -147,7 +152,7 @@ def get_nldas(lon, lat, elev, start='2000-01-01', end='2023-12-31'):
 
     df = df[REQUIRED_GRID_COLS]
 
-    return df
+    df.to_csv(out_csv)
 
 
 def get_gridmet(lon, lat, elev, anemom_hgt, start='2000-01-01', end='2023-12-31'):
@@ -166,6 +171,11 @@ def get_gridmet(lon, lat, elev, anemom_hgt, start='2000-01-01', end='2023-12-31'
 
         df[variable] = s[thredds_var]
 
+    return df
+
+
+def proc_gridmet(in_csv, lat, lon, elev, anemom_hgt, out_csv):
+    df = pd.read_csv(in_csv)
     df['min_temp'] = df['min_temp'] - 273.15
     df['max_temp'] = df['max_temp'] - 273.15
     df['mean_temp'] = (df['max_temp'] + df['min_temp']) * 0.5
@@ -179,12 +189,13 @@ def get_gridmet(lon, lat, elev, anemom_hgt, start='2000-01-01', end='2023-12-31'
     es = calcs._sat_vapor_pressure(df['mean_temp'])
     df['vpd'] = es - df['ea']
 
-    params = df.parallel_apply(calcs_, lat=lat, elev=elev, zw=anemom_hgt, axis=1)
+    # params = df.parallel_apply(calcs_, lat=lat, elev=elev, zw=anemom_hgt, axis=1)
+    params = df.apply(calcs_, lat=lat, elev=elev, zw=anemom_hgt, axis=1)
     df[['rn', 'u2', 'vpd']] = pd.DataFrame(params.tolist(), index=df.index)
 
     df = df[REQUIRED_GRID_COLS]
 
-    return df
+    df.to_csv(out_csv)
 
 
 def calcs_(r, lat, elev, zw):
@@ -275,7 +286,7 @@ if __name__ == '__main__':
         home = os.path.expanduser('~')
         d = os.path.join(home, 'data', 'IrrigationGIS')
 
-    pandarallel.initialize(nb_workers=6)
+    # pandarallel.initialize(nb_workers=6)
 
     madis_data_dir_ = os.path.join(d, 'climate', 'madis')
     sites = os.path.join(d, 'dads', 'met', 'stations', 'dads_stations.shp')
