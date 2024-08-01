@@ -1,7 +1,6 @@
 import os
 
 import pandas as pd
-import geopandas as gpd
 import pynldas2 as nld
 
 from extract.met_data.thredds import GridMet
@@ -11,22 +10,10 @@ REQUIRED_GRID_COLS = ['prcp', 'mean_temp', 'vpd', 'rn', 'u2', 'eto']
 
 def extract_met_data(stations, gridded_dir, overwrite=False, station_type='openet', gridmet=False, shuffle=True,
                      bounds=None):
+
     kw = station_par_map(station_type)
 
-    if stations.endswith('.csv'):
-        station_list = pd.read_csv(stations, index_col=kw['index'])
-
-    else:
-
-        station_list = gpd.read_file(stations)
-        station_list.index = station_list[kw['index']]
-
-        try:  # for GWX stations
-            station_list.drop(columns=['url', 'title', 'install', 'geometry'], inplace=True)
-        except KeyError:  # for GHCN
-            station_list.drop(columns=['geometry'], inplace=True)
-
-        station_list.index = station_list[kw['index']]
+    station_list = pd.read_csv(stations, index_col=kw['index'])
 
     if shuffle:
         station_list = station_list.sample(frac=1)
@@ -150,13 +137,11 @@ if __name__ == '__main__':
     # pandarallel.initialize(nb_workers=6)
 
     madis_data_dir_ = os.path.join(d, 'climate', 'madis')
-    sites = os.path.join(d, 'dads', 'met', 'stations', 'dads_stations.shp')
+    sites = os.path.join(d, 'dads', 'met', 'stations', 'dads_stations.csv')
 
     grid_dir = os.path.join(d, 'dads', 'met', 'gridded')
 
     extract_met_data(sites, grid_dir, overwrite=False, station_type='dads',
                      shuffle=False, bounds=(-116., 45., -109., 49.), gridmet=True)
 
-    extract_met_data(sites, grid_dir, overwrite=False, station_type='dads',
-                     shuffle=False, bounds=None, gridmet=True)
 # ========================= EOF ====================================================================
