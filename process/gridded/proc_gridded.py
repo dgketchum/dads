@@ -11,12 +11,6 @@ from process.calc_eto import calc_asce_params
 
 PACIFIC = pytz.timezone('US/Pacific')
 
-GRIDMET_RESAMPLE_MAP = {'rsds': 'mean',
-                        'humidity': 'mean',
-                        'min_temp': 'min',
-                        'max_temp': 'max',
-                        'wind': 'mean'}
-
 NLDAS_RESAMPLE_MAP = {'rsds': 'sum',
                       'rlds': 'sum',
                       'prcp': 'sum',
