@@ -4,13 +4,13 @@ import pandas as pd
 import pynldas2 as nld
 
 from extract.met_data.thredds import GridMet
+from process.station_parameters import station_par_map
 
 REQUIRED_GRID_COLS = ['prcp', 'mean_temp', 'vpd', 'rn', 'u2', 'eto']
 
 
 def extract_met_data(stations, gridded_dir, overwrite=False, station_type='openet', gridmet=False, shuffle=True,
                      bounds=None):
-
     kw = station_par_map(station_type)
 
     station_list = pd.read_csv(stations, index_col=kw['index'])
@@ -22,6 +22,13 @@ def extract_met_data(stations, gridded_dir, overwrite=False, station_type='opene
         w, s, e, n = bounds
         station_list = station_list[(station_list['latitude'] < n) & (station_list['latitude'] >= s)]
         station_list = station_list[(station_list['longitude'] < e) & (station_list['longitude'] >= w)]
+    else:
+        # NLDAS-2 extent
+        ln = station_list.shape[0]
+        w, s, e, n = (-125.0, 25.0, -67.0, 53.0)
+        station_list = station_list[(station_list['latitude'] < n) & (station_list['latitude'] >= s)]
+        station_list = station_list[(station_list['longitude'] < e) & (station_list['longitude'] >= w)]
+        print('dropped {} stations outside NLDAS-2 extent'.format(ln - station_list.shape[0]))
 
     record_ct = station_list.shape[0]
     for i, (fid, row) in enumerate(station_list.iterrows(), start=1):
@@ -46,6 +53,7 @@ def extract_met_data(stations, gridded_dir, overwrite=False, station_type='opene
                 df = get_gridmet(lon=lon, lat=lat)
                 df.to_csv(_file)
                 print('gridmet', fid)
+
             else:
                 print('gridmet {} exists'.format(fid))
 
@@ -61,8 +69,8 @@ def get_nldas(lon, lat, start='2000-01-01', end='2023-12-31'):
 
 
 def get_gridmet(lon, lat, start='2000-01-01', end='2023-12-31'):
+    s = None
     df, cols = pd.DataFrame(), gridmet_par_map()
-
     for thredds_var, variable in cols.items():
 
         if not thredds_var:
@@ -74,7 +82,10 @@ def get_gridmet(lon, lat, start='2000-01-01', end='2023-12-31'):
         except OSError as e:
             print('Error on {}, {}'.format(variable, e))
 
-        df[variable] = s[thredds_var]
+        try:
+            df[variable] = s[thredds_var]
+        except KeyError:
+            continue
 
     return df
 
@@ -91,43 +102,6 @@ def gridmet_par_map():
     }
 
 
-def station_par_map(station_type):
-    if station_type == 'openet':
-        return {'index': 'STATION_ID',
-                'lat': 'LAT',
-                'lon': 'LON',
-                'elev': 'ELEV_M',
-                'start': 'START DATE',
-                'end': 'END DATE'}
-    elif station_type == 'agri':
-        return {'index': 'id',
-                'lat': 'lat',
-                'lon': 'lon',
-                'elev': 'elev',
-                'start': 'record_start',
-                'end': 'record_end'}
-    if station_type == 'ghcn':
-        return {'index': 'STAID',
-                'lat': 'LAT',
-                'lon': 'LON',
-                'elev': 'ELEV',
-                'start': 'START DATE',
-                'end': 'END DATE'}
-
-    if station_type == 'madis':
-        return {'index': 'index',
-                'lat': 'latitude',
-                'lon': 'longitude',
-                'elev': 'ELEV'}
-    if station_type == 'dads':
-        return {'index': 'fid',
-                'lat': 'latitude',
-                'lon': 'longitude',
-                'elev': 'elevation'}
-    else:
-        raise NotImplementedError
-
-
 if __name__ == '__main__':
     d = '/media/research/IrrigationGIS'
     if not os.path.isdir(d):
@@ -142,6 +116,6 @@ if __name__ == '__main__':
     grid_dir = os.path.join(d, 'dads', 'met', 'gridded')
 
     extract_met_data(sites, grid_dir, overwrite=False, station_type='dads',
-                     shuffle=False, bounds=(-116., 45., -109., 49.), gridmet=True)
+                     shuffle=True, bounds=None, gridmet=True)
 
 # ========================= EOF ====================================================================
