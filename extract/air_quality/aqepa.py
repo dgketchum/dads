@@ -77,6 +77,9 @@ def download_county_air_quality_data(key_file, name, state_fips, county_fips, st
             except requests.exceptions.ConnectionError:
                 continue
 
+            except json.decoder.JSONDecodeError:
+                continue
+
         if code_df is None:
             continue
 
