@@ -7,6 +7,7 @@ from pandarallel import pandarallel
 from refet import calcs, Daily
 
 from extract.met_data.down_gridded import station_par_map
+from process.calc_eto import calc_asce_params
 
 PACIFIC = pytz.timezone('US/Pacific')
 
@@ -48,6 +49,11 @@ def extract_met_data(stations, gridded_dir, overwrite=False, station_type='opene
         print('{}: {} of {}; {:.2f}, {:.2f}'.format(fid, i, record_ct, lat, lon))
 
         in_file_ = os.path.join(gridded_dir, 'nldas2_raw', '{}.csv'.format(fid))
+        if not os.path.exists(in_file_):
+            print('Input NLDAS at {} does not exist, skipping'.format(os.path.basename(in_file_)))
+            # TODO: write missing stations
+            continue
+
         out_file_ = os.path.join(gridded_dir, 'nldas2', '{}.csv'.format(fid))
 
         if not os.path.exists(out_file_) or overwrite:
@@ -125,27 +131,6 @@ def proc_gridmet(in_csv, lat, elev, out_csv):
     df.to_csv(out_csv)
 
 
-def calc_asce_params(r, zw, lat, elev):
-    asce = Daily(tmin=r['min_temp'],
-                 tmax=r['max_temp'],
-                 rs=r['rsds'],
-                 ea=r['ea'],
-                 uz=r['wind'],
-                 zw=zw,
-                 doy=r['doy'],
-                 elev=elev,
-                 lat=lat,
-                 method='asce')
-
-    vpd = asce.vpd[0]
-    rn = asce.rn[0]
-    u2 = asce.u2[0]
-    tmean = asce.tmean[0]
-    eto = asce.eto()[0]
-
-    return tmean, vpd, rn, u2, eto
-
-
 if __name__ == '__main__':
     d = '/media/research/IrrigationGIS'
     if not os.path.isdir(d):
@@ -159,7 +144,7 @@ if __name__ == '__main__':
 
     grid_dir = os.path.join(d, 'dads', 'met', 'gridded')
 
-    extract_met_data(sites, grid_dir, overwrite=True, station_type='dads',
+    extract_met_data(sites, grid_dir, overwrite=False, station_type='dads',
                      shuffle=False, bounds=(-116., 45., -109., 49.), gridmet=True)
 
 # ========================= EOF ====================================================================

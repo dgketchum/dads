@@ -5,8 +5,6 @@ import warnings
 import numpy as np
 import pandas as pd
 import ast
-from refet import Daily, calcs
-from extract.met_data.down_gridded import calcs_ as clc
 
 warnings.filterwarnings("ignore", category=FutureWarning)
 VAR_MAP = {'rsds': 'Rs (w/m2)',
@@ -122,8 +120,9 @@ if __name__ == '__main__':
     if not os.path.exists(d):
         d = '/home/dgketchum/data/IrrigationGIS/dads'
 
-    fields = os.path.join(d, 'met', 'stations', 'mesonet_sites.csv')
-    sta = os.path.join(d, 'met', 'obs', 'gwx')
+    fields = os.path.join(d, 'met', 'stations', 'dads_stations.csv')
+
+    obs = os.path.join(d, 'met', 'obs', 'gwx')
     gm = os.path.join(d, 'met', 'gridded', 'gridmet')
     nl = os.path.join(d, 'met', 'gridded', 'nldas2')
     # rs = os.path.join(d, 'rs', 'gwx_stations', 'concatenated', 'bands.csv')
@@ -132,6 +131,6 @@ if __name__ == '__main__':
     joined = os.path.join(d, 'training')
     plots = os.path.join(d, 'plots', 'gridmet')
 
-    join_daily_timeseries(fields, sta, nl, joined, gm, index='index')
+    join_daily_timeseries(fields, obs, nl, joined, gm, index='index')
 
 # ========================= EOF ====================================================================
