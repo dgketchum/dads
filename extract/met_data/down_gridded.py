@@ -81,7 +81,10 @@ def get_gridmet(lon, lat, start='2000-01-01', end='2023-12-31'):
             s = g.get_point_timeseries()
         except OSError as e:
             print('Error on {}, {}'.format(variable, e))
-
+        except RuntimeError as e:
+            print('Error on {}, {}'.format(variable, e))
+        except Exception as e:
+            print('Error on {}, {}'.format(variable, e))
         try:
             df[variable] = s[thredds_var]
         except KeyError:

@@ -109,7 +109,7 @@ def download_county_air_quality_data(key_file, name, state_fips, county_fips, st
         print('write {}, {}'.format(name, st_fips[state_fips]))
 
     with open(meta_js, 'w') as fp:
-        json.dump(meta, fp)
+        json.dump(meta, fp, indent=4)
 
 
 def write_aqs_shapefile(meta_js, shapefile_out):
@@ -139,7 +139,9 @@ if __name__ == '__main__':
     js = os.path.join(aq_d, 'aqs_key.json')
 
     fips = state_county_code()
-    for state in fips.keys():
+    states = list(fips.keys())[13:]
+    states.reverse()
+    for state in states:
 
         state_dct = fips[state]
         counties = {v['GEOID']: v['NAME'] for k, v in state_dct.items()}

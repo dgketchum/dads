@@ -165,7 +165,8 @@ if __name__ == '__main__':
     madis_out = os.path.join(d, 'dads', 'met', 'obs', 'madis')
     madis_plot_dir = os.path.join(d, 'dads', 'met', 'obs', 'plots', 'madis')
 
-    read_hourly_data(sites, madis_in, madis_out, plot=madis_plot_dir,
-                     overwrite=True, shuffle=False, bounds=(-116., 45., -109., 49.))
-
+    # read_hourly_data(sites, madis_in, madis_out, plot=None,
+    #                  overwrite=True, shuffle=False, bounds=(-116., 45., -109., 49.))
+    read_hourly_data(sites, madis_in, madis_out, plot=None,
+                     overwrite=False, shuffle=True, bounds=None)
 # ========================= EOF ====================================================================
