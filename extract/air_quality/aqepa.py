@@ -14,19 +14,10 @@ AQS_PARAMETERS = {'88101': 'pm2.5',
                   '44201': 'ozone',
                   '42401': 'so2'}
 
-TARGET_STATES = ['AZ', 'CA', 'CO', 'ID', 'MT', 'NM', 'NV', 'OR', 'UT', 'WA', 'WY']
 
-
-def download_county_air_quality_data(key_file, name, state_fips, county_fips, start_date, end_date, data_dst, meta_js):
+def download_county_air_quality_data(key_file, state_fips, county_fips, start_date, end_date, data_dst):
     """"""
-
-    stco_code = '{}{}'.format(state_fips, county_fips)
     st_fips = {v: k for k, v in state_fips_code().items()}
-    if os.path.exists(meta_js):
-        with open(meta_js, 'r') as fp:
-            meta = json.load(fp)
-    else:
-        meta = {}
 
     URL = ('https://aqs.epa.gov/data/api/dailyData/byCounty?email={a}&'
            'key={b}&param={p}&bdate={c}&edate={d}&state={e}&county={f}')
@@ -37,11 +28,8 @@ def download_county_air_quality_data(key_file, name, state_fips, county_fips, st
     years = list(range(start_date, end_date))
     years.reverse()
 
-    lat, lon, site_no, df = None, None, None, None
-
     for code, obsname in AQS_PARAMETERS.items():
 
-        first, code_df = True, None
         for yr in years:
             start, end = f'{yr}0101', f'{yr}1231'
 
@@ -55,24 +43,21 @@ def download_county_air_quality_data(key_file, name, state_fips, county_fips, st
                 if data_dict['Header'][0]['status'] == 'No data matched your selection':
                     continue
 
-                c = pd.DataFrame(data_dict['Data'])
-                if c.empty:
+                df = pd.DataFrame(data_dict['Data'])
+                if df.empty:
                     continue
 
-                if first:
-                    lat, lon = c.iloc[0]['latitude'], c.iloc[0]['longitude']
-                    site_no = c.iloc[0]['site_number']
+                sites = np.unique(df['site_number'])
 
-                c = c[['date_local', 'first_max_value']]
-                c.columns = ['date', obsname]
-                c = c.groupby('date').agg({obsname: 'first'})
-
-                if first:
-                    code_df = c
-                    first = False
-
-                else:
-                    code_df = pd.concat([code_df, c], axis=0, ignore_index=False)
+                for site_no in sites:
+                    file_ = os.path.join(data_dst, '{}_{}{}{}_{}_{}.csv'.format(st_fips[state_fips], state_fips,
+                                                                                county_fips, site_no, code, yr))
+                    c = df[df['site_number'] == site_no].copy()
+                    c = c[['date_local', 'first_max_value', 'latitude', 'longitude']]
+                    c.columns = ['date', obsname, 'latitude', 'longitude']
+                    c = c.groupby('date').agg({obsname: 'first', 'latitude': 'first', 'longitude': 'first'})
+                    c.to_csv(file_)
+                    print(os.path.basename(file_))
 
             except requests.exceptions.ConnectionError:
                 continue
@@ -80,14 +65,12 @@ def download_county_air_quality_data(key_file, name, state_fips, county_fips, st
             except json.decoder.JSONDecodeError:
                 continue
 
-        if code_df is None:
-            continue
 
-        elif not isinstance(df, pd.DataFrame):
-            df = code_df.copy()
+def build_aq_metadata(d, outshp, out_json):
+    state_fips, county_fips = None, None
+    stco_code = '{}{}'.format(state_fips, county_fips)
 
-        else:
-            df = pd.concat([df, code_df], axis=1, ignore_index=False)
+    meta = {}
 
     if not isinstance(df, pd.DataFrame):
         meta[stco_code] = 'nodata'
@@ -98,14 +81,13 @@ def download_county_air_quality_data(key_file, name, state_fips, county_fips, st
         meta[stco_code] = {'state': st_fips[state_fips]}
         meta[stco_code].update({'county': name})
         meta[stco_code].update({'site_no': site_no})
-        [meta[stco_code].update({'{}_len'.format(v): np.isfinite(df[v]).sum(axis=0).item()
+        _ = [meta[stco_code].update({'{}_len'.format(v): np.isfinite(df[v]).sum(axis=0).item()
         if v in df.columns else 0 for k, v in AQS_PARAMETERS.items()})]
         meta[stco_code].update({'start': df.index[0].strftime('%Y-%m-%d')})
         meta[stco_code].update({'end': df.index[-1].strftime('%Y-%m-%d')})
         meta[stco_code].update({'lat': lat.item()})
         meta[stco_code].update({'lon': lon.item()})
-        file_ = os.path.join(data_dst, '{}{}{}.csv'.format(state_fips, county_fips, site_no))
-        df.to_csv(file_)
+        df.to_csv(filoutshpe_)
         print('write {}, {}'.format(name, st_fips[state_fips]))
 
     with open(meta_js, 'w') as fp:
@@ -148,7 +130,7 @@ if __name__ == '__main__':
 
         for geoid, name_ in counties.items():
             st_code, co_code = geoid[:2], geoid[2:]
-            download_county_air_quality_data(js, name_, st_code, co_code, 1990, 2024, data_dst=aq_data, meta_js=aq_meta)
+            download_county_air_quality_data(js, st_code, co_code, 1990, 2024, data_dst=aq_data)
 
         write_aqs_shapefile(meta_js=aq_meta, shapefile_out=aq_shp)
 
