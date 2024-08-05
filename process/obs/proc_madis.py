@@ -14,7 +14,8 @@ from qaqc.qaqc_functions import rs_period_ratio_corr
 from qaqc.calc_functions import calc_rs_tr, calc_rso
 
 
-def read_hourly_data(stations, madis_src, madis_dst, shuffle=False, bounds=None, overwrite=False, plot=None):
+def read_hourly_data(stations, madis_src, madis_dst, rsun_tables, shuffle=False, bounds=None, overwrite=False,
+                     qaqc=False, plot=None):
     kw = station_par_map('dads')
 
     station_list = pd.read_csv(stations, index_col=kw['index'])
@@ -38,8 +39,11 @@ def read_hourly_data(stations, madis_src, madis_dst, shuffle=False, bounds=None,
     record_ct, obs_ct = station_list.shape[0], 0
     for i, (fid, row) in enumerate(station_list.iterrows(), start=1):
 
-        # if fid != 'DEEM8':
-        #     continue
+        if fid != 'C7584':
+            continue
+
+        if row['MGRS_TILE'] != '11UQP':
+            continue
 
         lon, lat, elv = row[kw['lon']], row[kw['lat']], row[kw['elev']]
         print('{}: {} of {}; {:.2f}, {:.2f}'.format(fid, i, record_ct, lat, lon))
@@ -52,6 +56,10 @@ def read_hourly_data(stations, madis_src, madis_dst, shuffle=False, bounds=None,
         station_dir = os.path.join(madis_src, fid)
         files_ = [os.path.join(station_dir, f) for f in os.listdir(station_dir)]
         years = [int(f.split('.')[0].split('_')[-1]) for f in files_]
+
+        rsun_file = os.path.join(rsun_tables, 'tile_{}.csv'.format(row['MGRS_TILE']))
+        rsun = pd.read_csv(rsun_file, index_col=0)
+        rsun = (rsun[fid] * 0.0036).to_dict()
 
         df, first, local_tz = None, True, None
         for file_, yr in zip(files_, years):
@@ -73,13 +81,15 @@ def read_hourly_data(stations, madis_src, madis_dst, shuffle=False, bounds=None,
             es = 0.6108 * np.exp(17.27 * c['temperature'] / (c['temperature'] + 237.3))
             c['ea'] = (c['relHumidity'] / 100) * es
             c['rsds'] = c['solarRadiation'] * 0.0036
+            c['wind'] = c['windSpeed']
 
-            c = process_daily_data(c, lat_=lat, elev_=elv, zw_=2.0)
+            c = process_daily_data(c, rsun, lat_=lat, elev_=elv, zw_=2.0, qaqc=qaqc)
+
             if c is None:
                 continue
 
             if plot and c.shape[0] > 200:
-                out_plot_file = os.path.join(plot, '{}_{}.png'.format(fid, yr))
+                out_plot_file = os.path.join(plot.format('to_check'), '{}_{}.png'.format(fid, yr))
                 plot_daily_data(c, fid, yr, out_plot_file)
 
             if first:
@@ -93,13 +103,51 @@ def read_hourly_data(stations, madis_src, madis_dst, shuffle=False, bounds=None,
         print('wrote {}, {} records, {} total\n'.format(fid, df.shape[0], obs_ct))
 
 
-def process_daily_data(hourly_df, lat_, elev_, zw_=2.0):
+def process_daily_data(hourly_df, rsun_data, lat_, elev_, zw_=2.0, qaqc=False):
     """"""
     hourly_df['date'] = hourly_df.index.date
+    hourly_df['hour'] = hourly_df.index.hour
+
+    valid_obs_count = hourly_df[['date']].groupby('date').agg({'date': 'count'}).copy()
+    if np.nanmax(valid_obs_count['date']) > 24:
+        print('found multi-hourly obs in {}'.format(hourly_df.index[0].year))
+        # this groupby is to force a maximum of one entry per hour
+        hourly_df = hourly_df.groupby(['date', 'hour']).agg(
+            temperature=('temperature', 'mean'),
+            precipAccum=('precipAccum', 'mean'),
+            relHumidity=('relHumidity', 'mean'),
+            rsds=('rsds', 'mean'),
+            ea=('ea', 'mean'),
+            wind=('wind', 'mean'),
+            doy=('doy', 'first'),
+        )
+
+        hourly_df.reset_index(inplace=True)
+        hourly_df['datetime'] = pd.to_datetime(
+            hourly_df['date'].astype(str) + ' ' + hourly_df['hour'].astype(str) + ':00:00')
+        hourly_df.set_index('datetime', inplace=True)
+        hourly_df.drop(columns=['date', 'hour'], inplace=True)
+
     hourly_df['precip_increment'] = hourly_df['precipAccum'].diff()
     hourly_df.loc[hourly_df['precip_increment'] < 0, 'precip_increment'] = 0
     hourly_df.loc[hourly_df['precip_increment'] > 50., 'precip_increment'] = 0
 
+    if qaqc:
+        hourly_df.loc[hourly_df['rsds'] < 0, 'rsds'] = np.nan
+        hourly_df.loc[hourly_df['rsds'] > 1500., 'rsds'] = np.nan
+
+        hourly_df.loc[hourly_df['wind'] < 0., 'wind'] = np.nan
+        hourly_df.loc[hourly_df['wind'] > 200., 'wind'] = np.nan
+
+        hourly_df.loc[hourly_df['temperature'] > 57.22, 'temperature'] = np.nan
+        hourly_df.loc[hourly_df['temperature'] < -59.44, 'temperature'] = np.nan
+
+        hourly_df.loc[hourly_df['relHumidity'] < 0.0, 'relHumidity'] = np.nan
+        hourly_df.loc[hourly_df['relHumidity'] < 0.0, 'ea'] = np.nan
+        hourly_df.loc[hourly_df['relHumidity'] > 100.0, 'relHumidity'] = np.nan
+        hourly_df.loc[hourly_df['relHumidity'] > 100.0, 'ea'] = np.nan
+
+    hourly_df['date'] = hourly_df.index.date
     valid_obs_count = hourly_df[['date']].groupby('date').agg({'date': 'count'}).copy()
 
     daily_df = hourly_df.groupby('date').agg(
@@ -109,7 +157,7 @@ def process_daily_data(hourly_df, lat_, elev_, zw_=2.0):
         prcp=('precip_increment', 'sum'),
         rsds=('rsds', 'sum'),
         ea=('ea', 'mean'),
-        wind=('windSpeed', 'mean'),
+        wind=('wind', 'mean'),
         doy=('doy', 'first')
     ).copy()
 
@@ -117,6 +165,24 @@ def process_daily_data(hourly_df, lat_, elev_, zw_=2.0):
     daily_df = daily_df[daily_df['obs_ct'] >= 18]
     daily_df.drop(columns=['obs_ct'], inplace=True)
     daily_df.index = pd.DatetimeIndex(daily_df.index)
+
+    if qaqc:
+        daily_df['month'] = daily_df.index.month
+        daily_df['doy'] = daily_df.index.dayofyear
+        rso = calc_rso(lat_, elev_, daily_df['doy'], daily_df['month'], daily_df['ea'], daily_df['rsds'])
+        daily_df['rso'] = rso[0] * 0.0864
+        daily_df['rsun'] = daily_df['doy'].map(rsun_data)
+
+        daily_df['rolling_rsds_max'] = daily_df['rsds'].rolling(15).max()
+        daily_df['rolling_rsds_max'].bfill(inplace=True)
+        daily_df['rolling_rsds_max'].ffill(inplace=True)
+
+        daily_df['rsds'] *= daily_df['rsun'] / daily_df['rolling_rsds_max']
+
+        pre_clean_nan_ct = np.count_nonzero(np.isnan(daily_df['rsds']))
+        daily_df.loc[daily_df['rsds'] > (1.2 * daily_df['rso']), 'rsds'] = np.nan
+        post_clean_nan_ct = np.count_nonzero(np.isnan(daily_df['rsds']))
+        print('Removed {} rs records'.format(post_clean_nan_ct - pre_clean_nan_ct))
 
     # asce_params = daily_df.parallel_apply(calc_asce_params, lat=lat_, elev=elev_, zw=10, axis=1)
     asce_params = daily_df.apply(calc_asce_params, lat=lat_, elev=elev_, zw=zw_, axis=1)
@@ -132,7 +198,6 @@ def process_daily_data(hourly_df, lat_, elev_, zw_=2.0):
 
 
 def correct_data(meta, madis_daily_dir, madis_corrected, plot, target_sites):
-
     sites = pd.read_csv(meta, index_col='fid')
 
     files_ = list(os.listdir(madis_daily_dir))
@@ -159,9 +224,6 @@ def correct_data(meta, madis_daily_dir, madis_corrected, plot, target_sites):
         pass
 
 
-
-
-
 def plot_daily_data(pdf, station_id, year, out_fig):
     if not isinstance(pdf, pd.DataFrame):
         pdf = pd.read_csv(pdf, index_col=0, parse_dates=True)
@@ -178,8 +240,11 @@ def plot_daily_data(pdf, station_id, year, out_fig):
     axes[0].set_ylabel("Precipitation (mm)")
     axes[0].set_xlim(1, 366)
 
-    for i, var in enumerate(['vpd', 'rn', 'u2', 'mean_temp', 'eto'], start=1):
+    for i, var in enumerate(['vpd', 'rsds', 'u2', 'mean_temp', 'eto'], start=1):
         sns.lineplot(data=pdf, x='doy', y=var, ax=axes[i])
+        if var == 'rsds':
+            sns.lineplot(data=pdf, x='doy', y='rso', ax=axes[i])
+            sns.lineplot(data=pdf, x='doy', y='rsun', ax=axes[i])
         axes[i].set_ylabel(var)
         axes[i].set_xlim(1, 366)
 
@@ -236,17 +301,16 @@ if __name__ == '__main__':
 
     # pandarallel.initialize(nb_workers=6)
 
-    sites = os.path.join(d, 'dads', 'met', 'stations', 'dads_stations.csv')
+    sites = os.path.join(d, 'dads', 'met', 'stations', 'dads_stations_WMT_mgrs.csv')
     madis_hourly = os.path.join(d, 'climate', 'madis', 'LDAD', 'mesonet', 'csv')
     madis_daily_ = os.path.join(d, 'dads', 'met', 'obs', 'madis')
     madis_daily_corr = os.path.join(d, 'dads', 'met', 'obs', 'madis_corrected')
     madis_plot_dir = os.path.join(d, 'dads', 'met', 'obs', 'plots', 'madis_{}')
 
-    # read_hourly_data(sites, madis_in, madis_out, plot=None,
-    #                  overwrite=True, shuffle=False, bounds=(-116., 45., -109., 49.))
+    solrad_out = os.path.join(d, 'dads', 'dem', 'rsun_tables')
 
-    # read_hourly_data(sites, madis_in, madis_out, plot=None,
-    #                  overwrite=False, shuffle=True, bounds=None)
+    read_hourly_data(sites, madis_hourly, madis_daily_, solrad_out, plot=madis_plot_dir, qaqc=True,
+                     overwrite=True, shuffle=True, bounds=(-116., 45., -109., 49.))
 
-    correct_data(sites, madis_daily_, madis_daily_corr, madis_plot_dir, target_sites=['PNTM8'])
+    # correct_data(sites, madis_daily_, madis_daily_corr, madis_plot_dir, target_sites=['PNTM8'])
 # ========================= EOF ====================================================================
