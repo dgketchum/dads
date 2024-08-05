@@ -87,6 +87,8 @@ def export_rasters(terrain_dir, out_dir, mapset='PERMANENT', overwrite=False, mg
         if not os.path.isdir(tile_dir):
             os.mkdir(tile_dir)
 
+        subprocess.call(['g.region', f'rast=dem_{tile}@{mapset}'])
+
         for day in range(1, 366):
 
             irradiance_output_tif = os.path.join(tile_dir, 'irradiance_day_{0}_{1}.tif'.format(day, tile))
@@ -137,10 +139,11 @@ if __name__ == '__main__':
 
     dem_d = os.path.join(root, 'dem')
     out_dem = os.path.join(out, 'dem')
-    mgrs = os.path.join(out, 'training', 'w17_tiles.csv')
+    mgrs = os.path.join(out, 'training', 'wmt_tiles.csv')
 
-    calculate_terrain_irradiance(dem_d, mapset="dads_map", overwrite=False)
-    # export_rasters(dem_d, out_dem, mapset="dads_map", overwrite=False, mgrs_list=None)
+    # calculate_terrain_irradiance(dem_d, mapset="dads_map", overwrite=False)
+
+    export_rasters(dem_d, out_dem, mapset="dads_map", overwrite=True, mgrs_list=mgrs)
 
     # remove_rasters(dem_d, resolution=30)
 
