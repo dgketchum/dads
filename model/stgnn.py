@@ -1,5 +1,5 @@
-import os
 
+import os
 import torch
 import torch.nn.functional as F
 import torch.optim as optim
@@ -25,6 +25,7 @@ class STGNN(torch.nn.Module):
 def train_model(data, node_features=5, out_channels=1, num_epochs=100, learning_rate=0.01):
     x = data.x.unsqueeze(1).repeat(1, 5, 1)
     edge_index = data.edge_index
+    val_loss = criterion(val_output, y)
     y = data.y.unsqueeze(1)
     model = STGNN(node_features, out_channels)
     optimizer = optim.Adam(model.parameters(), lr=learning_rate)
@@ -40,7 +41,6 @@ def train_model(data, node_features=5, out_channels=1, num_epochs=100, learning_
     model.eval()
     with torch.no_grad():
         val_output = model(x, edge_index)
-        val_loss = criterion(val_output, y)
         print(f'Validation Loss: {val_loss.item()}')
 
 

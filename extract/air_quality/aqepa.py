@@ -1,7 +1,9 @@
 import json
 import os
+import time
 
 import requests
+import urllib3
 import numpy as np
 import pandas as pd
 import geopandas as gpd
@@ -14,8 +16,11 @@ AQS_PARAMETERS = {'88101': 'pm2.5',
                   '44201': 'ozone',
                   '42401': 'so2'}
 
+TARGET_STATES = ['AZ', 'CA', 'CO', 'ID', 'MT', 'NM', 'NV', 'OR', 'UT', 'WA', 'WY']
 
-def download_county_air_quality_data(key_file, state_fips, county_fips, start_date, end_date, data_dst):
+
+def download_county_air_quality_data(key_file, state_fips, county_fips, start_date, end_date, data_dst,
+                                     overwrite=False):
     """"""
     st_fips = {v: k for k, v in state_fips_code().items()}
 
@@ -25,14 +30,21 @@ def download_county_air_quality_data(key_file, state_fips, county_fips, start_da
     with open(key_file, 'r') as f:
         key = json.load(f)
 
+    # st/co/site/code/yr
+    exists = ['_'.join(f.split('.')[0].split('_')[1:3]) for f in os.listdir(data_dst)]
+
     years = list(range(start_date, end_date))
     years.reverse()
 
     for code, obsname in AQS_PARAMETERS.items():
 
         for yr in years:
-            start, end = f'{yr}0101', f'{yr}1231'
 
+            st_co = '{}{}'.format(state_fips, county_fips)
+            if st_co in exists and not overwrite:
+                continue
+
+            start, end = f'{yr}0101', f'{yr}1231'
             url = URL.format(a=key['email'], b=key['key'], p=code,
                              c=start, d=end, e=state_fips, f=county_fips)
 
@@ -63,6 +75,10 @@ def download_county_air_quality_data(key_file, state_fips, county_fips, start_da
                 continue
 
             except json.decoder.JSONDecodeError:
+                continue
+
+            except urllib3.exceptions.ReadTimeoutError:
+                time.sleep(60)
                 continue
 
 
@@ -121,16 +137,19 @@ if __name__ == '__main__':
     js = os.path.join(aq_d, 'aqs_key.json')
 
     fips = state_county_code()
-    states = list(fips.keys())[13:]
-    states.reverse()
+    states = list(fips.keys())
+    # states.reverse()
     for state in states:
+
+        if state not in TARGET_STATES:
+            continue
 
         state_dct = fips[state]
         counties = {v['GEOID']: v['NAME'] for k, v in state_dct.items()}
 
         for geoid, name_ in counties.items():
             st_code, co_code = geoid[:2], geoid[2:]
-            download_county_air_quality_data(js, st_code, co_code, 1990, 2024, data_dst=aq_data)
+            download_county_air_quality_data(js, st_code, co_code, 2000, 2024, data_dst=aq_data)
 
         write_aqs_shapefile(meta_js=aq_meta, shapefile_out=aq_shp)
 

@@ -1,4 +1,5 @@
 import os
+import glob
 
 import numpy as np
 import pandas as pd
@@ -9,6 +10,8 @@ import matplotlib.pyplot as plt
 
 from process.calc_eto import calc_asce_params
 from process.station_parameters import station_par_map
+from qaqc.qaqc_functions import rs_period_ratio_corr
+from qaqc.calc_functions import calc_rs_tr, calc_rso
 
 
 def read_hourly_data(stations, madis_src, madis_dst, shuffle=False, bounds=None, overwrite=False, plot=None):
@@ -128,9 +131,48 @@ def process_daily_data(hourly_df, lat_, elev_, zw_=2.0):
     return daily_df
 
 
+def correct_data(meta, madis_daily_dir, madis_corrected, plot, target_sites):
+
+    sites = pd.read_csv(meta, index_col='fid')
+
+    files_ = list(os.listdir(madis_daily_dir))
+
+    for f in files_:
+
+        file_ = os.path.join(madis_daily_dir, f)
+        site = f.split('.')[0]
+        meta = sites.loc[site].to_dict()
+
+        if target_sites:
+            if site not in target_sites:
+                continue
+
+        df = pd.read_csv(file_, index_col=0, parse_dates=True)
+        df['doy'] = df.index.dayofyear
+        df['month'] = df.index.month
+        rso = calc_rso(meta['latitude'], meta['elevation'], df['doy'], df['month'], df['ea'], df['rsds'])
+        df['rso'] = rso[0] * 0.0864
+        df.loc[df['rsds'] > (1.5 * df['rso']), 'rsds'] = np.nan
+        rsds_corr = rs_period_ratio_corr(0, len(rso[0]), df['rsds'], rso[0], 100, 365)
+        df['rsds_corr'] = rsds_corr[0]
+        df = df.reindex(sorted(df.columns), axis=1)
+        pass
+
+
+
+
+
 def plot_daily_data(pdf, station_id, year, out_fig):
-    fig, axes = plt.subplots(nrows=6, ncols=1, figsize=(12, 16), sharex=True)
+    if not isinstance(pdf, pd.DataFrame):
+        pdf = pd.read_csv(pdf, index_col=0, parse_dates=True)
+
+    start_date = '{}-01-01'.format(year)
+    end_date = '{}-12-31'.format(year)
+
+    all_dates = pd.DatetimeIndex(pd.date_range(start_date, end_date))
+    pdf = pdf.reindex(all_dates)
     pdf['doy'] = pdf.index.dayofyear
+    fig, axes = plt.subplots(nrows=6, ncols=1, figsize=(12, 16), sharex=True)
 
     sns.barplot(data=pdf, x='doy', y='prcp', ax=axes[0])
     axes[0].set_ylabel("Precipitation (mm)")
@@ -150,6 +192,40 @@ def plot_daily_data(pdf, station_id, year, out_fig):
     plt.subplots_adjust(top=0.95)
     plt.savefig(out_fig)
     plt.close()
+    print(os.path.basename(out_fig))
+
+
+def write_daily_maids_plots(madis_daily_dir, corrected, plot_dir, target_sites=None):
+    files_ = list(os.listdir(madis_daily_dir))
+
+    for f in files_:
+
+        file_ = os.path.join(madis_daily_dir, f)
+        site = f.split('.')[0]
+
+        if target_sites:
+            if site not in target_sites:
+                continue
+
+        search_pattern = os.path.join(plot_dir.format('checked'), f'{site}_*.png')
+        matching_files = glob.glob(search_pattern)
+        if len(matching_files) > 0:
+            print('{} has been checked'.format(site))
+            continue
+
+        search_pattern = os.path.join(plot_dir.format('to_check'), f'{site}_*.png')
+        written_files = glob.glob(search_pattern)
+        if len(written_files) > 0:
+            print('{} has been written'.format(site))
+            continue
+
+        df = pd.read_csv(file_, index_col=0, parse_dates=True)
+        years = np.unique(df.index.year)
+
+        for year in years:
+            c = df[df.index.year == year]
+            out_ = os.path.join(plot_dir.format('to_check'), f'{site}_{year}.png')
+            plot_daily_data(c, site, year=year, out_fig=out_)
 
 
 if __name__ == '__main__':
@@ -161,12 +237,16 @@ if __name__ == '__main__':
     # pandarallel.initialize(nb_workers=6)
 
     sites = os.path.join(d, 'dads', 'met', 'stations', 'dads_stations.csv')
-    madis_in = os.path.join(d, 'climate', 'madis', 'LDAD', 'mesonet', 'csv')
-    madis_out = os.path.join(d, 'dads', 'met', 'obs', 'madis')
-    madis_plot_dir = os.path.join(d, 'dads', 'met', 'obs', 'plots', 'madis')
+    madis_hourly = os.path.join(d, 'climate', 'madis', 'LDAD', 'mesonet', 'csv')
+    madis_daily_ = os.path.join(d, 'dads', 'met', 'obs', 'madis')
+    madis_daily_corr = os.path.join(d, 'dads', 'met', 'obs', 'madis_corrected')
+    madis_plot_dir = os.path.join(d, 'dads', 'met', 'obs', 'plots', 'madis_{}')
 
     # read_hourly_data(sites, madis_in, madis_out, plot=None,
     #                  overwrite=True, shuffle=False, bounds=(-116., 45., -109., 49.))
-    read_hourly_data(sites, madis_in, madis_out, plot=None,
-                     overwrite=False, shuffle=True, bounds=None)
+
+    # read_hourly_data(sites, madis_in, madis_out, plot=None,
+    #                  overwrite=False, shuffle=True, bounds=None)
+
+    correct_data(sites, madis_daily_, madis_daily_corr, madis_plot_dir, target_sites=['PNTM8'])
 # ========================= EOF ====================================================================
