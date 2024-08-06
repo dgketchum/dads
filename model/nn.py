@@ -76,14 +76,14 @@ class ResidualPredictor(pl.LightningModule):
 
 
 def test_relationship_bands(csv, plot_dir, learning_rate=0.001):
+    """"""
     df = pd.read_csv(csv, index_col='Unnamed: 0', parse_dates=True)
     df['doy'] = df.index.dayofyear
-    variables = ['rsds', 'vpd', 'min_temp', 'max_temp', 'mean_temp', 'wind', 'eto']
-    bands = ['B10', 'B2', 'B3', 'B4', 'B5', 'B6', 'B7', 'doy']
+    variables = ['rsds']
     results = {}
 
     fids = np.unique(df['FID'])
-    np.random.seed(236544)
+    np.random.seed(1234)
     train = np.random.choice(fids, int(len(fids) * 0.8))
     df['train'] = [1 if f in train else 0 for f in df['FID']]
 
@@ -131,12 +131,9 @@ if __name__ == '__main__':
     if not os.path.exists(d):
         d = '/home/dgketchum/data/IrrigationGIS/dads'
 
-    fields = os.path.join(d, 'met', 'stations', 'gwx_stations.csv')
-    sta = os.path.join(d, 'met', 'obs', 'gwx')
-    gm = os.path.join(d, 'met', 'gridded', 'gridmet')
-    rs = os.path.join(d, 'rs', 'gwx_stations')
-    joined = os.path.join(d, 'tables', 'gridmet', 'western_lst_metvars_all.csv')
-    plots = os.path.join(d, 'plots', 'gridmet')
+    fields = os.path.join(d, 'met', 'stations', 'dads_stations_WMT_mgrs.csv')
+    rs = os.path.join(d, 'rs', 'dads_stations', 'landsat', 'dads_stations_WMT_500_2023.csv')
+    sta = os.path.join(d, 'met', 'tables', 'obs_grid')
 
     test_relationship_bands(joined, plots)
 # ========================= EOF ====================================================================

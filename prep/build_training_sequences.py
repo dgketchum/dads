@@ -29,10 +29,13 @@ def join_training(stations, ts_dir, rs_file, dem_dir, out_dir, scaling_json, var
         tile_sites = stations[stations['MGRS_TILE'] == tile]
 
         for i, (f, row) in enumerate(tile_sites.iterrows(), start=1):
+            sta_file = os.path.join(ts_dir, '{}.csv'.format(f))
+            if not os.path.exists(sta_file):
+                print(os.path.basename(sta_file), 'not found, skipping')
+                continue
+            ts = pd.read_csv(sta_file, index_col='Unnamed: 0', parse_dates=True)
             rs = rs_df.loc[f].values
             sol = sol_df[f].to_dict()
-            sta_file = os.path.join(ts_dir, '{}.csv'.format(f))
-            ts = pd.read_csv(sta_file, index_col='Unnamed: 0', parse_dates=True)
             ts = ts[[f'{var}_obs', f'{var}_nl']]
             ts['doy'] = ts.index.dayofyear
             ts['rsun'] = ts['doy'].map(sol)
@@ -95,7 +98,7 @@ if __name__ == '__main__':
     solrad = os.path.join(d, 'dem', 'rsun_tables')
     out_csv = os.path.join(d, 'training', 'compiled_csv')
     scaling_ = os.path.join(d, 'training', 'scaling.json')
-    join_training(fields, sta, rs, solrad, out_csv, scaling_json=scaling_, var='rsds')
+    # join_training(fields, sta, rs, solrad, out_csv, scaling_json=scaling_, var='rsds')
 
     out_pth = os.path.join(d, 'training', 'scaled_pth')
     apply_scaling_and_save(out_csv, scaling_, out_pth)

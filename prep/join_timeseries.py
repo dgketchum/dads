@@ -21,7 +21,7 @@ RENAME_MAP = {v: k for k, v in VAR_MAP.items()}
 COMPARISON_VARS = ['rsds', 'mean_temp', 'vpd', 'rn', 'u2', 'eto']
 
 
-def join_daily_timeseries(stations, sta_dir, nldas_dir, dst_dir, gridmet_dir=None, metric_json=None):
+def join_daily_timeseries(stations, sta_dir, nldas_dir, dst_dir, gridmet_dir=None, metric_json=None, overwrite=False):
     """"""
     stations = pd.read_csv(stations)
     stations['fid'] = [f.strip() for f in stations['fid']]
@@ -30,8 +30,13 @@ def join_daily_timeseries(stations, sta_dir, nldas_dir, dst_dir, gridmet_dir=Non
 
     stations = stations[stations['source'] == 'madis']
 
-    sdf, ct = pd.DataFrame(), 0
+    ct = 0
     for i, (f, row) in enumerate(stations.iterrows(), start=1):
+
+        out = os.path.join(dst_dir, '{}.csv'.format(f))
+        if os.path.exists(out) and not overwrite:
+            print(out, 'exists, skipping')
+            continue
 
         nldas_file = os.path.join(nldas_dir, '{}.csv'.format(f))
         try:
@@ -84,13 +89,11 @@ def join_daily_timeseries(stations, sta_dir, nldas_dir, dst_dir, gridmet_dir=Non
 
         sdf['FID'] = f
         sdf = sdf[all_cols]
-        sdf = pd.concat([sdf, sdf])
         sdf.dropna(subset=['rsds_obs', 'mean_temp_obs', 'vpd_obs',
-                          'rn_obs', 'u2_obs', 'eto_obs'], inplace=True, axis=0)
+                           'rn_obs', 'u2_obs', 'eto_obs'], inplace=True, axis=0)
         if sdf.empty:
             continue
         else:
-            out = os.path.join(dst_dir, '{}.csv'.format(f))
             sdf = sdf.reindex(sorted(sdf.columns), axis=1)
             sdf.to_csv(out)
             ct += 1
