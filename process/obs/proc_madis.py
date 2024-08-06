@@ -11,7 +11,7 @@ import matplotlib.pyplot as plt
 from process.calc_eto import calc_asce_params
 from process.station_parameters import station_par_map
 from qaqc.qaqc_functions import rs_period_ratio_corr
-from qaqc.calc_functions import calc_rs_tr, calc_rso
+from qaqc.calc_functions import calc_rso
 
 
 def read_hourly_data(stations, madis_src, madis_dst, rsun_tables, shuffle=False, bounds=None, overwrite=False,
@@ -38,12 +38,6 @@ def read_hourly_data(stations, madis_src, madis_dst, rsun_tables, shuffle=False,
 
     record_ct, obs_ct = station_list.shape[0], 0
     for i, (fid, row) in enumerate(station_list.iterrows(), start=1):
-
-        if fid != 'C7584':
-            continue
-
-        if row['MGRS_TILE'] != '11UQP':
-            continue
 
         lon, lat, elv = row[kw['lon']], row[kw['lat']], row[kw['elev']]
         print('{}: {} of {}; {:.2f}, {:.2f}'.format(fid, i, record_ct, lat, lon))
@@ -170,12 +164,12 @@ def process_daily_data(hourly_df, rsun_data, lat_, elev_, zw_=2.0, qaqc=False):
         daily_df['month'] = daily_df.index.month
         daily_df['doy'] = daily_df.index.dayofyear
         rso = calc_rso(lat_, elev_, daily_df['doy'], daily_df['month'], daily_df['ea'], daily_df['rsds'])
-        daily_df['rso'] = rso[0] * 0.0864
+        daily_df['rso'] = rso * 0.0864
         daily_df['rsun'] = daily_df['doy'].map(rsun_data)
 
         daily_df['rolling_rsds_max'] = daily_df['rsds'].rolling(15).max()
-        daily_df['rolling_rsds_max'].bfill(inplace=True)
-        daily_df['rolling_rsds_max'].ffill(inplace=True)
+        daily_df['rolling_rsds_max'] = daily_df['rolling_rsds_max'].bfill()
+        daily_df['rolling_rsds_max'] = daily_df['rolling_rsds_max'].ffill()
 
         daily_df['rsds'] *= daily_df['rsun'] / daily_df['rolling_rsds_max']
 

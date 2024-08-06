@@ -211,19 +211,8 @@ def calc_rso(lat, elev, doy, month, ea, rs):
     ra = _ra_daily(lat=lat_radians, doy=doy, method='asce')  # returns ra in mj/m2
     rso = _rso_daily(ra=ra, ea=ea, pair=pressure, doy=doy, lat=lat_radians)
 
-    # Calculate mean monthly values
-    j = 1
-    for k in range(12):
-        temp_indexes = [ex for ex, ind in enumerate(month) if ind == j]
-        temp_indexes = np.array(temp_indexes, dtype=int)
-
-        monthly_rs[k] = np.nanmean(rs[temp_indexes])
-        j += 1
-
-    rso = (rso * 1000000) / 86400  # Convert rso from MJ/m2 to w/m2
-    return rso, monthly_rs
-
-
+    rso = (rso * 1000000) / 86400
+    return rso
 
 
 def calc_rs_tr(month, rso, delta_t, mm_delta_t, b_zero, b_one, b_two):
@@ -422,6 +411,7 @@ def calc_compiled_ea(tmax, tmin, tavg, ea, tdew, tdew_col,
             compiled_ea[i] = ea[i]
 
     return compiled_ea
+
 
 # This is never run by itself
 if __name__ == "__main__":

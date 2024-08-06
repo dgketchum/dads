@@ -5,7 +5,7 @@ import pandas as pd
 import rasterstats
 
 
-def extract_raster_values_by_tile(shapefile_path, raster_dir, table_out, shuffle=False):
+def extract_raster_values_by_tile(shapefile_path, raster_dir, table_out, shuffle=False, overwrite=False):
     """"""
     points = gpd.read_file(shapefile_path)
     points.index = points['fid']
@@ -14,12 +14,13 @@ def extract_raster_values_by_tile(shapefile_path, raster_dir, table_out, shuffle
 
     for tile in points['MGRS_TILE'].unique():
 
+        file_ = os.path.join(table_out, 'tile_{}.csv'.format(tile))
+        if os.path.exists(file_) and not overwrite:
+            continue
+
         tile_points = points[points['MGRS_TILE'] == tile]
         tile_dir = os.path.join(raster_dir, tile)
         results = {k: {} for k, v in tile_points.iterrows()}
-
-        if tile != '11UQP':
-            continue
 
         first = True
         for day in range(1, 366):
@@ -40,7 +41,6 @@ def extract_raster_values_by_tile(shapefile_path, raster_dir, table_out, shuffle
             first = False
 
         df = pd.DataFrame(results)
-        file_ = os.path.join(table_out, 'tile_{}.csv'.format(tile))
         df.to_csv(file_)
         print(os.path.basename(file_))
 
