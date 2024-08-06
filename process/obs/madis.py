@@ -304,7 +304,7 @@ if __name__ == '__main__':
     solrad_out = os.path.join(d, 'dads', 'dem', 'rsun_tables')
 
     read_hourly_data(sites, madis_hourly, madis_daily_, solrad_out, plot=madis_plot_dir, qaqc=True,
-                     overwrite=True, shuffle=True, bounds=(-116., 45., -109., 49.))
+                     overwrite=False, shuffle=True, bounds=(-116., 45., -109., 49.))
 
     # correct_data(sites, madis_daily_, madis_daily_corr, madis_plot_dir, target_sites=['PNTM8'])
 # ========================= EOF ====================================================================
