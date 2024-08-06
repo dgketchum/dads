@@ -20,11 +20,8 @@ RENAME_MAP = {v: k for k, v in VAR_MAP.items()}
 
 COMPARISON_VARS = ['rsds', 'mean_temp', 'vpd', 'rn', 'u2', 'eto']
 
-STATES = ['AZ', 'CA', 'CO', 'ID', 'MT', 'NM', 'NV', 'OR', 'UT', 'WA', 'WY']
 
-
-def join_daily_timeseries(stations, sta_dir, nldas_dir, dst_dir, gridmet_dir=None, index='FID',
-                          metric_json=None):
+def join_daily_timeseries(stations, sta_dir, nldas_dir, dst_dir, gridmet_dir=None, metric_json=None):
     """"""
     stations = pd.read_csv(stations)
     stations['fid'] = [f.strip() for f in stations['fid']]
@@ -33,7 +30,7 @@ def join_daily_timeseries(stations, sta_dir, nldas_dir, dst_dir, gridmet_dir=Non
 
     stations = stations[stations['source'] == 'madis']
 
-    df, ct = pd.DataFrame(), 0
+    sdf, ct = pd.DataFrame(), 0
     for i, (f, row) in enumerate(stations.iterrows(), start=1):
 
         nldas_file = os.path.join(nldas_dir, '{}.csv'.format(f))
@@ -76,24 +73,26 @@ def join_daily_timeseries(stations, sta_dir, nldas_dir, dst_dir, gridmet_dir=Non
         obs_cols = ['{}_obs'.format(c) for c in sdf.columns]
         sdf.columns = obs_cols
 
-        all_cols = ['FID'] + obs_cols + grd_cols + nld_cols
+        data_cols = obs_cols + grd_cols + nld_cols
+        all_cols = ['FID'] + data_cols
 
         try:
             sdf = pd.concat([sdf, gdf, ndf], ignore_index=False, axis=1)
         except pd.errors.InvalidIndexError:
             print('Non-unique index in {}'.format(f))
             continue
+
         sdf['FID'] = f
         sdf = sdf[all_cols]
-        df = pd.concat([df, sdf])
-        df.dropna(subset=['rsds_obs', 'mean_temp_obs', 'vpd_obs',
+        sdf = pd.concat([sdf, sdf])
+        sdf.dropna(subset=['rsds_obs', 'mean_temp_obs', 'vpd_obs',
                           'rn_obs', 'u2_obs', 'eto_obs'], inplace=True, axis=0)
-        if df.empty:
+        if sdf.empty:
             continue
         else:
             out = os.path.join(dst_dir, '{}.csv'.format(f))
-            df = df.reindex(sorted(df.columns), axis=1)
-            df.to_csv(out)
+            sdf = sdf.reindex(sorted(sdf.columns), axis=1)
+            sdf.to_csv(out)
             ct += 1
 
         if metric_json:
@@ -104,14 +103,14 @@ def join_daily_timeseries(stations, sta_dir, nldas_dir, dst_dir, gridmet_dir=Non
                 metrics = {}
 
             if f not in metrics.keys():
-                rmse = get_rmse(df)
+                rmse = get_rmse(sdf)
 
                 metrics[f] = rmse
-                print(f, df.shape[0], 'records')
+                print(f, sdf.shape[0], 'records')
                 print(f, 'RMSE rsds gridmet: {:.2f}, nldas: {:.2f}'.format(rmse['rsds_gm'], rmse['rsds_nl']))
                 print(f, 'RMSE tmean gridmet: {:.2f}, nldas: {:.2f}'.format(rmse['mean_temp_gm'],
                                                                             rmse['mean_temp_nl']))
-                print(f, 'Mean Temp: {:.2f}\n'.format(df['mean_temp_obs'].mean().item()))
+                print(f, 'Mean Temp: {:.2f}\n'.format(sdf['mean_temp_obs'].mean().item()))
                 continue
         else:
             print(f, ct)
@@ -145,13 +144,13 @@ if __name__ == '__main__':
     obs = os.path.join(d, 'met', 'obs', 'madis')
     gm = os.path.join(d, 'met', 'gridded', 'gridmet')
     nl = os.path.join(d, 'met', 'gridded', 'nldas2')
-    # rs = os.path.join(d, 'rs', 'gwx_stations', 'concatenated', 'bands.csv')
 
     rs = os.path.join(d, 'rs', 'dads_stations', 'landsat')
     joined = os.path.join(d, 'met', 'tables', 'obs_grid')
     metrics_ = os.path.join(d, 'met', 'tables', 'metrics.json')
+    scaling_ = os.path.join(d, 'training', 'scaling.json')
     plots = os.path.join(d, 'plots', 'gridmet')
 
-    join_daily_timeseries(fields, obs, nl, joined, gm, metric_json=None, index='index')
+    join_daily_timeseries(fields, obs, nl, joined, gm, metric_json=None)
 
 # ========================= EOF ====================================================================
