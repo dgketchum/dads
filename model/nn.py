@@ -8,8 +8,10 @@ import torch.nn as nn
 import torch.optim as optim
 from pytorch_lightning.callbacks.early_stopping import EarlyStopping
 from sklearn.metrics import r2_score, root_mean_squared_error
-from torch.utils.data import DataLoader, TensorDataset
+from torch.utils.data import DataLoader, TensorDataset, Dataset
 from torch.optim.lr_scheduler import ReduceLROnPlateau
+from torch.nn.utils.rnn import pad_sequence
+
 
 if torch.cuda.is_available():
     device_name = torch.cuda.get_device_name(0)
@@ -18,7 +20,50 @@ else:
     print("CUDA is not available. PyTorch will use the CPU.")
 
 
-class ResidualPredictor(pl.LightningModule):
+def concatenate_and_shuffle_pth_data(dataset):
+    all_data = []
+    all_labels = []
+
+    for i in range(len(dataset)):
+        data, label = dataset[i]
+        all_data.append(data)
+        all_labels.append(label)
+
+    all_data = torch.cat(all_data)
+    all_labels = torch.cat(all_labels)
+
+    nan_mask = torch.isnan(all_data).any(dim=1)
+    all_data = all_data[~nan_mask]
+    all_labels = all_labels[~nan_mask]
+
+    indices = torch.randperm(all_data.size(0))
+    all_data = all_data[indices]
+    all_labels = all_labels[indices]
+
+    return torch.utils.data.TensorDataset(all_data, all_labels)
+
+
+
+class PTHDataset(Dataset):
+    def __init__(self, file_list, transform=None):
+        self.file_list = file_list
+        self.transform = transform
+
+    def __len__(self):
+        return len(self.file_list)
+
+    def __getitem__(self, idx):
+        file_path = self.file_list[idx]
+        data = torch.load(file_path)
+        label = data[:, 1]
+        data = data[:, 2:]
+
+        if self.transform:
+            data = self.transform(data)
+        return data, label
+
+
+class Predictor(pl.LightningModule):
     def __init__(self, num_bands=10, learning_rate=0.001, hidden_layers=[64, 32, 16]):
         super().__init__()
         self.layers = nn.ModuleList()
@@ -75,54 +120,37 @@ class ResidualPredictor(pl.LightningModule):
         }
 
 
-def test_relationship_bands(csv, plot_dir, learning_rate=0.001):
+def test_relationship_bands(csv, pth, template, target='rsds_obs', learning_rate=0.001):
     """"""
-    df = pd.read_csv(csv, index_col='Unnamed: 0', parse_dates=True)
-    df['doy'] = df.index.dayofyear
-    variables = ['rsds']
     results = {}
-
-    fids = np.unique(df['FID'])
+    cols = pd.read_csv(template).columns
+    df = pd.read_csv(csv, parse_dates=True, index_col='fid')
     np.random.seed(1234)
-    train = np.random.choice(fids, int(len(fids) * 0.8))
-    df['train'] = [1 if f in train else 0 for f in df['FID']]
+    fids = [f.split('.')[0] for f in os.listdir(pth)]
+    df = df.loc[fids].sample(frac=1)
+    df['rand'] = np.random.rand(len(df))
 
-    for var in variables[-1:]:
+    train = df.loc[df['rand'] < 0.8].index
+    train_files = [os.path.join(pth, '{}.pth'.format(f)) for f in train]
+    train_dataset = PTHDataset(train_files)
+    train_dataset = concatenate_and_shuffle_pth_data(train_dataset)
+    train_dataloader = DataLoader(train_dataset, batch_size=256, shuffle=True, num_workers=2)
 
-        select = bands + [f"{v}_gm" for v in variables if v != var]
-        sub = df[[f"{var}_obs", f"{var}_gm"] + select].copy()
-        sub.index = df['train']
-        sub['residual'] = sub[f"{var}_obs"] - sub[f"{var}_gm"]
-        sub.dropna(how='any', inplace=True, axis=0)
-        sub[select] = sub[select].apply(lambda x: (x - x.min()) / (x.max() - x.min()))
+    val = df.loc[df['rand'] >= 0.8].index
+    val_files = [os.path.join(pth, '{}.pth'.format(f)) for f in val]
+    val_dataset = PTHDataset(val_files)
+    val_dataset = concatenate_and_shuffle_pth_data(val_dataset)
+    val_dataloader = DataLoader(val_dataset, batch_size=256, shuffle=False, num_workers=2)
 
-        x_t = torch.tensor(sub.loc[sub.index == 1, select].values, dtype=torch.float32)
-        y_t = torch.tensor(sub.loc[sub.index == 1, 'residual'].values, dtype=torch.float32).unsqueeze(1)
-        x_v = torch.tensor(sub.loc[sub.index == 0, select].values, dtype=torch.float32)
-        y_v = torch.tensor(sub.loc[sub.index == 0, 'residual'].values, dtype=torch.float32).unsqueeze(1)
+    model = Predictor(8, learning_rate)
+    early_stopping = EarlyStopping(monitor="val_loss", patience=5, mode="min")
+    trainer = pl.Trainer(max_epochs=5, callbacks=[early_stopping])
 
-        train_dataset, val_dataset = TensorDataset(x_t, y_t), TensorDataset(x_v, y_v)
+    trainer.fit(model, train_dataloader, val_dataloader)
 
-        val = val_dataset.tensors[1].numpy()
-        mean_ = val.mean()
-        mean_ = np.ones_like(val) * mean_
-        rmse = root_mean_squared_error(val, mean_)
-        print('\n===============================================================')
-        print('Training Predictor on {}, predicting the mean gives RMSE: {:.2f}'.format(var.upper(), rmse))
-        print('===============================================================\n')
-
-        train_dataloader = DataLoader(train_dataset, batch_size=256, shuffle=True, num_workers=11)
-        val_dataloader = DataLoader(val_dataset, batch_size=256, shuffle=False, num_workers=11)
-
-        model = ResidualPredictor(len(select), learning_rate)
-        early_stopping = EarlyStopping(monitor="val_loss", patience=5, mode="min")
-        trainer = pl.Trainer(max_epochs=50, callbacks=[early_stopping])
-
-        trainer.fit(model, train_dataloader, val_dataloader)
-
-        val_results = trainer.validate(model, dataloaders=val_dataloader, verbose=False)
-        val_r_squared = 1 - val_results[0]['val_loss'] / torch.var(y_v)
-        results[f"{var}_residual_vs_bands"] = val_r_squared
+    val_results = trainer.validate(model, dataloaders=val_dataloader, verbose=False)
+    val_r_squared = 1 - val_results[0]['val_loss'] / torch.var(y_v)
+    results[f"{target}"] = val_r_squared
 
 
 if __name__ == '__main__':
@@ -132,8 +160,8 @@ if __name__ == '__main__':
         d = '/home/dgketchum/data/IrrigationGIS/dads'
 
     fields = os.path.join(d, 'met', 'stations', 'dads_stations_WMT_mgrs.csv')
-    rs = os.path.join(d, 'rs', 'dads_stations', 'landsat', 'dads_stations_WMT_500_2023.csv')
-    sta = os.path.join(d, 'met', 'tables', 'obs_grid')
+    pth_ = os.path.join(d, 'training', 'scaled_pth')
+    csv_template = os.path.join(d, 'training', 'compiled_csv', 'BFAM.csv')
 
-    test_relationship_bands(joined, plots)
+    test_relationship_bands(fields, pth_, csv_template)
 # ========================= EOF ====================================================================
