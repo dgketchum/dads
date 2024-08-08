@@ -139,7 +139,7 @@ if __name__ == '__main__':
 
     dem_d = os.path.join(root, 'dem')
     out_dem = os.path.join(out, 'dem')
-    mgrs = os.path.join(out, 'training', 'wmt_tiles.csv')
+    mgrs = os.path.join(out_dem, 'w17_tiles.csv')
 
     # calculate_terrain_irradiance(dem_d, mapset="dads_map", overwrite=False)
 

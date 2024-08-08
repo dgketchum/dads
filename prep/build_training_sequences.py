@@ -134,7 +134,7 @@ def get_sr_features(df):
 
 
 def apply_scaling_and_save(csv_dir, scaling_json, training_metadata, output_dir, train_frac=0.8,
-                           chunk_size=100, chunks_per_file=1, target='rsds'):
+                           chunk_size=10, chunks_per_file=1, target='rsds'):
     with open(scaling_json, 'r') as f:
         scaling_data = json.load(f)
 

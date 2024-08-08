@@ -21,14 +21,29 @@ RENAME_MAP = {v: k for k, v in VAR_MAP.items()}
 COMPARISON_VARS = ['rsds', 'mean_temp', 'vpd', 'rn', 'u2', 'eto']
 
 
-def join_daily_timeseries(stations, sta_dir, nldas_dir, dst_dir, gridmet_dir=None, metric_json=None, overwrite=False):
+def join_daily_timeseries(stations, sta_dir, nldas_dir, dst_dir, gridmet_dir=None, overwrite=False, bounds=None,
+                          shuffle=False):
     """"""
     stations = pd.read_csv(stations)
-    stations['fid'] = [f.strip() for f in stations['fid']]
     stations.index = stations['fid']
     stations.sort_index(inplace=True)
 
     stations = stations[stations['source'] == 'madis']
+
+    if shuffle:
+        stations = stations.sample(frac=1)
+
+    if bounds:
+        w, s, e, n = bounds
+        stations = stations[(stations['latitude'] < n) & (stations['latitude'] >= s)]
+        stations = stations[(stations['longitude'] < e) & (stations['longitude'] >= w)]
+    else:
+        # NLDAS-2 extent
+        ln = stations.shape[0]
+        w, s, e, n = (-125.0, 25.0, -67.0, 53.0)
+        stations = stations[(stations['latitude'] < n) & (stations['latitude'] >= s)]
+        stations = stations[(stations['longitude'] < e) & (stations['longitude'] >= w)]
+        print('dropped {} stations outside NLDAS-2 extent'.format(ln - stations.shape[0]))
 
     ct = 0
     for i, (f, row) in enumerate(stations.iterrows(), start=1):
@@ -42,7 +57,7 @@ def join_daily_timeseries(stations, sta_dir, nldas_dir, dst_dir, gridmet_dir=Non
         try:
             ndf = pd.read_csv(nldas_file, index_col=0, parse_dates=True)
         except FileNotFoundError:
-            print('{} does not exist'.format(nldas_file))
+            print('{} does not exist'.format(os.path.basename(nldas_file)))
             continue
 
         ndf.index = pd.DatetimeIndex([datetime.date(i.year, i.month, i.day) for i in ndf.index])
@@ -54,7 +69,7 @@ def join_daily_timeseries(stations, sta_dir, nldas_dir, dst_dir, gridmet_dir=Non
         try:
             gdf = pd.read_csv(gridmet_file, index_col=0, parse_dates=True)
         except FileNotFoundError:
-            print('{} does not exist'.format(gridmet_file))
+            print('{} does not exist'.format(os.path.basename(gridmet_file)))
             continue
 
         gdf.index = pd.DatetimeIndex([datetime.date(i.year, i.month, i.day) for i in gdf.index])
@@ -69,7 +84,7 @@ def join_daily_timeseries(stations, sta_dir, nldas_dir, dst_dir, gridmet_dir=Non
         except ValueError:
             sdf = pd.read_csv(sta_file, index_col='date', parse_dates=True)
         except FileNotFoundError:
-            print('{} does not exist'.format(sta_file))
+            print('{} does not exist'.format(os.path.basename(sta_file)))
             continue
 
         sdf.rename(columns=RENAME_MAP, inplace=True)
@@ -98,42 +113,7 @@ def join_daily_timeseries(stations, sta_dir, nldas_dir, dst_dir, gridmet_dir=Non
             sdf.to_csv(out)
             ct += 1
 
-        if metric_json:
-            if os.path.exists(metric_json):
-                with open(metric_json, 'r') as fp:
-                    metrics = json.load(fp)
-            else:
-                metrics = {}
-
-            if f not in metrics.keys():
-                rmse = get_rmse(sdf)
-
-                metrics[f] = rmse
-                print(f, sdf.shape[0], 'records')
-                print(f, 'RMSE rsds gridmet: {:.2f}, nldas: {:.2f}'.format(rmse['rsds_gm'], rmse['rsds_nl']))
-                print(f, 'RMSE tmean gridmet: {:.2f}, nldas: {:.2f}'.format(rmse['mean_temp_gm'],
-                                                                            rmse['mean_temp_nl']))
-                print(f, 'Mean Temp: {:.2f}\n'.format(sdf['mean_temp_obs'].mean().item()))
-                continue
-        else:
-            print(f, ct)
-
-    if metric_json:
-        with open(metric_json, 'w') as fp:
-            json.dump(metrics, fp, indent=4)
-
-
-def get_rmse(df):
-    variables = ['rsds', 'mean_temp', 'vpd', 'rn', 'u2', 'eto']
-    rmse_results = {}
-
-    for variable in variables:
-        rmse_gm = np.sqrt(np.mean((df[f'{variable}_obs'] - df[f'{variable}_gm']) ** 2))
-        rmse_results[f'{variable}_gm'] = rmse_gm.item()
-
-        rmse_nl = np.sqrt(np.mean((df[f'{variable}_obs'] - df[f'{variable}_nl']) ** 2))
-        rmse_results[f'{variable}_nl'] = rmse_nl.item()
-    return rmse_results
+        print('wrote {} to {}, {} records'.format(f, os.path.basename(out), ct))
 
 
 if __name__ == '__main__':
@@ -142,18 +122,13 @@ if __name__ == '__main__':
     if not os.path.exists(d):
         d = '/home/dgketchum/data/IrrigationGIS/dads'
 
-    fields = os.path.join(d, 'met', 'stations', 'dads_stations_WMT_mgrs.csv')
+    fields = os.path.join(d, 'met', 'stations', 'dads_stations_elev_mgrs.csv')
 
     obs = os.path.join(d, 'met', 'obs', 'madis')
     gm = os.path.join(d, 'met', 'gridded', 'gridmet')
     nl = os.path.join(d, 'met', 'gridded', 'nldas2')
-
-    rs = os.path.join(d, 'rs', 'dads_stations', 'landsat')
     joined = os.path.join(d, 'met', 'tables', 'obs_grid')
-    metrics_ = os.path.join(d, 'met', 'tables', 'metrics.json')
-    scaling_ = os.path.join(d, 'training', 'scaling.json')
-    plots = os.path.join(d, 'plots', 'gridmet')
 
-    join_daily_timeseries(fields, obs, nl, joined, gm, metric_json=None)
+    join_daily_timeseries(fields, obs, nl, joined, gm, overwrite=False, shuffle=True, bounds=(-125., 40., -103., 49.))
 
 # ========================= EOF ====================================================================

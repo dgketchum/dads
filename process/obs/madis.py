@@ -1,16 +1,15 @@
-import os
 import glob
+import os
 
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import pytz
-from timezonefinder import TimezoneFinder
 import seaborn as sns
-import matplotlib.pyplot as plt
+from timezonefinder import TimezoneFinder
 
 from process.calc_eto import calc_asce_params
 from process.station_parameters import station_par_map
-from qaqc.qaqc_functions import rs_period_ratio_corr
 from qaqc.calc_functions import calc_rso
 
 
@@ -53,10 +52,15 @@ def read_hourly_data(stations, madis_src, madis_dst, rsun_tables, shuffle=False,
 
         rsun_file = os.path.join(rsun_tables, 'tile_{}.csv'.format(row['MGRS_TILE']))
         if not os.path.exists(rsun_file):
-            print('rsun {} does not exist'.format(rsun_file))
+            print('rsun {} does not exist'.format(os.path.basename(rsun_file)))
             continue
-        rsun = pd.read_csv(rsun_file, index_col=0)
-        rsun = (rsun[fid] * 0.0036).to_dict()
+
+        try:
+            rsun = pd.read_csv(rsun_file, index_col=0)
+            rsun = (rsun[fid] * 0.0036).to_dict()
+        except KeyError:
+            print('station {} not in rsun table {}'.format(fid, os.path.basename(rsun_file)))
+            continue
 
         df, first, local_tz = None, True, None
         for file_, yr in zip(files_, years):
@@ -94,6 +98,10 @@ def read_hourly_data(stations, madis_src, madis_dst, rsun_tables, shuffle=False,
                 first = False
             else:
                 df = pd.concat([df, c], ignore_index=False, axis=0)
+
+        if df is None:
+            print('{}, 0 records\n'.format(fid))
+            continue
 
         df.to_csv(out_file)
         obs_ct += df.shape[0]

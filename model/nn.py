@@ -120,13 +120,7 @@ class LSTMPredictor(pl.LightningModule):
     def configure_optimizers(self):
         optimizer = optim.Adam(self.parameters(), lr=self.learning_rate)
         scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=5)
-        return {
-            'optimizer': optimizer,
-            'lr_scheduler': {
-                'scheduler': scheduler,
-                'monitor': 'val_loss_obs'
-            }
-        }
+        return {'optimizer': optimizer, 'lr_scheduler': {'scheduler': scheduler, 'monitor': 'val_loss_obs'}}
 
 
 def train_model(pth, metadata, learning_rate=0.01):
