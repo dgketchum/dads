@@ -52,6 +52,9 @@ def read_hourly_data(stations, madis_src, madis_dst, rsun_tables, shuffle=False,
         years = [int(f.split('.')[0].split('_')[-1]) for f in files_]
 
         rsun_file = os.path.join(rsun_tables, 'tile_{}.csv'.format(row['MGRS_TILE']))
+        if not os.path.exists(rsun_file):
+            print('rsun {} does not exist'.format(rsun_file))
+            continue
         rsun = pd.read_csv(rsun_file, index_col=0)
         rsun = (rsun[fid] * 0.0036).to_dict()
 
@@ -303,7 +306,7 @@ if __name__ == '__main__':
 
     solrad_out = os.path.join(d, 'dads', 'dem', 'rsun_tables')
 
-    read_hourly_data(sites, madis_hourly, madis_daily_, solrad_out, plot=madis_plot_dir, qaqc=True,
+    read_hourly_data(sites, madis_hourly, madis_daily_, solrad_out, plot=None, qaqc=True,
                      overwrite=False, shuffle=True, bounds=(-125., 40., -103., 49.))
 
     # correct_data(sites, madis_daily_, madis_daily_corr, madis_plot_dir, target_sites=['PNTM8'])

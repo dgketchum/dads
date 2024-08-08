@@ -103,6 +103,9 @@ def join_stations(snotel, mesonet, agrimet, out_file, fill_elevation=False, boun
         }
     )
 
+    snotel_data['elevation'] /= 3.28084
+    agrimet_data['elevation'] /= 3.28084
+
     snotel_data = snotel_data[['fid', 'name', 'elevation', 'latitude', 'longitude', 'source']]
     snotel_data['fid'] = [f.strip() for f in snotel_data['fid']]
     mesonet_data = mesonet_data[['fid', 'name', 'elevation', 'latitude', 'longitude', 'source']]
@@ -181,9 +184,9 @@ if __name__ == '__main__':
     agrim_list = os.path.join(d, 'dads', 'met', 'stations', 'openet_gridwxcomp_input.csv')
 
     stations = os.path.join(d, 'dads', 'met', 'stations', 'dads_stations.shp')
-    # join_stations(sno_list, meso_list, agrim_list, stations, bounds=None, fill_elevation=True)
+    join_stations(sno_list, meso_list, agrim_list, stations, bounds=None, fill_elevation=True)
     station_elev = os.path.join(d, 'dads', 'met', 'stations', 'dads_stations_elev.shp')
-    fill_out_elevation(stations, station_elev)
+    # fill_out_elevation(stations, station_elev)
 
 
 # ========================= EOF ====================================================================

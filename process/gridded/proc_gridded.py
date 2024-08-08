@@ -27,6 +27,7 @@ def extract_met_data(stations, gridded_dir, overwrite=False, station_type='opene
     kw = station_par_map(station_type)
 
     station_list = pd.read_csv(stations, index_col=kw['index'])
+    station_list = station_list[station_list['source'] == 'madis']
 
     if shuffle:
         station_list = station_list.sample(frac=1)
@@ -138,7 +139,7 @@ if __name__ == '__main__':
     pandarallel.initialize(nb_workers=6)
 
     madis_data_dir_ = os.path.join(d, 'climate', 'madis')
-    sites = os.path.join(d, 'dads', 'met', 'stations', 'dads_stations.csv')
+    sites = os.path.join(d, 'dads', 'met', 'stations', 'dads_stations_elev_mgrs.csv')
 
     grid_dir = os.path.join(d, 'dads', 'met', 'gridded')
 
