@@ -40,6 +40,10 @@ def extract_met_data(stations, gridded_dir, overwrite=False, station_type='opene
     for i, (fid, row) in enumerate(station_list.iterrows(), start=1):
 
         lon, lat, elv = row[kw['lon']], row[kw['lat']], row[kw['elev']]
+        if np.isnan(elv):
+            print('{} has nan elevation'.format(fid))
+            continue
+
         print('{}: {} of {}; {:.2f}, {:.2f}'.format(fid, i, record_ct, lat, lon))
 
         in_file_ = os.path.join(gridded_dir, 'nldas2_raw', '{}.csv'.format(fid))
@@ -139,6 +143,6 @@ if __name__ == '__main__':
     grid_dir = os.path.join(d, 'dads', 'met', 'gridded')
 
     extract_met_data(sites, grid_dir, overwrite=False, station_type='dads',
-                     shuffle=False, bounds=(-116., 45., -109., 49.), gridmet=True)
+                     shuffle=True, bounds=(-125., 40., -103., 49.), gridmet=True)
 
 # ========================= EOF ====================================================================

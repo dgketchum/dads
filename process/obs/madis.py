@@ -295,7 +295,7 @@ if __name__ == '__main__':
 
     # pandarallel.initialize(nb_workers=6)
 
-    sites = os.path.join(d, 'dads', 'met', 'stations', 'dads_stations_WMT_mgrs.csv')
+    sites = os.path.join(d, 'dads', 'met', 'stations', 'dads_stations.csv')
     madis_hourly = os.path.join(d, 'climate', 'madis', 'LDAD', 'mesonet', 'csv')
     madis_daily_ = os.path.join(d, 'dads', 'met', 'obs', 'madis')
     madis_daily_corr = os.path.join(d, 'dads', 'met', 'obs', 'madis_corrected')
@@ -304,7 +304,7 @@ if __name__ == '__main__':
     solrad_out = os.path.join(d, 'dads', 'dem', 'rsun_tables')
 
     read_hourly_data(sites, madis_hourly, madis_daily_, solrad_out, plot=madis_plot_dir, qaqc=True,
-                     overwrite=False, shuffle=True, bounds=(-116., 45., -109., 49.))
+                     overwrite=False, shuffle=True, bounds=(-125., 40., -103., 49.))
 
     # correct_data(sites, madis_daily_, madis_daily_corr, madis_plot_dir, target_sites=['PNTM8'])
 # ========================= EOF ====================================================================

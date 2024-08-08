@@ -161,3 +161,4 @@ cython_debug/
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 #.idea/
 /extract/air_quality/aqs_key.json
+/model/lightning_logs/

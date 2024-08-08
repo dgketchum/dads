@@ -150,11 +150,13 @@ def fill_out_elevation(infile, outfile):
     for i, r in gdf.iterrows():
         try:
             if isinstance(r['elevation'], type(None)):
-                r['elevation'] = elevation_from_coordinate(r['latitude'], r['longitude'])
-                print(r['fid'], '{:1f}'.format(r['elevation']), i, 'of', gdf.shape[0])
+                el = elevation_from_coordinate(r['latitude'], r['longitude'])
+                gdf.loc[i, 'elevation'] = el
+                print(r['fid'], '{:.2f} {} of {}'.format(el, i, gdf.shape[0]))
             elif np.isnan(r['elevation']):
-                r['elevation'] = elevation_from_coordinate(r['latitude'], r['longitude'])
-                print(r['fid'], '{:1f}'.format(r['elevation']), i, 'of', gdf.shape[0])
+                el = elevation_from_coordinate(r['latitude'], r['longitude'])
+                gdf.loc[i, 'elevation'] = el
+                print(r['fid'], '{:.2f} {} of {}'.format(el, i, gdf.shape[0]))
             else:
                 pass
         except KeyError:
@@ -178,9 +180,10 @@ if __name__ == '__main__':
     meso_list = os.path.join(d, 'climate', 'madis', 'mesonet_sites.csv')
     agrim_list = os.path.join(d, 'dads', 'met', 'stations', 'openet_gridwxcomp_input.csv')
 
-    out_file_ = os.path.join(d, 'dads', 'met', 'stations', 'dads_stations.shp')
-    join_stations(sno_list, meso_list, agrim_list, out_file_, bounds=None, fill_elevation=True)
-    # join_stations(sno_list, meso_list, agrim_list, out_file_, bounds=None, fill_elevation=True)
+    stations = os.path.join(d, 'dads', 'met', 'stations', 'dads_stations.shp')
+    # join_stations(sno_list, meso_list, agrim_list, stations, bounds=None, fill_elevation=True)
+    station_elev = os.path.join(d, 'dads', 'met', 'stations', 'dads_stations_elev.shp')
+    fill_out_elevation(stations, station_elev)
 
 
 # ========================= EOF ====================================================================

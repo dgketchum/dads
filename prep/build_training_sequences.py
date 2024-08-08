@@ -11,7 +11,7 @@ TERRAIN_FEATURES = ['slope', 'aspect', 'elevation', 'tpi_1250', 'tpi_250', 'tpi_
 
 
 def join_training(stations, ts_dir, rs_file, dem_dir, out_dir, scaling_json, var='rsds'):
-    ''''''
+    """"""
 
     stations = pd.read_csv(stations)
     stations['fid'] = [f.strip() for f in stations['fid']]
@@ -38,6 +38,7 @@ def join_training(stations, ts_dir, rs_file, dem_dir, out_dir, scaling_json, var
     scaling['stations'] = []
 
     for tile in stations['MGRS_TILE'].unique():
+
         sol_file = os.path.join(dem_dir, 'tile_{}.csv'.format(tile))
         sol_df = pd.read_csv(sol_file)
         tile_sites = stations[stations['MGRS_TILE'] == tile]

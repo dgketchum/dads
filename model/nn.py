@@ -1,16 +1,14 @@
-import os
 import json
+import os
 
-import numpy as np
-import pandas as pd
 import pytorch_lightning as pl
 import torch
 import torch.nn as nn
 import torch.optim as optim
 from pytorch_lightning.callbacks.early_stopping import EarlyStopping
 from sklearn.metrics import r2_score, root_mean_squared_error
-from torch.utils.data import DataLoader, Dataset
 from torch.optim.lr_scheduler import ReduceLROnPlateau
+from torch.utils.data import DataLoader, Dataset
 
 if torch.cuda.is_available():
     device_name = torch.cuda.get_device_name(0)
@@ -40,14 +38,17 @@ class PTHLSTMDataset(Dataset):
         chunk = data[chunk_idx]
         return chunk[:, 2:], chunk[:, 0], chunk[:, 1]
 
+
 def stack_batch(batch):
     x = torch.stack([item[0] for item in batch])
     y = torch.stack([item[1] for item in batch])
     g = torch.stack([item[2] for item in batch])
     return x, y, g
 
+
 class LSTMPredictor(pl.LightningModule):
-    def __init__(self, num_bands=10, hidden_size=64, num_layers=2, learning_rate=0.001, expansion_factor=2, dropout_rate=0.5):
+    def __init__(self, num_bands=10, hidden_size=64, num_layers=2, learning_rate=0.001, expansion_factor=2,
+                 dropout_rate=0.5):
         super().__init__()
 
         self.input_expansion = nn.Sequential(
@@ -56,7 +57,8 @@ class LSTMPredictor(pl.LightningModule):
             nn.Dropout(dropout_rate)
         )
 
-        self.bilstm = nn.LSTM(num_bands * expansion_factor, hidden_size, num_layers, batch_first=True, bidirectional=True)
+        self.bilstm = nn.LSTM(num_bands * expansion_factor, hidden_size, num_layers, batch_first=True,
+                              bidirectional=True)
 
         self.output_layers = nn.Sequential(
             nn.Dropout(dropout_rate),
