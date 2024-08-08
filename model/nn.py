@@ -47,8 +47,7 @@ def stack_batch(batch):
 
 
 class LSTMPredictor(pl.LightningModule):
-    def __init__(self, num_bands=10, hidden_size=64, num_layers=2, learning_rate=0.001, expansion_factor=2,
-                 dropout_rate=0.5):
+    def __init__(self, num_bands=10, hidden_size=64, num_layers=2, learning_rate=0.001, expansion_factor=2, dropout_rate=0.5):
         super().__init__()
 
         self.input_expansion = nn.Sequential(
@@ -57,8 +56,7 @@ class LSTMPredictor(pl.LightningModule):
             nn.Dropout(dropout_rate)
         )
 
-        self.bilstm = nn.LSTM(num_bands * expansion_factor, hidden_size, num_layers, batch_first=True,
-                              bidirectional=True)
+        self.bilstm = nn.LSTM(num_bands * expansion_factor, hidden_size, num_layers, batch_first=True, bidirectional=True)
 
         self.output_layers = nn.Sequential(
             nn.Dropout(dropout_rate),
@@ -112,18 +110,24 @@ class LSTMPredictor(pl.LightningModule):
         self.log("val_rmse_obs", rmse_obs, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
         self.log("val_rmse_gm", rmse_gm, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
 
-        self.log("mean_pred", y_hat_obs_np.mean(), on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
-        self.log("mean_gm", y_gm_np.mean(), on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
+        # self.log("mean_pred", y_hat_obs_np.mean(), on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
+        # self.log("mean_gm", y_gm_np.mean(), on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
 
         return loss_obs
 
     def configure_optimizers(self):
         optimizer = optim.Adam(self.parameters(), lr=self.learning_rate)
-        scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=5)
-        return {'optimizer': optimizer, 'lr_scheduler': {'scheduler': scheduler, 'monitor': 'val_loss_obs'}}
+        scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=2)
+        return {
+            'optimizer': optimizer,
+            'lr_scheduler': {
+                'scheduler': scheduler,
+                'monitor': 'val_loss_obs'
+            }
+        }
 
 
-def train_model(pth, metadata, learning_rate=0.01):
+def train_model(pth, metadata, learning_rate=0.001):
     """"""
 
     with open(metadata, 'r') as f:
@@ -169,5 +173,5 @@ if __name__ == '__main__':
     pth_ = os.path.join(d, 'training', target_var, 'scaled_pth')
     metadata_ = os.path.join(d, 'training', target_var, 'training_metadata.json')
 
-    train_model(pth_, metadata_)
+    train_model(pth_, metadata_, batch_sz=256, learning_rate=0.001)
 # ========================= EOF ====================================================================
