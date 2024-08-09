@@ -4,8 +4,6 @@ import time
 
 import ee
 import pandas as pd
-import geopandas as gpd
-from shapely.geometry import Polygon
 
 sys.path.insert(0, os.path.abspath('..'))
 from extract.earth_engine.cdl import get_cdl
@@ -16,7 +14,7 @@ sys.setrecursionlimit(2000)
 BOUNDARIES = 'users/dgketchum/boundaries'
 
 
-def request_band_extract(file_prefix, points_layer, region, years, buffer, check_dir=None, tiles=None):
+def request_band_extract(file_prefix, points_layer, region, years, buffer, tiles, check_dir=None):
     """
 
     """
@@ -24,29 +22,47 @@ def request_band_extract(file_prefix, points_layer, region, years, buffer, check
     points = ee.FeatureCollection(points_layer)
     points = points.map(lambda x: x.buffer(buffer))
 
-    for yr in years:
-        desc = '{}_{}'.format(file_prefix, yr)
-        if check_dir:
-            outfile = os.path.join(check_dir, str(buffer), '{}.csv'.format(desc))
-            if os.path.exists(outfile):
-                print('{} exists'.format(outfile))
+    failed = {}
+    mgrs = ee.FeatureCollection('users/dgketchum/boundaries/MGRS_TILE')
+
+    for tile in tiles:
+
+        clip = mgrs.filterMetadata('MGRS_TILE', 'equals', tile)
+
+        for yr in years:
+            desc = '{}_{}_{}'.format(file_prefix, yr, tile)
+            if check_dir:
+                outfile = os.path.join(check_dir, '{}.csv'.format(desc))
+                if os.path.exists(outfile):
+                    print('{} exists'.format(outfile))
+                    continue
+
+            try:
+                stack = stack_bands(yr, roi)
+                stack = stack.clip(clip.first().geometry().buffer(1000))
+                tile_pts = points.filterMetadata('MGRS_TILE', 'equals', tile)
+
+                data = stack.reduceRegions(collection=tile_pts,
+                                           reducer=ee.Reducer.mean(),
+                                           scale=30,
+                                           tileScale=16)
+
+                task = ee.batch.Export.table.toCloudStorage(
+                    collection=data,
+                    description=desc,
+                    bucket='wudr',
+                    fileFormat='CSV')
+
+                task.start()
+                print(desc, yr)
+
+            except Exception as e:
+                print(tile, yr, e)
+                if tile not in failed.keys():
+                    failed[tile] = [str(yr)]
+                else:
+                    failed[tile].append(str(yr))
                 continue
-
-        stack = stack_bands(yr, roi)
-
-        data = stack.reduceRegions(collection=points,
-                                   reducer=ee.Reducer.mean(),
-                                   scale=30,
-                                   tileScale=16)
-
-        task = ee.batch.Export.table.toCloudStorage(
-            collection=data,
-            description=desc,
-            bucket='wudr',
-            fileFormat='CSV')
-
-        task.start()
-        print(desc, yr)
 
 
 def stack_bands(yr, roi):
@@ -230,7 +246,7 @@ if __name__ == '__main__':
     _bucket = 'gs://wudr'
 
     sites = os.path.join(d, 'dads', 'met', 'stations', 'dads_stations_elev_mgrs.csv')
-    mgrs_tiles = pd.read_csv(sites)['MGRS_TILE'].to_list()
+    mgrs_tiles = list(set(pd.read_csv(sites)['MGRS_TILE']))
 
     stations = 'dads_stations_elev_mgrs'
     pts = 'projects/ee-dgketchum/assets/dads/{}'.format(stations)
@@ -239,7 +255,8 @@ if __name__ == '__main__':
     years_ = list(range(2023, 2024))
     years_.reverse()
 
-    chk = os.path.join(d, 'dads', 'rs', 'dads_stations', 'ee_extracts')
+    failed = []
+    chk = os.path.join(d, 'dads', 'rs', 'dads_stations', 'landsat', 'tiles')
     for buffer_ in [500]:
         file_ = '{}_{}'.format(stations, buffer_)
         request_band_extract(file_, pts, region=geo, years=years_, buffer=buffer_, check_dir=chk, tiles=mgrs_tiles)
