@@ -1,6 +1,5 @@
 import glob
 import os
-import json
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -9,8 +8,8 @@ import pytz
 import seaborn as sns
 from timezonefinder import TimezoneFinder
 
-from process.calc_eto import calc_asce_params
-from process.station_parameters import station_par_map
+from utils.calc_eto import calc_asce_params
+from utils.station_parameters import station_par_map
 from qaqc.calc_functions import calc_rso
 import bad_madis
 

@@ -4,7 +4,7 @@ import pandas as pd
 import pynldas2 as nld
 
 from extract.met_data.thredds import GridMet
-from process.station_parameters import station_par_map
+from utils.station_parameters import station_par_map
 
 REQUIRED_GRID_COLS = ['prcp', 'mean_temp', 'vpd', 'rn', 'u2', 'eto']
 

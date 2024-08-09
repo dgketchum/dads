@@ -4,10 +4,10 @@ import pytz
 import numpy as np
 import pandas as pd
 from pandarallel import pandarallel
-from refet import calcs, Daily
+from refet import calcs
 
 from extract.met_data.down_gridded import station_par_map
-from process.calc_eto import calc_asce_params
+from utils.calc_eto import calc_asce_params
 
 PACIFIC = pytz.timezone('US/Pacific')
 
