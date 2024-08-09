@@ -45,19 +45,25 @@ def join_daily_timeseries(stations, sta_dir, nldas_dir, dst_dir, gridmet_dir=Non
         stations = stations[(stations['longitude'] < e) & (stations['longitude'] >= w)]
         print('dropped {} stations outside NLDAS-2 extent'.format(ln - stations.shape[0]))
 
-    ct = 0
+    ct, empty_sdf = 0, []
     for i, (f, row) in enumerate(stations.iterrows(), start=1):
 
         out = os.path.join(dst_dir, '{}.csv'.format(f))
         if os.path.exists(out) and not overwrite:
-            print(out, 'exists, skipping')
+            df = pd.read_csv(out)
+            df.dropna(subset=['rsds_obs', 'mean_temp_obs', 'vpd_obs',
+                              'rn_obs', 'u2_obs', 'eto_obs'], inplace=True, axis=0)
+            if df.empty:
+                empty_sdf.append(out)
+                print('obs file has all nan in a column: {}'.format(os.path.basename(out)))
+            print(os.path.basename(out), 'exists, skipping')
             continue
 
         nldas_file = os.path.join(nldas_dir, '{}.csv'.format(f))
         try:
             ndf = pd.read_csv(nldas_file, index_col=0, parse_dates=True)
         except FileNotFoundError:
-            print('{} does not exist'.format(os.path.basename(nldas_file)))
+            print('nldas_file {} does not exist'.format(os.path.basename(nldas_file)))
             continue
 
         ndf.index = pd.DatetimeIndex([datetime.date(i.year, i.month, i.day) for i in ndf.index])
@@ -69,7 +75,7 @@ def join_daily_timeseries(stations, sta_dir, nldas_dir, dst_dir, gridmet_dir=Non
         try:
             gdf = pd.read_csv(gridmet_file, index_col=0, parse_dates=True)
         except FileNotFoundError:
-            print('{} does not exist'.format(os.path.basename(gridmet_file)))
+            print('gridmet_file {} does not exist'.format(os.path.basename(gridmet_file)))
             continue
 
         gdf.index = pd.DatetimeIndex([datetime.date(i.year, i.month, i.day) for i in gdf.index])
@@ -84,7 +90,7 @@ def join_daily_timeseries(stations, sta_dir, nldas_dir, dst_dir, gridmet_dir=Non
         except ValueError:
             sdf = pd.read_csv(sta_file, index_col='date', parse_dates=True)
         except FileNotFoundError:
-            print('{} does not exist'.format(os.path.basename(sta_file)))
+            print('sta_file {} does not exist'.format(os.path.basename(sta_file)))
             continue
 
         sdf.rename(columns=RENAME_MAP, inplace=True)
@@ -107,6 +113,8 @@ def join_daily_timeseries(stations, sta_dir, nldas_dir, dst_dir, gridmet_dir=Non
         sdf.dropna(subset=['rsds_obs', 'mean_temp_obs', 'vpd_obs',
                            'rn_obs', 'u2_obs', 'eto_obs'], inplace=True, axis=0)
         if sdf.empty:
+            empty_sdf.append(sta_file)
+            print('obs file has all nan in a column: {}'.format(os.path.basename(sta_file)))
             continue
         else:
             sdf = sdf.reindex(sorted(sdf.columns), axis=1)
@@ -114,7 +122,7 @@ def join_daily_timeseries(stations, sta_dir, nldas_dir, dst_dir, gridmet_dir=Non
             ct += 1
 
         print('wrote {} to {}, {} records'.format(f, os.path.basename(out), ct))
-
+    print(empty_sdf)
 
 if __name__ == '__main__':
 

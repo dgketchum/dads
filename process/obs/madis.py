@@ -1,5 +1,6 @@
 import glob
 import os
+import json
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -11,10 +12,11 @@ from timezonefinder import TimezoneFinder
 from process.calc_eto import calc_asce_params
 from process.station_parameters import station_par_map
 from qaqc.calc_functions import calc_rso
+import bad_madis
 
 
 def read_hourly_data(stations, madis_src, madis_dst, rsun_tables, shuffle=False, bounds=None, overwrite=False,
-                     qaqc=False, plot=None):
+                     qaqc=False, plot=None, use_list=False):
     kw = station_par_map('dads')
 
     station_list = pd.read_csv(stations, index_col=kw['index'])
@@ -36,7 +38,16 @@ def read_hourly_data(stations, madis_src, madis_dst, rsun_tables, shuffle=False,
         print('dropped {} stations outside NLDAS-2 extent'.format(ln - station_list.shape[0]))
 
     record_ct, obs_ct = station_list.shape[0], 0
+
+    if use_list:
+        target_list = bad_madis.bad()
+    else:
+        target_list = []
+
     for i, (fid, row) in enumerate(station_list.iterrows(), start=1):
+
+        if fid not in target_list:
+            continue
 
         lon, lat, elv = row[kw['lon']], row[kw['lat']], row[kw['elev']]
         print('{}: {} of {}; {:.2f}, {:.2f}'.format(fid, i, record_ct, lat, lon))
@@ -58,8 +69,13 @@ def read_hourly_data(stations, madis_src, madis_dst, rsun_tables, shuffle=False,
         try:
             rsun = pd.read_csv(rsun_file, index_col=0)
             rsun = (rsun[fid] * 0.0036).to_dict()
+            if np.any(np.isnan(rsun.values)):
+                raise ValueError
         except KeyError:
             print('station {} not in rsun table {}'.format(fid, os.path.basename(rsun_file)))
+            continue
+        except ValueError:
+            print('station {} rsun table {} has nan'.format(fid, os.path.basename(rsun_file)))
             continue
 
         df, first, local_tz = None, True, None
@@ -78,11 +94,15 @@ def read_hourly_data(stations, madis_src, madis_dst, rsun_tables, shuffle=False,
             c.index = c.index.tz_localize('GMT')
             c.index = c.index.tz_convert(local_tz)
 
-            c['temperature'] -= 273.15
-            es = 0.6108 * np.exp(17.27 * c['temperature'] / (c['temperature'] + 237.3))
-            c['ea'] = (c['relHumidity'] / 100) * es
-            c['rsds'] = c['solarRadiation'] * 0.0036
-            c['wind'] = c['windSpeed']
+            try:
+                c['temperature'] -= 273.15
+                es = 0.6108 * np.exp(17.27 * c['temperature'] / (c['temperature'] + 237.3))
+                c['ea'] = (c['relHumidity'] / 100) * es
+                c['rsds'] = c['solarRadiation'] * 0.0036
+                c['wind'] = c['windSpeed']
+            except KeyError:
+                print('a met variable is missing from {}, {}'.format(os.path.basename(file_), yr))
+                continue
 
             c = process_daily_data(c, rsun, lat_=lat, elev_=elv, zw_=2.0, qaqc=qaqc)
 
@@ -288,7 +308,6 @@ if __name__ == '__main__':
     solrad_out = os.path.join(d, 'dads', 'dem', 'rsun_tables')
 
     read_hourly_data(sites, madis_hourly, madis_daily_, solrad_out, plot=None, qaqc=True,
-                     overwrite=False, shuffle=True, bounds=(-125., 40., -103., 49.))
+                     overwrite=True, shuffle=True, bounds=(-125., 40., -103., 49.), use_list=True)
 
-    # correct_data(sites, madis_daily_, madis_daily_corr, madis_plot_dir, target_sites=['PNTM8'])
 # ========================= EOF ====================================================================
