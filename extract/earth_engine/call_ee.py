@@ -16,7 +16,7 @@ sys.setrecursionlimit(2000)
 BOUNDARIES = 'users/dgketchum/boundaries'
 
 
-def request_band_extract(file_prefix, points_layer, region, years, buffer, check_dir=None):
+def request_band_extract(file_prefix, points_layer, region, years, buffer, check_dir=None, tiles=None):
     """
 
     """
@@ -229,21 +229,24 @@ if __name__ == '__main__':
 
     _bucket = 'gs://wudr'
 
-    stations = 'dads_stations_WMT'
+    sites = os.path.join(d, 'dads', 'met', 'stations', 'dads_stations_elev_mgrs.csv')
+    mgrs_tiles = pd.read_csv(sites)['MGRS_TILE'].to_list()
+
+    stations = 'dads_stations_elev_mgrs'
     pts = 'projects/ee-dgketchum/assets/dads/{}'.format(stations)
 
     geo = 'users/dgketchum/boundaries/western_states_expanded_union'
-    years_ = list(range(2000, 2003))
+    years_ = list(range(2023, 2024))
     years_.reverse()
 
-    # chk = os.path.join(d, 'dads', 'rs', 'gwx_stations', 'ee_extracts')
-    # for buffer_ in [500]:
-    #     file_ = '{}_{}'.format(stations, buffer_)
-    #     request_band_extract(file_, pts, region=geo, years=years_, buffer=buffer_, check_dir=chk)
+    chk = os.path.join(d, 'dads', 'rs', 'dads_stations', 'ee_extracts')
+    for buffer_ in [500]:
+        file_ = '{}_{}'.format(stations, buffer_)
+        request_band_extract(file_, pts, region=geo, years=years_, buffer=buffer_, check_dir=chk, tiles=mgrs_tiles)
 
-    chk = '/media/nvm/IrrigationGIS/dads/dem/dem_250'
-    mgrs = '/media/research/IrrigationGIS/dads/training/w17_tiles.csv'
-    export_dem(mgrs, chk)
+    # chk = '/media/nvm/IrrigationGIS/dads/dem/dem_250'
+    # mgrs = '/media/research/IrrigationGIS/dads/training/w17_tiles.csv'
+    # export_dem(mgrs, chk)
 
     # chk = os.path.join(d, 'dads', 'rs', 'dads_stations', 'modis')
     # extract_modis(stations, pts, years=years_, check_dir=chk)
