@@ -20,6 +20,8 @@ RENAME_MAP = {v: k for k, v in VAR_MAP.items()}
 
 COMPARISON_VARS = ['rsds', 'mean_temp', 'vpd', 'rn', 'u2', 'eto']
 
+NLDAS_COL_DROP = ['doy', 'year', 'date_str']
+
 
 def join_daily_timeseries(stations, sta_dir, nldas_dir, dst_dir, gridmet_dir=None, overwrite=False, bounds=None,
                           shuffle=False):
@@ -67,7 +69,8 @@ def join_daily_timeseries(stations, sta_dir, nldas_dir, dst_dir, gridmet_dir=Non
             continue
 
         ndf.index = pd.DatetimeIndex([datetime.date(i.year, i.month, i.day) for i in ndf.index])
-        ndf = ndf[COMPARISON_VARS]
+        # ndf = ndf[COMPARISON_VARS]
+        ndf.drop(columns=NLDAS_COL_DROP, inplace=True)
         nld_cols = ['{}_nl'.format(c) for c in ndf.columns]
         ndf.columns = nld_cols
 
@@ -123,6 +126,7 @@ def join_daily_timeseries(stations, sta_dir, nldas_dir, dst_dir, gridmet_dir=Non
 
         print('wrote {} to {}, {} records'.format(f, os.path.basename(out), ct))
     print(empty_sdf)
+
 
 if __name__ == '__main__':
 
