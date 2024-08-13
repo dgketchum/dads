@@ -34,7 +34,7 @@ def request_band_extract(file_prefix, points_layer, region, years, buffer, tiles
             if check_dir:
                 outfile = os.path.join(check_dir, '{}.csv'.format(desc))
                 if os.path.exists(outfile):
-                    print('{} exists'.format(outfile))
+                    print('{} exists'.format(os.path.basename(outfile)))
                     continue
 
             try:
@@ -258,7 +258,7 @@ if __name__ == '__main__':
     pts = 'projects/ee-dgketchum/assets/dads/{}'.format(stations)
 
     geo = 'users/dgketchum/boundaries/western_states_expanded_union'
-    years_ = list(range(1990, 2023))
+    years_ = list(range(1990, 2024))
     years_.reverse()
 
     failed = []
