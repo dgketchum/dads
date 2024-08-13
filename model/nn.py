@@ -167,11 +167,11 @@ if __name__ == '__main__':
     if not os.path.exists(d):
         d = '/home/dgketchum/data/IrrigationGIS/dads'
 
-    target_var = 'vpd'
+    target_var = 'rsds'
 
     fields = os.path.join(d, 'met', 'stations', 'dads_stations_WMT_mgrs.csv')
     pth_ = os.path.join(d, 'training', target_var, 'scaled_pth')
     metadata_ = os.path.join(d, 'training', target_var, 'training_metadata.json')
 
-    train_model(pth_, metadata_, batch_sz=256, learning_rate=0.001)
+    train_model(pth_, metadata_, learning_rate=0.001)
 # ========================= EOF ====================================================================
