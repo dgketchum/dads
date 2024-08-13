@@ -56,6 +56,12 @@ def request_band_extract(file_prefix, points_layer, region, years, buffer, tiles
                 task.start()
                 print(desc, yr)
 
+            except ee.ee_exception.EEException as e:
+                print('{}, waiting on '.format(e), desc, '......')
+                time.sleep(600)
+                task.start()
+                print(desc)
+
             except Exception as e:
                 print(tile, yr, e)
                 if tile not in failed.keys():
@@ -252,7 +258,7 @@ if __name__ == '__main__':
     pts = 'projects/ee-dgketchum/assets/dads/{}'.format(stations)
 
     geo = 'users/dgketchum/boundaries/western_states_expanded_union'
-    years_ = list(range(2023, 2024))
+    years_ = list(range(1990, 2023))
     years_.reverse()
 
     failed = []
