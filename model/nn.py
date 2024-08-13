@@ -1,5 +1,6 @@
-import json
 import os
+import json
+import resource
 
 import pytorch_lightning as pl
 import torch
@@ -9,6 +10,7 @@ from pytorch_lightning.callbacks.early_stopping import EarlyStopping
 from sklearn.metrics import r2_score, root_mean_squared_error
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from torch.utils.data import DataLoader, Dataset
+from torch.utils.data._utils.collate import default_collate
 
 device_name = None
 if torch.cuda.is_available():
@@ -20,29 +22,37 @@ else:
 torch.set_float32_matmul_precision('medium')
 torch.cuda.get_device_name(torch.cuda.current_device())
 
+rlimit = resource.getrlimit(resource.RLIMIT_NOFILE)
+resource.setrlimit(resource.RLIMIT_NOFILE, (2048, rlimit[1]))
+
 
 class PTHLSTMDataset(Dataset):
-    def __init__(self, file_list, chunks_per_file, transform=None):
-        self.file_list = file_list
+    def __init__(self, file_path, chunk_size, transform=None):
+        self.data = torch.load(file_path, weights_only=True)
+        self.chunk_size = chunk_size
         self.transform = transform
-        self.chunks_per_file = chunks_per_file
 
     def __len__(self):
-        return len(self.file_list) * self.chunks_per_file
+        return len(self.data)
 
     def __getitem__(self, idx):
-        file_idx = idx // self.chunks_per_file
-        chunk_idx = idx % self.chunks_per_file
+        chunk = self.data[idx]
 
-        file_path = self.file_list[file_idx]
-        data = torch.load(file_path, weights_only=True)
+        valid_rows = ~torch.isnan(chunk).any(dim=1)
+        chunk = chunk[valid_rows]
 
-        if chunk_idx >= len(data):
+        if len(chunk) < self.chunk_size:
             return None
 
-        # data = data[chunk_idx]
-        x, y, gm = data[:, :, 2:].squeeze(), data[:, :, 0], data[:, :, 1]
+        x, y, gm = chunk[:, 2:], chunk[:, 0], chunk[:, 1]
         return x, y, gm
+
+
+def custom_collate(batch):
+    batch = list(filter(lambda x: x is not None, batch))
+    if not batch:
+        return None
+    return default_collate(batch)
 
 
 def stack_batch(batch):
@@ -144,24 +154,24 @@ def train_model(pth, metadata, batch_size=1, learning_rate=0.01, n_workers=1):
     with open(metadata, 'r') as f:
         meta = json.load(f)
 
+    chunk_size = meta['chunk_size']
     chunks_per_file = meta['chunks_per_file']
 
     features = [c for c, s in zip(meta['column_order'], meta['scaling_status']) if s == 'scaled']
     feature_len = len(features)
 
-    train_dir = os.path.join(pth, 'train')
-    train_files = [os.path.join(train_dir, f) for f in os.listdir(train_dir)]
-    train_dataset = PTHLSTMDataset(train_files, chunks_per_file=chunks_per_file)
+    train_file = os.path.join(pth, 'train', 'all_data.pth')
+    train_dataset = PTHLSTMDataset(train_file, chunk_size=chunk_size)
     train_dataloader = DataLoader(train_dataset,
                                   batch_size=batch_size,
                                   shuffle=True,
                                   num_workers=n_workers,
                                   collate_fn=lambda batch: [x for x in batch if x is not None])
 
-    val_dir = os.path.join(pth, 'val')
-    val_files = [os.path.join(val_dir, f) for f in os.listdir(val_dir)]
-    val_dataset = PTHLSTMDataset(val_files, chunks_per_file=chunks_per_file)
-    val_dataloader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=n_workers)
+    val_file = os.path.join(pth, 'val', 'all_data.pth')
+    val_dataset = PTHLSTMDataset(val_file, chunk_size=chunk_size)
+    val_dataloader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=n_workers,
+                                collate_fn=custom_collate)
 
     model = LSTMPredictor(num_bands=feature_len, learning_rate=learning_rate)
 
@@ -182,21 +192,22 @@ if __name__ == '__main__':
     if device_name == 'NVIDIA GeForce RTX 2080':
         workers = 6
     elif device_name == 'NVIDIA RTX A6000':
-        workers = 11
+        workers = 6
     else:
         raise NotImplementedError('Specify the machine this is running on')
 
     zoran = '/home/dgketchum/training'
+    local = '/media/nvm/training'
     if os.path.exists(zoran):
-        print('reading from zoran')
+        print('writing to zoran')
         training = zoran
     else:
-        print('reading from UM drive')
-        training = os.path.join(d, 'training')
+        print('writing to UM drive')
+        training = local
 
     param_dir = os.path.join(training, target_var)
     pth_ = os.path.join(param_dir, 'scaled_pth')
     metadata_ = os.path.join(param_dir, 'training_metadata.json')
 
-    train_model(pth_, metadata_, batch_size=1, learning_rate=0.01, n_workers=workers)
+    train_model(pth_, metadata_, batch_size=256, learning_rate=0.001, n_workers=workers)
 # ========================= EOF ====================================================================
