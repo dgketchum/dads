@@ -34,7 +34,7 @@ def join_training(stations, ts_dir, rs_dir, dem_dir, out_dir, scaling_json, var=
         if var == 'rsds':
             features = TERRAIN_FEATURES
         elif var == 'vpd':
-            features = TERRAIN_FEATURES
+            features = TERRAIN_FEATURES + get_sr_features(rs_df)
 
         features = ['fid'] + features
         rs_df = rs_df[features]
@@ -68,12 +68,8 @@ def join_training(stations, ts_dir, rs_dir, dem_dir, out_dir, scaling_json, var=
             ts['rsun'] = ts['doy'].map(sol) * 0.0036
             ts[rs_df.columns] = np.ones((ts.shape[0], len(rs_df.columns))) * rs
 
-            removed_nan = False
             if np.count_nonzero(np.isnan(ts.values)) > 1:
-                pre_ = ts.shape[0]
                 ts.dropna(how='any', axis=0, inplace=True)
-                post_ = ts.shape[0]
-                removed_nan = True
 
             for c in ts.columns:
 
@@ -112,6 +108,7 @@ def join_training(stations, ts_dir, rs_dir, dem_dir, out_dir, scaling_json, var=
         json.dump(scaling, fp, indent=4)
 
     print('\ntime series obs count {}\n{} stations'.format(ct, len(scaling['stations'])))
+    print('wrote {} features'.format(ts.shape[1] - 3))
 
 
 def print_rsmse(o, n, g):
@@ -165,6 +162,7 @@ def apply_scaling_and_save(csv_dir, scaling_json, training_metadata, output_dir,
     destiny = ['train' if random.random() < train_frac else 'val' for _ in stations]
 
     obs, gm, nl = [], [], []
+    all_data = {'train': [], 'val': []}
 
     for fate, station in tqdm(zip(destiny, stations), total=len(destiny)):
 
@@ -205,7 +203,6 @@ def apply_scaling_and_save(csv_dir, scaling_json, training_metadata, output_dir,
         num_chunks = len(data_tensor) // chunk_size
 
         for i in range(num_chunks):
-
             chunk = data_tensor[i * chunk_size: (i + 1) * chunk_size]
 
             consecutive = np.array(day_diff[i * chunk_size: (i + 1) * chunk_size])
@@ -216,26 +213,20 @@ def apply_scaling_and_save(csv_dir, scaling_json, training_metadata, output_dir,
             if len(chunk) < chunk_size:
                 padding = torch.full((chunk_size - len(chunk), chunk.shape[1]), fill_value=float('nan'))
                 chunk = torch.cat([chunk, padding], dim=0)
-            padded_data.append(chunk)
 
-            if len(padded_data) == chunks_per_file:
-                outfile = os.path.join(output_dir, fate, f'data_chunk_{file_count}.pth')
-                torch.save(torch.stack(padded_data), outfile)
-                scaling_data['observation_count'] += chunk_size * len(padded_data)
-                file_count += 1
-                padded_data = []
+            all_data[fate].append(chunk)
 
-    if padded_data:
-        outfile = os.path.join(output_dir, fate, f'data_chunk_{file_count}.pth')
-        torch.save(torch.stack(padded_data), outfile)
-        scaling_data['observation_count'] += chunk_size * len(padded_data)
+    for fate in ['train', 'val']:
+        outfile = os.path.join(output_dir, fate, 'all_data.pth')
+        torch.save(torch.stack(all_data[fate]), outfile)
+        scaling_data['observation_count'] = chunk_size * len(all_data[fate])
 
     with open(training_metadata, 'w') as fp:
         json.dump(scaling_data, fp, indent=4)
 
-    print('\n{} sites\n{} observations of {} \n{} validation records'.format(len(scaling_data['stations']), len(obs),
-                                                                             scaling_data['observation_count'],
-                                                                             target_var))
+    print('\n{} sites\n{} {} observations and {} validation records'.format(len(scaling_data['stations']), len(obs),
+                                                                            target_var,
+                                                                            scaling_data['observation_count']))
     print_rsmse(obs, nl, gm)
 
 
@@ -254,12 +245,13 @@ if __name__ == '__main__':
     solrad = os.path.join(d, 'dem', 'rsun_tables')
 
     zoran = '/home/dgketchum/training'
+    local = '/media/nvm/training'
     if os.path.exists(zoran):
         print('writing to zoran')
         training = zoran
     else:
         print('writing to UM drive')
-        training = os.path.join(d, 'training')
+        training = local
 
     param_dir = os.path.join(training, target_var)
 
