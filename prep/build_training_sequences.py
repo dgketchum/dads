@@ -1,6 +1,7 @@
 import os
 import json
 import random
+from tqdm import tqdm
 
 import numpy as np
 import pandas as pd
@@ -23,7 +24,8 @@ def join_training(stations, ts_dir, rs_dir, dem_dir, out_dir, scaling_json, var=
 
     scaling['stations'] = []
 
-    for tile in stations['MGRS_TILE'].unique():
+    tiles = stations['MGRS_TILE'].unique()
+    for tile in tqdm(tiles, total=len(tiles)):
 
         rs_file = os.path.join(rs_dir, f'{glob}_500_2023_{tile}.csv')
         rs_df = pd.read_csv(rs_file)
@@ -43,7 +45,7 @@ def join_training(stations, ts_dir, rs_dir, dem_dir, out_dir, scaling_json, var=
         try:
             sol_df = pd.read_csv(sol_file)
         except FileNotFoundError:
-            print('{} not found'.format(os.path.basename(sol_file)))
+            # print('{} not found'.format(os.path.basename(sol_file)))
             continue
 
         tile_sites = stations[stations['MGRS_TILE'] == tile]
@@ -52,7 +54,7 @@ def join_training(stations, ts_dir, rs_dir, dem_dir, out_dir, scaling_json, var=
 
             sta_file = os.path.join(ts_dir, '{}.csv'.format(f))
             if not os.path.exists(sta_file):
-                print(os.path.basename(sta_file), 'not found, skipping')
+                # print(os.path.basename(sta_file), 'not found, skipping')
                 continue
             ts = pd.read_csv(sta_file, index_col='Unnamed: 0', parse_dates=True)
             rs = rs_df.loc[f].values
@@ -106,14 +108,10 @@ def join_training(stations, ts_dir, rs_dir, dem_dir, out_dir, scaling_json, var=
             ct += ts.shape[0]
             scaling['stations'].append(f)
 
-            if removed_nan:
-                print(f, ts.shape[0], '{} rows with NaN'.format(pre_ - post_))
-            else:
-                print(f, ts.shape[0])
-
     with open(scaling_json, 'w') as fp:
         json.dump(scaling, fp, indent=4)
-    print('\ntime series obs count', ct, '\n')
+
+    print('\ntime series obs count {}\n{} stations'.format(ct, len(scaling['stations'])))
 
 
 def print_rsmse(o, n, g):
@@ -126,8 +124,6 @@ def print_rsmse(o, n, g):
     rmse_gm = root_mean_squared_error(o, g)
     print("r2_gridmet", r2_gm)
     print('rmse_gridmet', rmse_gm)
-
-    print('{} validation records'.format(len(o)))
 
 
 def get_sr_features(df):
@@ -170,9 +166,7 @@ def apply_scaling_and_save(csv_dir, scaling_json, training_metadata, output_dir,
 
     obs, gm, nl = [], [], []
 
-    for fate, station in zip(destiny, stations):
-
-        print(station)
+    for fate, station in tqdm(zip(destiny, stations), total=len(destiny)):
 
         scaling_data['{}_stations'.format(fate)].append(station)
 
@@ -180,7 +174,6 @@ def apply_scaling_and_save(csv_dir, scaling_json, training_metadata, output_dir,
         df = pd.read_csv(filepath)
 
         if df.empty:
-            print('{} is empty'.format(station))
             continue
 
         if fate == 'val':
@@ -230,7 +223,6 @@ def apply_scaling_and_save(csv_dir, scaling_json, training_metadata, output_dir,
                 torch.save(torch.stack(padded_data), outfile)
                 scaling_data['observation_count'] += chunk_size * len(padded_data)
                 file_count += 1
-                # print(os.path.basename(outfile))
                 padded_data = []
 
     if padded_data:
@@ -241,7 +233,9 @@ def apply_scaling_and_save(csv_dir, scaling_json, training_metadata, output_dir,
     with open(training_metadata, 'w') as fp:
         json.dump(scaling_data, fp, indent=4)
 
-    print('\n{} sites\n{} observations\n'.format(len(scaling_data['stations']), scaling_data['observation_count']))
+    print('\n{} sites\n{} observations of {} \n{} validation records'.format(len(scaling_data['stations']), len(obs),
+                                                                             scaling_data['observation_count'],
+                                                                             target_var))
     print_rsmse(obs, nl, gm)
 
 
@@ -251,7 +245,7 @@ if __name__ == '__main__':
     if not os.path.exists(d):
         d = '/home/dgketchum/data/IrrigationGIS/dads'
 
-    target_var = 'rsds'
+    target_var = 'vpd'
     glob_ = 'dads_stations_elev_mgrs'
 
     fields = os.path.join(d, 'met', 'stations', '{}.csv'.format(glob_))
@@ -259,24 +253,35 @@ if __name__ == '__main__':
     rs = os.path.join(d, 'rs', 'dads_stations', 'landsat', 'tiles')
     solrad = os.path.join(d, 'dem', 'rsun_tables')
 
-    training = os.path.join(d, 'training', target_var)
-    out_csv = os.path.join(training, 'compiled_csv')
+    zoran = '/home/dgketchum/training'
+    if os.path.exists(zoran):
+        print('writing to zoran')
+        training = zoran
+    else:
+        print('writing to UM drive')
+        training = os.path.join(d, 'training')
+
+    param_dir = os.path.join(training, target_var)
+
+    out_csv = os.path.join(param_dir, 'compiled_csv')
+    out_pth = os.path.join(param_dir, 'scaled_pth')
+
+    scaling_ = os.path.join(param_dir, 'scaling_metadata.json')
+    metadata = os.path.join(param_dir, 'training_metadata.json')
 
     if not os.path.exists(training):
         os.mkdir(training)
 
+    if not os.path.exists(param_dir):
+        os.mkdir(param_dir)
+
     if not os.path.exists(out_csv):
         os.mkdir(out_csv)
 
-    scaling_ = os.path.join(d, 'training', target_var, 'scaling_metadata.json')
-
-    join_training(fields, sta, rs, solrad, out_csv, scaling_json=scaling_, var=target_var, glob=glob_)
-
-    metadata = os.path.join(d, 'training', target_var, 'training_metadata.json')
-    out_pth = os.path.join(d, 'training', target_var, 'scaled_pth')
-
     if not os.path.exists(out_pth):
         os.mkdir(out_pth)
+
+    join_training(fields, sta, rs, solrad, out_csv, scaling_json=scaling_, var=target_var, glob=glob_)
 
     apply_scaling_and_save(out_csv, scaling_, metadata, out_pth, target=target_var)
 # ========================= EOF ==============================================================================
