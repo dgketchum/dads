@@ -10,28 +10,14 @@ from sklearn.metrics import r2_score, root_mean_squared_error
 TERRAIN_FEATURES = ['slope', 'aspect', 'elevation', 'tpi_1250', 'tpi_250', 'tpi_150']
 
 
-def join_training(stations, ts_dir, rs_file, dem_dir, out_dir, scaling_json, var='rsds'):
+def join_training(stations, ts_dir, rs_dir, dem_dir, out_dir, scaling_json, var='rsds', glob=None):
     """"""
 
     stations = pd.read_csv(stations)
-    stations['fid'] = [f.strip() for f in stations['fid']]
     stations.index = stations['fid']
     stations.sort_index(inplace=True)
 
     stations = stations[stations['source'] == 'madis']
-
-    rs_df = pd.read_csv(rs_file)
-
-    features = None
-    if var == 'rsds':
-        features = TERRAIN_FEATURES
-    elif var == 'vpd':
-        features = TERRAIN_FEATURES
-
-    features = ['fid'] + features
-    rs_df = rs_df[features]
-    rs_df.index = rs_df['fid']
-    rs_df.drop(columns=['fid'], inplace=True)
 
     ts, ct, scaling, first, shape = None, 0, {}, True, None
 
@@ -39,8 +25,27 @@ def join_training(stations, ts_dir, rs_file, dem_dir, out_dir, scaling_json, var
 
     for tile in stations['MGRS_TILE'].unique():
 
+        rs_file = os.path.join(rs_dir, f'{glob}_500_2023_{tile}.csv')
+        rs_df = pd.read_csv(rs_file)
+
+        features = None
+        if var == 'rsds':
+            features = TERRAIN_FEATURES
+        elif var == 'vpd':
+            features = TERRAIN_FEATURES
+
+        features = ['fid'] + features
+        rs_df = rs_df[features]
+        rs_df.index = rs_df['fid']
+        rs_df.drop(columns=['fid'], inplace=True)
+
         sol_file = os.path.join(dem_dir, 'tile_{}.csv'.format(tile))
-        sol_df = pd.read_csv(sol_file)
+        try:
+            sol_df = pd.read_csv(sol_file)
+        except FileNotFoundError:
+            print('{} not found'.format(os.path.basename(sol_file)))
+            continue
+
         tile_sites = stations[stations['MGRS_TILE'] == tile]
 
         for i, (f, row) in enumerate(tile_sites.iterrows(), start=1):
@@ -98,6 +103,7 @@ def join_training(stations, ts_dir, rs_file, dem_dir, out_dir, scaling_json, var
             outfile = os.path.join(out_dir, '{}.csv'.format(f))
             # write csv without dt index
             ts.to_csv(outfile, index=False)
+            ct += ts.shape[0]
             scaling['stations'].append(f)
 
             if removed_nan:
@@ -107,6 +113,7 @@ def join_training(stations, ts_dir, rs_file, dem_dir, out_dir, scaling_json, var
 
     with open(scaling_json, 'w') as fp:
         json.dump(scaling, fp, indent=4)
+    print('\ntime series obs count', ct, '\n')
 
 
 def print_rsmse(o, n, g):
@@ -120,7 +127,7 @@ def print_rsmse(o, n, g):
     print("r2_gridmet", r2_gm)
     print('rmse_gridmet', rmse_gm)
 
-    print('{} records'.format(len(o)))
+    print('{} validation records'.format(len(o)))
 
 
 def get_sr_features(df):
@@ -234,7 +241,7 @@ def apply_scaling_and_save(csv_dir, scaling_json, training_metadata, output_dir,
     with open(training_metadata, 'w') as fp:
         json.dump(scaling_data, fp, indent=4)
 
-    print('{} sites; {} observations'.format(len(scaling_data['stations']), scaling_data['observation_count']))
+    print('\n{} sites\n{} observations\n'.format(len(scaling_data['stations']), scaling_data['observation_count']))
     print_rsmse(obs, nl, gm)
 
 
@@ -244,18 +251,26 @@ if __name__ == '__main__':
     if not os.path.exists(d):
         d = '/home/dgketchum/data/IrrigationGIS/dads'
 
-    target_var = 'vpd'
+    target_var = 'rsds'
+    glob_ = 'dads_stations_elev_mgrs'
 
-    fields = os.path.join(d, 'met', 'stations', 'dads_stations_WMT_mgrs.csv')
+    fields = os.path.join(d, 'met', 'stations', '{}.csv'.format(glob_))
     sta = os.path.join(d, 'met', 'tables', 'obs_grid')
-    rs = os.path.join(d, 'rs', 'dads_stations', 'landsat', 'dads_stations_WMT_500_2023.csv')
+    rs = os.path.join(d, 'rs', 'dads_stations', 'landsat', 'tiles')
     solrad = os.path.join(d, 'dem', 'rsun_tables')
-    out_csv = os.path.join(d, 'training', target_var, 'compiled_csv')
+
+    training = os.path.join(d, 'training', target_var)
+    out_csv = os.path.join(training, 'compiled_csv')
+
+    if not os.path.exists(training):
+        os.mkdir(training)
+
     if not os.path.exists(out_csv):
         os.mkdir(out_csv)
+
     scaling_ = os.path.join(d, 'training', target_var, 'scaling_metadata.json')
 
-    join_training(fields, sta, rs, solrad, out_csv, scaling_json=scaling_, var=target_var)
+    join_training(fields, sta, rs, solrad, out_csv, scaling_json=scaling_, var=target_var, glob=glob_)
 
     metadata = os.path.join(d, 'training', target_var, 'training_metadata.json')
     out_pth = os.path.join(d, 'training', target_var, 'scaled_pth')
