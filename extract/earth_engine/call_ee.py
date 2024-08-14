@@ -252,7 +252,9 @@ if __name__ == '__main__':
     _bucket = 'gs://wudr'
 
     sites = os.path.join(d, 'dads', 'met', 'stations', 'dads_stations_elev_mgrs.csv')
-    mgrs_tiles = list(set(pd.read_csv(sites)['MGRS_TILE']))
+    sites = pd.read_csv(sites)['MGRS_TILE']
+    sites.dropna(inplace=True)
+    mgrs_tiles = list(set(sites))
 
     stations = 'dads_stations_elev_mgrs'
     pts = 'projects/ee-dgketchum/assets/dads/{}'.format(stations)
