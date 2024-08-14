@@ -8,7 +8,7 @@ import pandas as pd
 import torch
 from sklearn.metrics import r2_score, root_mean_squared_error
 
-from prep.landsat_prep import create_time_series_dict
+from prep.landsat_prep import build_landsat_tables
 
 TERRAIN_FEATURES = ['slope', 'aspect', 'elevation', 'tpi_1250', 'tpi_250', 'tpi_150']
 
@@ -29,12 +29,14 @@ def join_training(stations, ts_dir, rs_dir, dem_dir, out_dir, scaling_json, var=
     tiles = stations['MGRS_TILE'].unique()
     for tile in tqdm(tiles, total=len(tiles)):
 
-        rs_file = os.path.join(rs_dir, f'{glob}_500_2023_{tile}.csv')
-        rs_df = pd.read_csv(rs_file)
+        if tile != '11TNJ':
+            continue
 
-        rs_dict = create_time_series_dict(rs_df, 2023, TERRAIN_FEATURES)
+        rs_dict = build_landsat_tables(rs_directory=rs_dir, tile=tile, glob=glob,
+                                       terrain_feats=TERRAIN_FEATURES)
 
         sol_file = os.path.join(dem_dir, 'tile_{}.csv'.format(tile))
+
         try:
             sol_df = pd.read_csv(sol_file)
         except FileNotFoundError:
@@ -50,17 +52,20 @@ def join_training(stations, ts_dir, rs_dir, dem_dir, out_dir, scaling_json, var=
                 # print(os.path.basename(sta_file), 'not found, skipping')
                 continue
             ts = pd.read_csv(sta_file, index_col='Unnamed: 0', parse_dates=True)
-            rs = rs_dict[f].values
-            sol = sol_df[f].to_dict()
 
             # training depends on having the first three columns like so
             feats = [c for c in ts.columns if c.endswith('_nl') and var not in c]
             ts = ts[[f'{var}_obs', f'{var}_gm', f'{var}_nl'] + feats]
 
+            # using a single year and mapping to DOY of arbitrary time length
+            rs = rs_dict[f].to_dict()
+            sol = sol_df[f].to_dict()
+
             ts['doy'] = ts.index.dayofyear
             ts['rsun'] = ts['doy'].map(sol) * 0.0036
-            ts[rs_df.columns] = np.ones((ts.shape[0], len(rs_df.columns))) * rs
-            map doy-oriented landsat data to time series
+
+            for k, v in rs.items():
+                ts[k] = ts['doy'].map(v)
 
             if np.count_nonzero(np.isnan(ts.values)) > 1:
                 ts.dropna(how='any', axis=0, inplace=True)
@@ -229,13 +234,15 @@ if __name__ == '__main__':
     solrad = os.path.join(d, 'dem', 'rsun_tables')
 
     zoran = '/home/dgketchum/training'
-    local = '/media/nvm/training'
+    nvm = '/media/nvm/training'
     if os.path.exists(zoran):
         print('writing to zoran')
         training = zoran
-    else:
+    elif os.path.exists(nvm):
         print('writing to UM drive')
-        training = local
+        training = nvm
+    else:
+        training = os.path.join(d, 'training')
 
     param_dir = os.path.join(training, target_var)
 

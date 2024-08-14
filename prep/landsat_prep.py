@@ -19,41 +19,50 @@ def landsat_periods(yr):
     return periods
 
 
-def create_time_series_dict(mdf, year, terrain_feats):
+def build_landsat_tables(rs_directory, tile, glob, terrain_feats):
     """"""
-    mdf.index = mdf['fid']
-    periods = landsat_periods(year)
 
-    data = {i: pd.DataFrame() for i in mdf.index}
+    rs_files = [(y, os.path.join(rs_directory, f'{glob}_500_{y}_{tile}.csv')) for y in range(1990, 2024)]
+    dfl, data = [], None
 
-    for index, row in mdf.iterrows():
-        df = pd.DataFrame(mdf.loc[index].T.copy())
-        df.columns = ['val']
-        df['param'] = [p.split('_')[0] for p in df.index]
-        df.index
-        t = df.loc[terrain_feats].copy()
+    for y, f in rs_files:
 
-        df['period'] = [c.split('_')[-1] for c in df.index]
-        ls_vars = [c if c.split('_')[-1] in periods.keys() else None for c in df.index]
-        ls_vars = [c for c in ls_vars if c is not None]
+        periods = landsat_periods(y)
 
-        df = df.loc[ls_vars]
-        df['date'] = df['period'].map(periods)
-        df.drop(columns=['period'], inplace=True)
-        df = df.pivot(columns=['param'], index='date')
-        df.columns = [c[1] for c in df.columns]
-        df = df.apply(pd.to_numeric)
+        mdf = pd.read_csv(f)
+        mdf['year'] = y
+        mdf.index = mdf['fid']
 
-        dt = pd.DatetimeIndex(pd.date_range(f'{year}-01-01', f'{year}-12-31'))
-        df = df.reindex(dt)
-        df = df.ffill().bfill()
+        if data is None:
+            data = {i: [] for i in mdf.index}
 
-        df['doy'] = df.index.dayofyear
+        for index, row in mdf.iterrows():
+            df = pd.DataFrame(mdf.loc[index].T.copy())
+            df.columns = ['val']
+            df['param'] = [p.split('_')[0] for p in df.index]
+            t = df.loc[terrain_feats].copy()
 
-        for p in terrain_feats:
-            df[p] = t.loc[p, 'val']
+            df['period'] = [c.split('_')[-1] for c in df.index]
+            ls_vars = [c if c.split('_')[-1] in periods.keys() else None for c in df.index]
+            ls_vars = [c for c in ls_vars if c is not None]
 
-        data[index] = df
+            df = df.loc[ls_vars]
+            df['date'] = df['period'].map(periods)
+            df.drop(columns=['period'], inplace=True)
+            df = df.pivot(columns=['param'], index='date')
+            df.columns = [c[1] for c in df.columns]
+            df = df.apply(pd.to_numeric)
+
+            dt = pd.DatetimeIndex(pd.date_range(f'{y}-01-01', f'{y}-12-31'))
+            df = df.reindex(dt)
+            df = df.ffill().bfill()
+
+            for p in terrain_feats:
+                df[p] = t.loc[p, 'val']
+
+            data[index].append(df)
+
+    data = {k: pd.concat(v) for k, v in data.items()}
 
     return data
 
