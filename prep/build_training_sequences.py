@@ -8,6 +8,8 @@ import pandas as pd
 import torch
 from sklearn.metrics import r2_score, root_mean_squared_error
 
+from prep.landsat_prep import create_time_series_dict
+
 TERRAIN_FEATURES = ['slope', 'aspect', 'elevation', 'tpi_1250', 'tpi_250', 'tpi_150']
 
 
@@ -30,16 +32,7 @@ def join_training(stations, ts_dir, rs_dir, dem_dir, out_dir, scaling_json, var=
         rs_file = os.path.join(rs_dir, f'{glob}_500_2023_{tile}.csv')
         rs_df = pd.read_csv(rs_file)
 
-        features = None
-        if var == 'rsds':
-            features = TERRAIN_FEATURES
-        elif var == 'vpd':
-            features = TERRAIN_FEATURES + get_sr_features(rs_df)
-
-        features = ['fid'] + features
-        rs_df = rs_df[features]
-        rs_df.index = rs_df['fid']
-        rs_df.drop(columns=['fid'], inplace=True)
+        rs_dict = create_time_series_dict(rs_df, 2023, TERRAIN_FEATURES)
 
         sol_file = os.path.join(dem_dir, 'tile_{}.csv'.format(tile))
         try:
@@ -57,7 +50,7 @@ def join_training(stations, ts_dir, rs_dir, dem_dir, out_dir, scaling_json, var=
                 # print(os.path.basename(sta_file), 'not found, skipping')
                 continue
             ts = pd.read_csv(sta_file, index_col='Unnamed: 0', parse_dates=True)
-            rs = rs_df.loc[f].values
+            rs = rs_dict[f].values
             sol = sol_df[f].to_dict()
 
             # training depends on having the first three columns like so
@@ -67,6 +60,7 @@ def join_training(stations, ts_dir, rs_dir, dem_dir, out_dir, scaling_json, var=
             ts['doy'] = ts.index.dayofyear
             ts['rsun'] = ts['doy'].map(sol) * 0.0036
             ts[rs_df.columns] = np.ones((ts.shape[0], len(rs_df.columns))) * rs
+            map doy-oriented landsat data to time series
 
             if np.count_nonzero(np.isnan(ts.values)) > 1:
                 ts.dropna(how='any', axis=0, inplace=True)
@@ -121,16 +115,6 @@ def print_rsmse(o, n, g):
     rmse_gm = root_mean_squared_error(o, g)
     print("r2_gridmet", r2_gm)
     print('rmse_gridmet', rmse_gm)
-
-
-def get_sr_features(df):
-    feats = []
-    feats += [c for c in df.columns if c.startswith('B')]
-    feats += [c for c in df.columns if c.startswith('evi')]
-    feats += [c for c in df.columns if c.startswith('gi')]
-    feats += [c for c in df.columns if c.startswith('nd')]
-    feats += [c for c in df.columns if c.startswith('nw')]
-    return feats
 
 
 def apply_scaling_and_save(csv_dir, scaling_json, training_metadata, output_dir, train_frac=0.8,

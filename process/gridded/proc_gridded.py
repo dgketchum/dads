@@ -143,7 +143,7 @@ if __name__ == '__main__':
 
     grid_dir = os.path.join(d, 'dads', 'met', 'gridded')
 
-    extract_met_data(sites, grid_dir, overwrite=False, station_type='dads',
-                     shuffle=True, bounds=(-125., 40., -103., 49.), gridmet=True)
+    extract_met_data(sites, grid_dir, overwrite=True, station_type='dads',
+                     shuffle=True, bounds=(-125., 40., -103., 49.), gridmet=False)
 
 # ========================= EOF ====================================================================
