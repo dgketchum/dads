@@ -8,7 +8,7 @@ import pandas as pd
 import torch
 from sklearn.metrics import r2_score, root_mean_squared_error
 
-from prep.landsat_prep import build_landsat_tables
+from process.rs.landsat_prep import build_landsat_tables
 
 TERRAIN_FEATURES = ['slope', 'aspect', 'elevation', 'tpi_1250', 'tpi_250', 'tpi_150']
 
@@ -32,9 +32,6 @@ def join_training(stations, ts_dir, rs_dir, dem_dir, out_dir, scaling_json, var=
         if tile != '11TNJ':
             continue
 
-        rs_dict = build_landsat_tables(rs_directory=rs_dir, tile=tile, glob=glob,
-                                       terrain_feats=TERRAIN_FEATURES)
-
         sol_file = os.path.join(dem_dir, 'tile_{}.csv'.format(tile))
 
         try:
@@ -57,15 +54,14 @@ def join_training(stations, ts_dir, rs_dir, dem_dir, out_dir, scaling_json, var=
             feats = [c for c in ts.columns if c.endswith('_nl') and var not in c]
             ts = ts[[f'{var}_obs', f'{var}_gm', f'{var}_nl'] + feats]
 
-            # using a single year and mapping to DOY of arbitrary time length
-            rs = rs_dict[f].to_dict()
-            sol = sol_df[f].to_dict()
+            rs_file = os.path.join(rs_dir, '{}.csv'.format(f))
+            rs = pd.read_csv(rs_file, index_col='Unnamed: 0', parse_dates=True)
+            idx = [i for i in rs.index if i in ts.index]
+            ts.loc[idx, rs.columns] = rs.loc[idx, rs.columns]
 
+            sol = sol_df[f].to_dict()
             ts['doy'] = ts.index.dayofyear
             ts['rsun'] = ts['doy'].map(sol) * 0.0036
-
-            for k, v in rs.items():
-                ts[k] = ts['doy'].map(v)
 
             if np.count_nonzero(np.isnan(ts.values)) > 1:
                 ts.dropna(how='any', axis=0, inplace=True)
@@ -230,7 +226,7 @@ if __name__ == '__main__':
 
     fields = os.path.join(d, 'met', 'stations', '{}.csv'.format(glob_))
     sta = os.path.join(d, 'met', 'tables', 'obs_grid')
-    rs = os.path.join(d, 'rs', 'dads_stations', 'landsat', 'tiles')
+    rs = os.path.join(d, 'rs', 'dads_stations', 'landsat', 'station_data')
     solrad = os.path.join(d, 'dem', 'rsun_tables')
 
     zoran = '/home/dgketchum/training'

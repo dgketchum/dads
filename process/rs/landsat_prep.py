@@ -1,5 +1,36 @@
 import os
 import pandas as pd
+from tqdm import tqdm
+
+TERRAIN_FEATURES = ['slope', 'aspect', 'elevation', 'tpi_1250', 'tpi_250', 'tpi_150']
+
+
+def process_landsat(stations, rs_dir, out_dir, glob=None):
+    """"""
+
+    stations = pd.read_csv(stations)
+    stations.index = stations['fid']
+    stations.sort_index(inplace=True)
+
+    stations = stations[stations['source'] == 'madis']
+
+    ts, ct, scaling, first, shape = None, 0, {}, True, None
+
+    scaling['stations'] = []
+
+    tiles = stations['MGRS_TILE'].unique()
+    for tile in tqdm(tiles, total=len(tiles)):
+
+        if tile != '11TNJ':
+            continue
+
+        rs_dict = build_landsat_tables(rs_directory=rs_dir, tile=tile, glob=glob,
+                                       terrain_feats=TERRAIN_FEATURES)
+
+        for k, v in rs_dict.items():
+            out_file = os.path.join(out_dir, f'{k}.csv')
+            v.to_csv(out_file)
+            print('wrote', os.path.basename(out_file))
 
 
 def landsat_periods(yr):
@@ -68,5 +99,17 @@ def build_landsat_tables(rs_directory, tile, glob, terrain_feats):
 
 
 if __name__ == '__main__':
-    pass
+    if __name__ == '__main__':
+
+        d = '/media/research/IrrigationGIS/dads'
+        if not os.path.exists(d):
+            d = '/home/dgketchum/data/IrrigationGIS/dads'
+
+        glob_ = 'dads_stations_elev_mgrs'
+
+        fields = os.path.join(d, 'met', 'stations', '{}.csv'.format(glob_))
+        rs = os.path.join(d, 'rs', 'dads_stations', 'landsat', 'tiles')
+        out = os.path.join(d, 'rs', 'dads_stations', 'landsat', 'station_data')
+        process_landsat(fields, rs, out, glob=glob_)
+
 # ========================= EOF ====================================================================
