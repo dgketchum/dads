@@ -12,20 +12,23 @@ def process_landsat(stations, rs_dir, out_dir, glob=None):
     stations.index = stations['fid']
     stations.sort_index(inplace=True)
 
-    stations = stations[stations['source'] == 'madis']
-
     ts, ct, scaling, first, shape = None, 0, {}, True, None
 
     scaling['stations'] = []
 
     tiles = stations['MGRS_TILE'].unique()
-    for tile in tqdm(tiles, total=len(tiles)):
+    for i, tile in enumerate(tiles):
 
-        if tile != '11TNJ':
-            continue
+        # if tile != '11TNJ':
+        #     continue
+
+        print('\n{}, {} of {}\n'.format(tile, i, len(tiles)))
 
         rs_dict = build_landsat_tables(rs_directory=rs_dir, tile=tile, glob=glob,
                                        terrain_feats=TERRAIN_FEATURES)
+
+        if rs_dict is None:
+            continue
 
         for k, v in rs_dict.items():
             out_file = os.path.join(out_dir, f'{k}.csv')
@@ -54,6 +57,14 @@ def build_landsat_tables(rs_directory, tile, glob, terrain_feats):
     """"""
 
     rs_files = [(y, os.path.join(rs_directory, f'{glob}_500_{y}_{tile}.csv')) for y in range(1990, 2024)]
+
+    exist = [os.path.exists(f) for y, f in rs_files]
+
+    if not all(exist):
+        s = sum(exist)
+        print(f'{tile}, {s} of {len(exist)} extracts available, skipping')
+        return None
+
     dfl, data = [], None
 
     for y, f in rs_files:
