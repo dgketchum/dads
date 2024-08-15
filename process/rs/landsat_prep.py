@@ -5,26 +5,41 @@ from tqdm import tqdm
 TERRAIN_FEATURES = ['slope', 'aspect', 'elevation', 'tpi_1250', 'tpi_250', 'tpi_150']
 
 
-def process_landsat(stations, rs_dir, out_dir, glob=None):
+def process_landsat(stations, rs_dir, out_dir, glob=None, shuffle=False, overwrite=False):
     """"""
 
     stations = pd.read_csv(stations)
     stations.index = stations['fid']
     stations.sort_index(inplace=True)
 
+    if shuffle:
+        stations = stations.sample(frac=1)
+
     ts, ct, scaling, first, shape = None, 0, {}, True, None
 
     scaling['stations'] = []
 
     tiles = stations['MGRS_TILE'].unique()
-    for i, tile in enumerate(tiles):
+
+    for i, tile in enumerate(tiles, start=1):
 
         # if tile != '11TNJ':
         #     continue
 
-        print('\n{}, {} of {}\n'.format(tile, i, len(tiles)))
+        test_file = os.path.join(rs_dir, f'{glob}_500_2023_{tile}.csv')
+        if not os.path.exists(test_file):
+            print('{} not processed'.format(os.path.basename(test_file)))
+            continue
 
-        rs_dict = build_landsat_tables(rs_directory=rs_dir, tile=tile, glob=glob,
+        complete = check_exists(rs_file=test_file, out_directory=out_dir)
+
+        if complete and not overwrite:
+            print('\n{} complete, {} of {}\n'.format(tile, i, len(tiles)))
+            continue
+
+        print('\n{} processing, {} of {}\n'.format(tile, i, len(tiles)))
+
+        rs_dict = build_landsat_tables(rs_directory=rs_dir, _tile=tile, glob=glob,
                                        terrain_feats=TERRAIN_FEATURES)
 
         if rs_dict is None:
@@ -34,6 +49,16 @@ def process_landsat(stations, rs_dir, out_dir, glob=None):
             out_file = os.path.join(out_dir, f'{k}.csv')
             v.to_csv(out_file)
             print('wrote', os.path.basename(out_file))
+
+
+def check_exists(rs_file, out_directory):
+    mdf = pd.read_csv(rs_file)
+    fids = mdf['fid'].to_list()
+    files = [os.path.join(out_directory, '{}.csv'.format(f)) for f in fids]
+    if any([os.path.exists(f) for f in files]):
+        return True
+    else:
+        return False
 
 
 def landsat_periods(yr):
@@ -53,19 +78,19 @@ def landsat_periods(yr):
     return periods
 
 
-def build_landsat_tables(rs_directory, tile, glob, terrain_feats):
+def build_landsat_tables(rs_directory, _tile, glob, terrain_feats):
     """"""
 
-    rs_files = [(y, os.path.join(rs_directory, f'{glob}_500_{y}_{tile}.csv')) for y in range(1990, 2024)]
+    rs_files = [(y, os.path.join(rs_directory, f'{glob}_500_{y}_{_tile}.csv')) for y in range(1990, 2024)]
 
     exist = [os.path.exists(f) for y, f in rs_files]
 
     if not all(exist):
         s = sum(exist)
-        print(f'{tile}, {s} of {len(exist)} extracts available, skipping')
+        print(f'{_tile}, {s} of {len(exist)} extracts available, skipping')
         return None
 
-    dfl, data = [], None
+    dfl, data, exclude = [], None, []
 
     for y, f in rs_files:
 
@@ -79,9 +104,16 @@ def build_landsat_tables(rs_directory, tile, glob, terrain_feats):
             data = {i: [] for i in mdf.index}
 
         for index, row in mdf.iterrows():
+
             df = pd.DataFrame(mdf.loc[index].T.copy())
-            df.columns = ['val']
-            df['param'] = [p.split('_')[0] for p in df.index]
+
+            try:
+                df.columns = ['val']
+                df['param'] = [p.split('_')[0] for p in df.index]
+            except ValueError:
+                exclude.append(index)
+                continue
+
             t = df.loc[terrain_feats].copy()
 
             df['period'] = [c.split('_')[-1] for c in df.index]
@@ -104,7 +136,7 @@ def build_landsat_tables(rs_directory, tile, glob, terrain_feats):
 
             data[index].append(df)
 
-    data = {k: pd.concat(v) for k, v in data.items()}
+    data = {k: pd.concat(v) for k, v in data.items() if k not in exclude}
 
     return data
 
@@ -121,6 +153,6 @@ if __name__ == '__main__':
         fields = os.path.join(d, 'met', 'stations', '{}.csv'.format(glob_))
         rs = os.path.join(d, 'rs', 'dads_stations', 'landsat', 'tiles')
         out = os.path.join(d, 'rs', 'dads_stations', 'landsat', 'station_data')
-        process_landsat(fields, rs, out, glob=glob_)
+        process_landsat(fields, rs, out, glob=glob_, shuffle=True, overwrite=False)
 
 # ========================= EOF ====================================================================
