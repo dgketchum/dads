@@ -34,11 +34,6 @@ def apply_scaling_and_save(csv_dir, scaling_json, training_metadata, output_dir,
     scaling_data['scaling_status'] = []
     scaling_data['observation_count'] = 0
 
-    padded_data = []
-    file_count = 0
-    first = True
-    fate = None
-
     stations = scaling_data['stations']
     scaling_data['train_stations'] = []
     scaling_data['val_stations'] = []
@@ -56,6 +51,7 @@ def apply_scaling_and_save(csv_dir, scaling_json, training_metadata, output_dir,
     obs, gm, nl = [], [], []
     all_data = {'train': [], 'val': []}
 
+    first = True
     for fate, station in tqdm(zip(destiny, stations), total=len(destiny)):
 
         scaling_data['{}_stations'.format(fate)].append(station)
