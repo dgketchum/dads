@@ -10,12 +10,11 @@ from timezonefinder import TimezoneFinder
 
 from utils.calc_eto import calc_asce_params
 from utils.station_parameters import station_par_map
-from qaqc.calc_functions import calc_rso
-import bad_madis
+from utils.qaqc_calc import calc_rso
 
 
 def read_hourly_data(stations, madis_src, madis_dst, rsun_tables, shuffle=False, bounds=None, overwrite=False,
-                     qaqc=False, plot=None, use_list=False):
+                     qaqc=False, plot=None):
     kw = station_par_map('dads')
 
     station_list = pd.read_csv(stations, index_col=kw['index'])
@@ -38,15 +37,7 @@ def read_hourly_data(stations, madis_src, madis_dst, rsun_tables, shuffle=False,
 
     record_ct, obs_ct = station_list.shape[0], 0
 
-    if use_list:
-        target_list = bad_madis.bad()
-    else:
-        target_list = []
-
     for i, (fid, row) in enumerate(station_list.iterrows(), start=1):
-
-        if fid not in target_list:
-            continue
 
         lon, lat, elv = row[kw['lon']], row[kw['lat']], row[kw['elev']]
         print('{}: {} of {}; {:.2f}, {:.2f}'.format(fid, i, record_ct, lat, lon))
@@ -302,13 +293,11 @@ if __name__ == '__main__':
     sites = os.path.join(d, 'dads', 'met', 'stations', 'dads_stations_elev_mgrs.csv')
     madis_hourly = os.path.join(d, 'climate', 'madis', 'LDAD', 'mesonet', 'csv')
     madis_daily_ = os.path.join(d, 'dads', 'met', 'obs', 'madis')
-    madis_daily_corr = os.path.join(d, 'dads', 'met', 'obs', 'madis_corrected')
     madis_plot_dir = os.path.join(d, 'dads', 'met', 'obs', 'plots', 'madis_{}')
 
     solrad_out = os.path.join(d, 'dads', 'dem', 'rsun_tables')
 
-    read_hourly_data(sites, madis_hourly, madis_daily_, solrad_out, plot=None, qaqc=True,
-                     overwrite=False, shuffle=True, bounds=(-125., 40., -103., 49.))
+    read_hourly_data(sites, madis_hourly, madis_daily_, solrad_out, shuffle=True, bounds=(-125., 40., -103., 49.),
+                     overwrite=False, qaqc=True, plot=None)
 
-    # correct_data(sites, madis_daily_, madis_daily_corr, madis_plot_dir, target_sites=['PNTM8'])
 # ========================= EOF ====================================================================
