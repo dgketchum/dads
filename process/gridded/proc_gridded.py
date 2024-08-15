@@ -49,7 +49,6 @@ def extract_met_data(stations, gridded_dir, overwrite=False, station_type='opene
         in_file_ = os.path.join(gridded_dir, 'nldas2_raw', '{}.csv'.format(fid))
         if not os.path.exists(in_file_):
             print('Input NLDAS at {} does not exist, skipping'.format(os.path.basename(in_file_)))
-            # TODO: write missing stations
             continue
 
         out_file_ = os.path.join(gridded_dir, 'nldas2', '{}.csv'.format(fid))
@@ -63,6 +62,10 @@ def extract_met_data(stations, gridded_dir, overwrite=False, station_type='opene
         if gridmet:
 
             in_file_gm = os.path.join(gridded_dir, 'gridmet_raw', '{}.csv'.format(fid))
+            if not os.path.exists(in_file_gm):
+                print('Input GridMET at {} does not exist, skipping'.format(os.path.basename(in_file_gm)))
+                continue
+
             out_file_gm = os.path.join(gridded_dir, 'gridmet', '{}.csv'.format(fid))
 
             if not os.path.exists(out_file_gm) or overwrite:

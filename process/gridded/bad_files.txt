@@ -1,0 +1,1 @@
+/home/dgketchum/data/IrrigationGIS/dads/met/gridded/gridmet_raw/LCFW1.csv

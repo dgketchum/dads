@@ -297,7 +297,7 @@ if __name__ == '__main__':
 
     solrad_out = os.path.join(d, 'dads', 'dem', 'rsun_tables')
 
-    read_hourly_data(sites, madis_hourly, madis_daily_, solrad_out, shuffle=True, bounds=(-125., 40., -103., 49.),
+    read_hourly_data(sites, madis_hourly, madis_daily_, solrad_out, shuffle=True, bounds=(-125., 25., -96., 49.),
                      overwrite=False, qaqc=True, plot=None)
 
 # ========================= EOF ====================================================================
