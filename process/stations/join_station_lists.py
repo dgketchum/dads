@@ -1,4 +1,5 @@
 import os
+import shutil
 
 import requests
 import numpy as np
@@ -18,14 +19,17 @@ def join_stations(snotel, mesonet, agrimet, out_file, fill_elevation=False, boun
     agrimet_data = pd.read_csv(agrimet)
     agrimet_data['source'] = agrimet_data['Source'] + '_gwx'
 
-    agrimet_data = agrimet_data.rename(columns={'Index': 'fid',
-                                                'original_network_id': 'name',
+    agrimet_data = agrimet_data.rename(columns={'original_network_id': 'fid',
+                                                'original_station_name': 'name',
                                                 'ELEV_FT': 'elevation',
                                                 'STATION_LAT': 'latitude',
                                                 'STATION_LON': 'longitude'})
 
     mesonet_data = mesonet_data.rename(columns={'index': 'fid', 'NAME': 'name', 'ELEV': 'elevation'})
     mesonet_data['fid'] = mesonet_data['fid'].astype(str)
+    mesonet_data['fid'] = [s.upper() for s in mesonet_data['fid']]
+    mesonet_data['name'] = mesonet_data['name'].astype(str)
+    mesonet_data['name'] = [s.upper() for s in mesonet_data['name']]
 
     snotel_data = snotel_data.rename(columns={'ID': 'fid', 'Elevation_ft': 'elevation',
                                               'Name': 'name', 'Latitude': 'latitude',
@@ -45,6 +49,17 @@ def join_stations(snotel, mesonet, agrimet, out_file, fill_elevation=False, boun
 
     comb_df = pd.concat([snotel_data, mesonet_data, agrimet_data])
 
+    for i, r in comb_df.iterrows():
+        try:
+            fid = int(r['fid'])
+            if 'gwx' in r['source']:
+                comb_df.loc[i, 'fid'] = '{}_gwx'.format(r['fid']).upper()
+            else:
+                comb_df.loc[i, 'fid'] = '{}_{}'.format(r['fid'], r['source']).upper()
+        except ValueError:
+            comb_df.loc[i, 'fid'] = r['fid'].upper()
+            continue
+
     if bounds:
         w, s, e, n = bounds
         comb_df = comb_df[(comb_df['latitude'] < n) & (comb_df['latitude'] >= s)]
@@ -53,6 +68,9 @@ def join_stations(snotel, mesonet, agrimet, out_file, fill_elevation=False, boun
     if fill_elevation:
         for i, r in comb_df.iterrows():
             try:
+                if r['elevation'] > 3000.0 or r['elevation'] < 0.0:
+                    comb_df.loc[i, 'elevation'] = elevation_from_coordinate(r['latitude'], r['longitude'])
+                    print(r['fid'], i, 'of', comb_df.shape[0])
                 if isinstance(r['elevation'], type(None)):
                     comb_df.loc[i, 'elevation'] = elevation_from_coordinate(r['latitude'], r['longitude'])
                     print(r['fid'], i, 'of', comb_df.shape[0])
@@ -110,6 +128,33 @@ def fill_out_elevation(infile, outfile):
     gdf.to_file(outfile)
 
 
+def cleanup_gwx_misname(d, csv):
+    stations = pd.read_csv(csv)
+    stations['source'] = stations['source'].astype(str)
+
+    for i, r in stations.iterrows():
+        try:
+            fid = int(r['fid'])
+            int_file = True
+        except:
+            int_file = False
+
+        if r['source'].endswith('gwx') or int_file:
+            gridmet = os.path.join(d, 'gridmet', '{}.csv'.format(r['fid']))
+            gridmet_raw = os.path.join(d, 'gridmet_raw', '{}.csv'.format(r['fid']))
+            nldas2 = os.path.join(d, 'nldas2', '{}.csv'.format(r['fid']))
+            nldas2_raw = os.path.join(d, 'nldas2_raw', '{}.csv'.format(r['fid']))
+            for f in [gridmet, gridmet_raw, nldas2, nldas2_raw]:
+                try:
+                    os.remove(f)
+                    print(f"File '{f}' has been successfully deleted.")
+                except FileNotFoundError:
+                    continue
+                except PermissionError:
+                    continue
+                except Exception as e:
+                    continue
+
 if __name__ == '__main__':
     d = '/media/research/IrrigationGIS'
     if not os.path.exists(d):
@@ -118,9 +163,14 @@ if __name__ == '__main__':
     meso_list = os.path.join(d, 'climate', 'madis', 'mesonet_sites.csv')
     agrim_list = os.path.join(d, 'dads', 'met', 'stations', 'openet_gridwxcomp_input.csv')
 
-    stations = os.path.join(d, 'dads', 'met', 'stations', 'dads_stations.shp')
+    stations = os.path.join(d, 'dads', 'met', 'stations', 'dads_stations_renamed.shp')
     join_stations(sno_list, meso_list, agrim_list, stations, bounds=None, fill_elevation=True)
-    station_elev = os.path.join(d, 'dads', 'met', 'stations', 'dads_stations_elev_.shp')
-    # fill_out_elevation(stations, station_elev)
+
+    station_elev = os.path.join(d, 'dads', 'met', 'stations', 'dads_stations_elev_mgrs_named.shp')
+    # fix_names(stations, station_elev)
+
+    sites = os.path.join(d, 'dads', 'met', 'stations', 'dads_stations_elev_mgrs.csv')
+    grid_dir = os.path.join(d, 'dads', 'met', 'gridded')
+    # cleanup_gwx_misname(grid_dir, sites)
 
 # ========================= EOF ====================================================================
