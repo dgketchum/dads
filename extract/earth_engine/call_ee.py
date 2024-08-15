@@ -20,7 +20,9 @@ def request_band_extract(file_prefix, points_layer, region, years, buffer, tiles
     """
     tasks = None
 
+    # if there are tasks in process:
     # earthengine task list | grep -E '(READY|COMPLETED)' | awk '{print $3}' > processing.txt
+
     processing = os.path.join(os.path.dirname(__file__), 'processing.txt')
     if os.path.exists(processing):
         with open(processing, 'r') as f:
@@ -46,9 +48,10 @@ def request_band_extract(file_prefix, points_layer, region, years, buffer, tiles
                 if os.path.exists(outfile):
                     print('{} exists'.format(os.path.basename(outfile)))
                     continue
-                elif desc in tasks:
-                    print('{} is processing'.format(os.path.basename(outfile)))
-                    continue
+                elif tasks is not None:
+                    if desc in tasks:
+                        print('{} is processing'.format(os.path.basename(outfile)))
+                        continue
                 else:
                     pass
 
