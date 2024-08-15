@@ -26,7 +26,13 @@ def read_gwx(stations, gwx_src, gwx_dst, overwrite=False):
 
     for i, row in sites.iterrows():
 
-        out_file = os.path.join(gwx_dst, '{}.csv'.format(row['original_network_id']))
+        try:
+            fid = int(row['original_network_id'])
+            base_name = '{}_gwx'.format(row['original_network_id']).upper()
+        except ValueError:
+            base_name = row['original_network_id'].upper()
+
+        out_file = os.path.join(gwx_dst, '{}.csv'.format(base_name))
 
         if os.path.exists(out_file) and not overwrite:
             print(os.path.basename(out_file), 'exists, skipping')
@@ -67,12 +73,12 @@ if __name__ == '__main__':
 
     # pandarallel.initialize(nb_workers=6)
 
-    fields = os.path.join(d, 'dads', 'met', 'stations', 'dads_stations.csv')
+    fields = os.path.join(d, 'dads', 'met', 'stations', 'dads_stations_elev_mgrs_named.csv')
     gwx_list = os.path.join(d, 'dads', 'met', 'stations', 'openet_gridwxcomp_input.csv')
 
     gwx_src_ = os.path.join(d, 'climate', 'gridwxcomp', 'station_data')
     gwx_dst_ = os.path.join(d, 'dads', 'met', 'obs', 'gwx')
 
-    read_gwx(gwx_list, gwx_src_, gwx_dst_, overwrite=True)
+    read_gwx(gwx_list, gwx_src_, gwx_dst_, overwrite=False)
 
 # ========================= EOF ====================================================================
