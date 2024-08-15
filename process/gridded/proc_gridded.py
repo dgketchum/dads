@@ -27,7 +27,6 @@ def extract_met_data(stations, gridded_dir, overwrite=False, station_type='opene
     kw = station_par_map(station_type)
 
     station_list = pd.read_csv(stations, index_col=kw['index'])
-    station_list = station_list[station_list['source'] == 'madis']
 
     if shuffle:
         station_list = station_list.sample(frac=1)
@@ -75,57 +74,73 @@ def extract_met_data(stations, gridded_dir, overwrite=False, station_type='opene
 
 def proc_nldas(in_csv, lat, lon, elev, out_csv):
     df = pd.read_csv(in_csv, index_col='time', parse_dates=True)
-    df = df.tz_convert(PACIFIC)
-    wind_u = df['wind_u']
-    wind_v = df['wind_v']
-    df['wind'] = np.sqrt(wind_v ** 2 + wind_u ** 2)
 
-    df['temp'] = df['temp'] - 273.15
+    try:
+        df = df.tz_convert(PACIFIC)
+        wind_u = df['wind_u']
+        wind_v = df['wind_v']
+        df['wind'] = np.sqrt(wind_v ** 2 + wind_u ** 2)
 
-    df['rsds'] *= 0.0036
-    df['rlds'] *= 0.0036
+        df['temp'] = df['temp'] - 273.15
 
-    df['hour'] = [i.hour for i in df.index]
+        df['rsds'] *= 0.0036
+        df['rlds'] *= 0.0036
 
-    df['ea'] = calcs._actual_vapor_pressure(pair=calcs._air_pressure(elev),
-                                            q=df['humidity'])
+        df['hour'] = [i.hour for i in df.index]
 
-    df['max_temp'] = df['temp'].copy()
-    df['min_temp'] = df['temp'].copy()
-    df['mean_temp'] = df['temp'].copy()
+        df['ea'] = calcs._actual_vapor_pressure(pair=calcs._air_pressure(elev),
+                                                q=df['humidity'])
 
-    df = df.resample('D').agg(NLDAS_RESAMPLE_MAP)
+        df['max_temp'] = df['temp'].copy()
+        df['min_temp'] = df['temp'].copy()
+        df['mean_temp'] = df['temp'].copy()
 
-    df['doy'] = [i.dayofyear for i in df.index]
+        df = df.resample('D').agg(NLDAS_RESAMPLE_MAP)
 
-    asce_params = df.parallel_apply(calc_asce_params, lat=lat, elev=elev, zw=10, axis=1)
-    # asce_params = df.apply(calc_asce_params, lat=lat, elev=elev, zw=10, axis=1)
-    df[['mean_temp', 'vpd', 'rn', 'u2', 'eto']] = pd.DataFrame(asce_params.tolist(),
-                                                               index=df.index)
-    df['year'] = [i.year for i in df.index]
-    df['date_str'] = [i.strftime('%Y-%m-%d') for i in df.index]
+        df['doy'] = [i.dayofyear for i in df.index]
+
+        asce_params = df.parallel_apply(calc_asce_params, lat=lat, elev=elev, zw=10, axis=1)
+        # asce_params = df.apply(calc_asce_params, lat=lat, elev=elev, zw=10, axis=1)
+        df[['mean_temp', 'vpd', 'rn', 'u2', 'eto']] = pd.DataFrame(asce_params.tolist(),
+                                                                   index=df.index)
+        df['year'] = [i.year for i in df.index]
+        df['date_str'] = [i.strftime('%Y-%m-%d') for i in df.index]
+
+    except KeyError:
+        bad_files = os.path.join(os.path.dirname(__file__), 'bad_files.txt')
+        with open(bad_files, 'a') as f:
+            f.write(in_csv + '\n')
+        return None
 
     df.to_csv(out_csv)
 
 
 def proc_gridmet(in_csv, lat, elev, out_csv):
     df = pd.read_csv(in_csv, index_col=0, parse_dates=True)
-    df['min_temp'] = df['min_temp'] - 273.15
-    df['max_temp'] = df['max_temp'] - 273.15
 
-    df['year'] = [i.year for i in df.index]
-    df['doy'] = [i.dayofyear for i in df.index]
-    df.index = df.index.tz_localize(PACIFIC)
+    try:
+        df['min_temp'] = df['min_temp'] - 273.15
+        df['max_temp'] = df['max_temp'] - 273.15
 
-    df['ea'] = calcs._actual_vapor_pressure(pair=calcs._air_pressure(elev),
-                                            q=df['q'])
+        df['year'] = [i.year for i in df.index]
+        df['doy'] = [i.dayofyear for i in df.index]
+        df.index = df.index.tz_localize(PACIFIC)
 
-    df['rsds'] *= 0.0864
+        df['ea'] = calcs._actual_vapor_pressure(pair=calcs._air_pressure(elev),
+                                                q=df['q'])
 
-    asce_params = df.parallel_apply(calc_asce_params, lat=lat, elev=elev, zw=10, axis=1)
-    # asce_params = df.apply(calc_asce_params, lat=lat, elev=elev, zw=10, axis=1)
-    df[['mean_temp', 'vpd', 'rn', 'u2', 'eto']] = pd.DataFrame(asce_params.tolist(),
-                                                               index=df.index)
+        df['rsds'] *= 0.0864
+
+        asce_params = df.parallel_apply(calc_asce_params, lat=lat, elev=elev, zw=10, axis=1)
+        # asce_params = df.apply(calc_asce_params, lat=lat, elev=elev, zw=10, axis=1)
+        df[['mean_temp', 'vpd', 'rn', 'u2', 'eto']] = pd.DataFrame(asce_params.tolist(),
+                                                                   index=df.index)
+
+    except KeyError:
+        bad_files = os.path.join(os.path.dirname(__file__), 'bad_files.txt')
+        with open(bad_files, 'a') as f:
+            f.write(in_csv + '\n')
+        return None
 
     df.to_csv(out_csv)
 
@@ -138,12 +153,11 @@ if __name__ == '__main__':
 
     pandarallel.initialize(nb_workers=6)
 
-    madis_data_dir_ = os.path.join(d, 'climate', 'madis')
     sites = os.path.join(d, 'dads', 'met', 'stations', 'dads_stations_elev_mgrs.csv')
 
     grid_dir = os.path.join(d, 'dads', 'met', 'gridded')
 
-    extract_met_data(sites, grid_dir, overwrite=True, station_type='dads',
-                     shuffle=True, bounds=(-125., 40., -103., 49.), gridmet=False)
+    extract_met_data(sites, grid_dir, overwrite=False, station_type='dads',
+                     shuffle=True, bounds=(-125., 25., -96., 49.), gridmet=True)
 
 # ========================= EOF ====================================================================
