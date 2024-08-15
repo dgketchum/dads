@@ -44,7 +44,7 @@ def extract_met_data(stations, gridded_dir, overwrite=False, station_type='opene
             print('{} has nan elevation'.format(fid))
             continue
 
-        print('{}: {} of {}; {:.2f}, {:.2f}'.format(fid, i, record_ct, lat, lon))
+        # print('{}: {} of {}; {:.2f}, {:.2f}'.format(fid, i, record_ct, lat, lon))
 
         in_file_ = os.path.join(gridded_dir, 'nldas2_raw', '{}.csv'.format(fid))
         if not os.path.exists(in_file_):
@@ -57,7 +57,8 @@ def extract_met_data(stations, gridded_dir, overwrite=False, station_type='opene
             proc_nldas(in_csv=in_file_, lon=lon, lat=lat, elev=elv, out_csv=out_file_)
             print('nldas', fid)
         else:
-            print('nldas {} exists'.format(fid))
+            # print('nldas {} exists'.format(fid))
+            pass
 
         if gridmet:
 
@@ -72,7 +73,8 @@ def extract_met_data(stations, gridded_dir, overwrite=False, station_type='opene
                 proc_gridmet(in_csv=in_file_gm, lat=lat, elev=elv, out_csv=out_file_gm)
                 print('gridmet', fid)
             else:
-                print('gridmet {} exists'.format(fid))
+                # print('gridmet {} exists'.format(fid))
+                pass
 
 
 def proc_nldas(in_csv, lat, lon, elev, out_csv):
