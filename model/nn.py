@@ -197,13 +197,15 @@ if __name__ == '__main__':
         raise NotImplementedError('Specify the machine this is running on')
 
     zoran = '/home/dgketchum/training'
-    local = '/media/nvm/training'
+    nvm = '/media/nvm/training'
     if os.path.exists(zoran):
         print('writing to zoran')
         training = zoran
-    else:
+    elif os.path.exists(nvm):
         print('writing to UM drive')
-        training = local
+        training = nvm
+    else:
+        training = os.path.join(d, 'training')
 
     param_dir = os.path.join(training, target_var)
     pth_ = os.path.join(param_dir, 'scaled_pth')
