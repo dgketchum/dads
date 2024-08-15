@@ -40,9 +40,11 @@ def read_gwx(stations, gwx_src, gwx_dst, overwrite=False):
             print('{} does not exist, skipping'.format(in_file))
             continue
 
-        df = pd.read_excel(in_file)
+        df = pd.read_excel(in_file, index_col=0)
+        df['date'] = df.index
         df.rename(columns=RENAME, inplace=True)
         df = df[[v for k, v in RENAME.items()]]
+        df['rsds'] *= 0.0864
         # asce_params = daily_df.parallel_apply(calc_asce_params, lat=lat_, elev=elev_, zw=10, axis=1)
         asce_params = df.apply(calc_asce_params, lat=lat, elev=elv, zw=zw, axis=1)
 
@@ -53,7 +55,7 @@ def read_gwx(stations, gwx_src, gwx_dst, overwrite=False):
             print(e)
             return None
 
-        df.to_csv(out_file)
+        df.to_csv(out_file, index=False)
         print(os.path.basename(out_file))
 
 
@@ -71,6 +73,6 @@ if __name__ == '__main__':
     gwx_src_ = os.path.join(d, 'climate', 'gridwxcomp', 'station_data')
     gwx_dst_ = os.path.join(d, 'dads', 'met', 'obs', 'gwx')
 
-    read_gwx(gwx_list, gwx_src_, gwx_dst_, overwrite=False)
+    read_gwx(gwx_list, gwx_src_, gwx_dst_, overwrite=True)
 
 # ========================= EOF ====================================================================
