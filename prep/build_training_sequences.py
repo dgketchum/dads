@@ -8,40 +8,45 @@ from tqdm import tqdm
 TERRAIN_FEATURES = ['slope', 'aspect', 'elevation', 'tpi_1250', 'tpi_250', 'tpi_150']
 
 
-def join_training(stations, ts_dir, rs_dir, dem_dir, out_dir, scaling_json, var='rsds'):
+def join_training(stations, ts_dir, rs_dir, dem_dir, out_dir, scaling_json, var='rsds', bounds=None):
     """"""
 
     stations = pd.read_csv(stations)
     stations.index = stations['fid']
     stations.sort_index(inplace=True)
 
-    stations = stations[stations['source'] == 'madis']
+    if bounds:
+        w, s, e, n = bounds
+        stations = stations[(stations['latitude'] < n) & (stations['latitude'] >= s)]
+        stations = stations[(stations['longitude'] < e) & (stations['longitude'] >= w)]
 
     ts, ct, scaling, first, shape = None, 0, {}, True, None
+    missing = {'sol_file': 0, 'station_file': 0, 'rs_file': 0, 'snotel': 0}
 
     scaling['stations'] = []
 
     tiles = stations['MGRS_TILE'].unique()
     for tile in tqdm(tiles, total=len(tiles)):
 
-        if tile != '11TNJ':
-            continue
-
         sol_file = os.path.join(dem_dir, 'tile_{}.csv'.format(tile))
 
         try:
             sol_df = pd.read_csv(sol_file)
         except FileNotFoundError:
-            # print('{} not found'.format(os.path.basename(sol_file)))
+            missing['sol_file'] += 1
             continue
 
         tile_sites = stations[stations['MGRS_TILE'] == tile]
 
         for i, (f, row) in enumerate(tile_sites.iterrows(), start=1):
 
+            if row['source'] == 'snotel':
+                missing['snotel'] += 1
+                continue
+
             sta_file = os.path.join(ts_dir, '{}.csv'.format(f))
             if not os.path.exists(sta_file):
-                # print(os.path.basename(sta_file), 'not found, skipping')
+                missing['station_file'] += 1
                 continue
             ts = pd.read_csv(sta_file, index_col='Unnamed: 0', parse_dates=True)
 
@@ -50,6 +55,10 @@ def join_training(stations, ts_dir, rs_dir, dem_dir, out_dir, scaling_json, var=
             ts = ts[[f'{var}_obs', f'{var}_gm', f'{var}_nl'] + feats]
 
             rs_file = os.path.join(rs_dir, '{}.csv'.format(f))
+            if not os.path.exists(rs_file):
+                missing['rs_file'] += 1
+                continue
+
             rs = pd.read_csv(rs_file, index_col='Unnamed: 0', parse_dates=True)
             idx = [i for i in rs.index if i in ts.index]
             ts.loc[idx, rs.columns] = rs.loc[idx, rs.columns]
@@ -88,6 +97,10 @@ def join_training(stations, ts_dir, rs_dir, dem_dir, out_dir, scaling_json, var=
                     print('{} has {} cols, should have {}, skipped it'.format(f, ts.shape[1], shape))
                     continue
 
+            if ts.empty:
+                print('{} is empty, skipped it'.format(f))
+                continue
+
             outfile = os.path.join(out_dir, '{}.csv'.format(f))
             # write csv without dt index
             ts.to_csv(outfile, index=False)
@@ -99,6 +112,7 @@ def join_training(stations, ts_dir, rs_dir, dem_dir, out_dir, scaling_json, var=
 
     print('\ntime series obs count {}\n{} stations'.format(ct, len(scaling['stations'])))
     print('wrote {} features'.format(ts.shape[1] - 3))
+    print('missing', missing)
 
 
 if __name__ == '__main__':
@@ -107,6 +121,7 @@ if __name__ == '__main__':
     if not os.path.exists(d):
         d = '/home/dgketchum/data/IrrigationGIS/dads'
 
+    overwrite = True
     target_var = 'vpd'
     glob_ = 'dads_stations_elev_mgrs'
 
@@ -121,13 +136,20 @@ if __name__ == '__main__':
         print('writing to zoran')
         training = zoran
     elif os.path.exists(nvm):
-        print('writing to UM drive')
+        print('writing to nvm drive')
         training = nvm
     else:
+        print('writing to UM drive')
         training = os.path.join(d, 'training')
 
     param_dir = os.path.join(training, target_var)
     out_csv = os.path.join(param_dir, 'compiled_csv')
+
+    if overwrite:
+        l = [os.path.join(out_csv, f) for f in os.listdir(out_csv)]
+        [os.remove(f) for f in l]
+        print('removed existing data in {}'.format(out_csv))
+
     scaling_ = os.path.join(param_dir, 'scaling_metadata.json')
 
     if not os.path.exists(training):
@@ -139,6 +161,8 @@ if __name__ == '__main__':
     if not os.path.exists(out_csv):
         os.mkdir(out_csv)
 
-    join_training(fields, sta, rs, solrad, out_csv, scaling_json=scaling_, var=target_var)
+    join_training(fields, sta, rs, solrad, out_csv, scaling_json=scaling_, var=target_var,
+                  bounds=(-125., 40., -103., 49.))
+
 
 # ========================= EOF ==============================================================================
