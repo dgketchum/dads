@@ -18,6 +18,16 @@ def request_band_extract(file_prefix, points_layer, region, years, buffer, tiles
     """
 
     """
+    tasks = None
+
+    # earthengine task list | grep -E '(READY|COMPLETED)' | awk '{print $3}' > processing.txt
+    processing = os.path.join(os.path.dirname(__file__), 'processing.txt')
+    if os.path.exists(processing):
+        with open(processing, 'r') as f:
+            tasks = f.read().splitlines()
+
+        tasks = [os.path.join(check_dir, '{}.csv'.format(t)) for t in tasks]
+
     roi = ee.FeatureCollection(region)
     points = ee.FeatureCollection(points_layer)
     points = points.map(lambda x: x.buffer(buffer))
@@ -36,6 +46,11 @@ def request_band_extract(file_prefix, points_layer, region, years, buffer, tiles
                 if os.path.exists(outfile):
                     print('{} exists'.format(os.path.basename(outfile)))
                     continue
+                elif desc in tasks:
+                    print('{} is processing'.format(os.path.basename(outfile)))
+                    continue
+                else:
+                    pass
 
             try:
                 stack = stack_bands(yr, roi)
@@ -251,10 +266,10 @@ if __name__ == '__main__':
 
     _bucket = 'gs://wudr'
 
-    sites = os.path.join(d, 'dads', 'met', 'stations', 'dads_stations_elev_mgrs.csv')
+    sites = os.path.join(d, 'dads', 'dem', 'w17_tiles.csv')
     sites = pd.read_csv(sites)['MGRS_TILE']
-    sites.dropna(inplace=True)
     mgrs_tiles = list(set(sites))
+    mgrs_tiles.sort()
 
     stations = 'dads_stations_elev_mgrs'
     pts = 'projects/ee-dgketchum/assets/dads/{}'.format(stations)
