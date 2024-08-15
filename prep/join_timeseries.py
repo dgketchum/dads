@@ -27,10 +27,8 @@ def join_daily_timeseries(stations, sta_dir, nldas_dir, dst_dir, gridmet_dir=Non
                           shuffle=False):
     """"""
     stations = pd.read_csv(stations)
-    stations.index = stations['fid']
+    stations.index = stations['fid'].astype(str)
     stations.sort_index(inplace=True)
-
-    stations = stations[stations['source'] == 'madis']
 
     if shuffle:
         stations = stations.sample(frac=1)
@@ -47,8 +45,17 @@ def join_daily_timeseries(stations, sta_dir, nldas_dir, dst_dir, gridmet_dir=Non
         stations = stations[(stations['longitude'] < e) & (stations['longitude'] >= w)]
         print('dropped {} stations outside NLDAS-2 extent'.format(ln - stations.shape[0]))
 
-    ct, empty_sdf = 0, []
+    ct, empty_sdf, obs_dir = 0, [], None
     for i, (f, row) in enumerate(stations.iterrows(), start=1):
+
+        if 'snotel' in row['source']:
+            continue
+        elif row['source'].endswith('gwx'):
+            obs_dir = 'gwx'
+        elif row['source'] == 'madis':
+            obs_dir = 'madis'
+        else:
+            raise NotImplementedError('Observation source unknown')
 
         out = os.path.join(dst_dir, '{}.csv'.format(f))
         if os.path.exists(out) and not overwrite:
@@ -86,7 +93,7 @@ def join_daily_timeseries(stations, sta_dir, nldas_dir, dst_dir, gridmet_dir=Non
         grd_cols = ['{}_gm'.format(c) for c in gdf.columns]
         gdf.columns = grd_cols
 
-        sta_file = os.path.join(sta_dir, '{}.csv'.format(f))
+        sta_file = os.path.join(sta_dir, obs_dir, '{}.csv'.format(f))
 
         try:
             sdf = pd.read_csv(sta_file, index_col='Unnamed: 0', parse_dates=True)
@@ -136,7 +143,7 @@ if __name__ == '__main__':
 
     fields = os.path.join(d, 'met', 'stations', 'dads_stations_elev_mgrs.csv')
 
-    obs = os.path.join(d, 'met', 'obs', 'madis')
+    obs = os.path.join(d, 'met', 'obs')
     gm = os.path.join(d, 'met', 'gridded', 'gridmet')
     nl = os.path.join(d, 'met', 'gridded', 'nldas2')
     joined = os.path.join(d, 'met', 'tables', 'obs_grid')
