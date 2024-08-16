@@ -1,5 +1,4 @@
 import os
-import shutil
 
 import requests
 import numpy as np
@@ -98,62 +97,6 @@ def join_stations(snotel, mesonet, agrimet, out_file, fill_elevation=False, boun
     df.to_csv(out_file.replace('.shp', '.csv'))
     print(out_file)
 
-
-def fill_out_elevation(infile, outfile):
-    """"""
-    gdf = gpd.read_file(infile)
-
-    for i, r in gdf.iterrows():
-        try:
-            if isinstance(r['elevation'], type(None)):
-                el = elevation_from_coordinate(r['latitude'], r['longitude'])
-                gdf.loc[i, 'elevation'] = el
-                print(r['fid'], '{:.2f} {} of {}'.format(el, i, gdf.shape[0]))
-            elif np.isnan(r['elevation']):
-                el = elevation_from_coordinate(r['latitude'], r['longitude'])
-                gdf.loc[i, 'elevation'] = el
-                print(r['fid'], '{:.2f} {} of {}'.format(el, i, gdf.shape[0]))
-            else:
-                pass
-        except KeyError:
-            print('Elevation error at {}'.format(r['fid']))
-            continue
-        except requests.exceptions.JSONDecodeError:
-            print('Elevation error at {}'.format(r['fid']))
-            continue
-        except Exception as e:
-            print('Elevation error {} at {}'.format(e, r['fid']))
-            continue
-
-    gdf.to_file(outfile)
-
-
-def cleanup_gwx_misname(d, csv):
-    stations = pd.read_csv(csv)
-    stations['source'] = stations['source'].astype(str)
-
-    for i, r in stations.iterrows():
-        try:
-            fid = int(r['fid'])
-            int_file = True
-        except:
-            int_file = False
-
-        if r['source'].endswith('gwx') or int_file:
-            gridmet = os.path.join(d, 'gridmet', '{}.csv'.format(r['fid']))
-            gridmet_raw = os.path.join(d, 'gridmet_raw', '{}.csv'.format(r['fid']))
-            nldas2 = os.path.join(d, 'nldas2', '{}.csv'.format(r['fid']))
-            nldas2_raw = os.path.join(d, 'nldas2_raw', '{}.csv'.format(r['fid']))
-            for f in [gridmet, gridmet_raw, nldas2, nldas2_raw]:
-                try:
-                    os.remove(f)
-                    print(f"File '{f}' has been successfully deleted.")
-                except FileNotFoundError:
-                    continue
-                except PermissionError:
-                    continue
-                except Exception as e:
-                    continue
 
 if __name__ == '__main__':
     d = '/media/research/IrrigationGIS'
