@@ -151,6 +151,6 @@ if __name__ == '__main__':
             st_code, co_code = geoid[:2], geoid[2:]
             download_county_air_quality_data(js, st_code, co_code, 2000, 2024, data_dst=aq_data)
 
-        write_aqs_shapefile(meta_js=aq_meta, shapefile_out=aq_shp)
+        # write_aqs_shapefile(meta_js=aq_meta, shapefile_out=aq_shp)
 
 # ========================= EOF ====================================================================

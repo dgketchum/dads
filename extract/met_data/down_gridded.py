@@ -114,7 +114,7 @@ if __name__ == '__main__':
     # pandarallel.initialize(nb_workers=6)
 
     madis_data_dir_ = os.path.join(d, 'climate', 'madis')
-    sites = os.path.join(d, 'dads', 'met', 'stations', 'dads_stations.csv')
+    sites = os.path.join(d, 'dads', 'met', 'stations', 'dads_stations_elev_mgrs.csv')
 
     grid_dir = os.path.join(d, 'dads', 'met', 'gridded')
 
