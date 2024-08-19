@@ -23,7 +23,9 @@ torch.set_float32_matmul_precision('medium')
 torch.cuda.get_device_name(torch.cuda.current_device())
 
 rlimit = resource.getrlimit(resource.RLIMIT_NOFILE)
-resource.setrlimit(resource.RLIMIT_NOFILE, (2048, rlimit[1]))
+resource.setrlimit(resource.RLIMIT_NOFILE, (4096, rlimit[1]))
+
+torch.multiprocessing.set_sharing_strategy('file_system')
 
 
 class PTHLSTMDataset(Dataset):
