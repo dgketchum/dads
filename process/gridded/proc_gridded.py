@@ -23,7 +23,7 @@ NLDAS_RESAMPLE_MAP = {'rsds': 'sum',
 
 
 def extract_met_data(stations, gridded_dir, overwrite=False, station_type='openet',
-                     gridmet=False, shuffle=True, bounds=None):
+                     gridmet=False, shuffle=True, bounds=None, hourly=False):
     kw = station_par_map(station_type)
 
     station_list = pd.read_csv(stations, index_col=kw['index'])
@@ -51,10 +51,13 @@ def extract_met_data(stations, gridded_dir, overwrite=False, station_type='opene
             print('Input NLDAS at {} does not exist, skipping'.format(os.path.basename(in_file_)))
             continue
 
-        out_file_ = os.path.join(gridded_dir, 'nldas2', '{}.csv'.format(fid))
+        if hourly:
+            out_file_ = os.path.join(gridded_dir, 'nldas2_hourly', '{}.csv'.format(fid))
+        else:
+            out_file_ = os.path.join(gridded_dir, 'nldas2', '{}.csv'.format(fid))
 
         if not os.path.exists(out_file_) or overwrite:
-            proc_nldas(in_csv=in_file_, lon=lon, lat=lat, elev=elv, out_csv=out_file_)
+            proc_nldas(in_csv=in_file_, lon=lon, lat=lat, elev=elv, out_csv=out_file_, hourly_=hourly)
             print('nldas', fid)
         else:
             # print('nldas {} exists'.format(fid))
@@ -77,7 +80,7 @@ def extract_met_data(stations, gridded_dir, overwrite=False, station_type='opene
                 pass
 
 
-def proc_nldas(in_csv, lat, lon, elev, out_csv):
+def proc_nldas(in_csv, lat, lon, elev, out_csv, hourly_=False):
     df = pd.read_csv(in_csv, index_col='time', parse_dates=True)
 
     try:
@@ -100,12 +103,17 @@ def proc_nldas(in_csv, lat, lon, elev, out_csv):
         df['min_temp'] = df['temp'].copy()
         df['mean_temp'] = df['temp'].copy()
 
+        if hourly_:
+            df['doy'] = [i.dayofyear for i in df.index]
+            df.to_csv(out_csv)
+            return
+
         df = df.resample('D').agg(NLDAS_RESAMPLE_MAP)
 
         df['doy'] = [i.dayofyear for i in df.index]
 
-        asce_params = df.parallel_apply(calc_asce_params, lat=lat, elev=elev, zw=10, axis=1)
-        # asce_params = df.apply(calc_asce_params, lat=lat, elev=elev, zw=10, axis=1)
+        # asce_params = df.parallel_apply(calc_asce_params, lat=lat, elev=elev, zw=10, axis=1)
+        asce_params = df.apply(calc_asce_params, lat=lat, elev=elev, zw=10, axis=1)
         df[['mean_temp', 'vpd', 'rn', 'u2', 'eto']] = pd.DataFrame(asce_params.tolist(),
                                                                    index=df.index)
         df['year'] = [i.year for i in df.index]
@@ -156,13 +164,14 @@ if __name__ == '__main__':
         home = os.path.expanduser('~')
         d = os.path.join(home, 'data', 'IrrigationGIS')
 
-    pandarallel.initialize(nb_workers=6)
+    # pandarallel.initialize(nb_workers=6)
 
     sites = os.path.join(d, 'dads', 'met', 'stations', 'dads_stations_elev_mgrs.csv')
 
     grid_dir = os.path.join(d, 'dads', 'met', 'gridded')
 
     extract_met_data(sites, grid_dir, overwrite=False, station_type='dads',
-                     shuffle=True, bounds=(-125., 25., -96., 49.), gridmet=True)
+                     shuffle=True, bounds=(-125., 25., -96., 49.), gridmet=False,
+                     hourly=True)
 
 # ========================= EOF ====================================================================
