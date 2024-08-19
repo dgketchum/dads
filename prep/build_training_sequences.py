@@ -8,7 +8,7 @@ from tqdm import tqdm
 TERRAIN_FEATURES = ['slope', 'aspect', 'elevation', 'tpi_1250', 'tpi_250', 'tpi_150']
 
 
-def join_training(stations, ts_dir, rs_dir, dem_dir, out_dir, scaling_json, var='rsds', bounds=None):
+def join_training(stations, ts_dir, rs_dir, dem_dir, out_dir, scaling_json, var='rsds', bounds=None, shuffle=False):
     """"""
 
     stations = pd.read_csv(stations)
@@ -20,18 +20,25 @@ def join_training(stations, ts_dir, rs_dir, dem_dir, out_dir, scaling_json, var=
         stations = stations[(stations['latitude'] < n) & (stations['latitude'] >= s)]
         stations = stations[(stations['longitude'] < e) & (stations['longitude'] >= w)]
 
+    if shuffle:
+        stations = stations.sample(frac=1)
+
     ts, ct, scaling, first, shape = None, 0, {}, True, None
-    missing = {'sol_file': 0, 'station_file': 0, 'rs_file': 0, 'snotel': 0}
+    missing = {'sol_file': 0, 'station_file': 0, 'rs_file': 0, 'snotel': 0, 'rs_obs_time_misalign': 0,
+               'sol_fid': 0}
 
     scaling['stations'] = []
 
     tiles = stations['MGRS_TILE'].unique()
     for tile in tqdm(tiles, total=len(tiles)):
 
+        # if not tile != '13TEN':
+        #     continue
+
         sol_file = os.path.join(dem_dir, 'tile_{}.csv'.format(tile))
 
         try:
-            sol_df = pd.read_csv(sol_file)
+            sol_df = pd.read_csv(sol_file, index_col=0)
         except FileNotFoundError:
             missing['sol_file'] += 1
             continue
@@ -39,6 +46,14 @@ def join_training(stations, ts_dir, rs_dir, dem_dir, out_dir, scaling_json, var=
         tile_sites = stations[stations['MGRS_TILE'] == tile]
 
         for i, (f, row) in enumerate(tile_sites.iterrows(), start=1):
+
+            # if f != 'CAMINO':
+            #     continue
+
+            if f in stations['orig_netid'].tolist():
+                fid = f
+            else:
+                fid = row['orig_netid']
 
             if row['source'] == 'snotel':
                 missing['snotel'] += 1
@@ -48,27 +63,43 @@ def join_training(stations, ts_dir, rs_dir, dem_dir, out_dir, scaling_json, var=
             if not os.path.exists(sta_file):
                 missing['station_file'] += 1
                 continue
+
             ts = pd.read_csv(sta_file, index_col='Unnamed: 0', parse_dates=True)
 
             # training depends on having the first three columns like so
             feats = [c for c in ts.columns if c.endswith('_nl') and var not in c]
             ts = ts[[f'{var}_obs', f'{var}_gm', f'{var}_nl'] + feats]
+            ts = ts.astype(float)
 
-            rs_file = os.path.join(rs_dir, '{}.csv'.format(f))
+            # currently will find non-unique original FID file in case original FID is non-unique integer
+            rs_file = os.path.join(rs_dir, '{}.csv'.format(fid))
             if not os.path.exists(rs_file):
                 missing['rs_file'] += 1
                 continue
 
             rs = pd.read_csv(rs_file, index_col='Unnamed: 0', parse_dates=True)
             idx = [i for i in rs.index if i in ts.index]
+            if not idx:
+                missing['rs_obs_time_misalign'] += 1
+                continue
             ts.loc[idx, rs.columns] = rs.loc[idx, rs.columns]
 
-            sol = sol_df[f].to_dict()
+            if fid not in sol_df.columns.to_list():
+                missing['sol_fid'] += 1
+                continue
+
+            sol = sol_df[fid].to_dict()
             ts['doy'] = ts.index.dayofyear
             ts['rsun'] = ts['doy'].map(sol) * 0.0036
 
-            if np.count_nonzero(np.isnan(ts.values)) > 1:
+            try:
+                nan_shape = ts.shape[0]
                 ts.dropna(how='any', axis=0, inplace=True)
+                no_nan_shape = ts.shape[0]
+                # if nan_shape != no_nan_shape:
+                #     print('dropped {} of {}, nan'.format(nan_shape - no_nan_shape, nan_shape))
+            except TypeError:
+                pass
 
             for c in ts.columns:
 
@@ -98,7 +129,7 @@ def join_training(stations, ts_dir, rs_dir, dem_dir, out_dir, scaling_json, var=
                     continue
 
             if ts.empty:
-                print('{} is empty, skipped it'.format(f))
+                # print('{} is empty, skipped it'.format(f))
                 continue
 
             outfile = os.path.join(out_dir, '{}.csv'.format(f))
@@ -121,7 +152,6 @@ if __name__ == '__main__':
     if not os.path.exists(d):
         d = '/home/dgketchum/data/IrrigationGIS/dads'
 
-    overwrite = True
     target_var = 'vpd'
     glob_ = 'dads_stations_elev_mgrs'
 
@@ -145,6 +175,7 @@ if __name__ == '__main__':
     param_dir = os.path.join(training, target_var)
     out_csv = os.path.join(param_dir, 'compiled_csv')
 
+    overwrite = False
     if overwrite:
         l = [os.path.join(out_csv, f) for f in os.listdir(out_csv)]
         [os.remove(f) for f in l]
@@ -162,7 +193,7 @@ if __name__ == '__main__':
         os.mkdir(out_csv)
 
     join_training(fields, sta, rs, solrad, out_csv, scaling_json=scaling_, var=target_var,
-                  bounds=(-125., 40., -103., 49.))
+                  bounds=(-125., 25., -96., 49.), shuffle=True)
 
 
 # ========================= EOF ==============================================================================

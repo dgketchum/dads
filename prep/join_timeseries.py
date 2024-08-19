@@ -24,10 +24,11 @@ NLDAS_COL_DROP = ['doy', 'year', 'date_str']
 
 
 def join_daily_timeseries(stations, sta_dir, nldas_dir, dst_dir, gridmet_dir=None, overwrite=False, bounds=None,
-                          shuffle=False):
+                          shuffle=False, write_missing=None):
     """"""
-    stations = pd.read_csv(stations)
+    stations = pd.read_csv(stations, index_col='index')
     stations.index = stations['fid'].astype(str)
+    stations['source'] = stations['source'].astype(str)
     stations.sort_index(inplace=True)
 
     if shuffle:
@@ -45,7 +46,9 @@ def join_daily_timeseries(stations, sta_dir, nldas_dir, dst_dir, gridmet_dir=Non
         stations = stations[(stations['longitude'] < e) & (stations['longitude'] >= w)]
         print('dropped {} stations outside NLDAS-2 extent'.format(ln - stations.shape[0]))
 
-    ct, empty_sdf, obs_dir = 0, [], None
+    ct, obs_dir = 0, None
+    empty, eidx = pd.DataFrame(columns=['fid', 'source', 'orig_netid']), 0
+
     for i, (f, row) in enumerate(stations.iterrows(), start=1):
 
         if 'snotel' in row['source']:
@@ -55,7 +58,8 @@ def join_daily_timeseries(stations, sta_dir, nldas_dir, dst_dir, gridmet_dir=Non
         elif row['source'] == 'madis':
             obs_dir = 'madis'
         else:
-            raise NotImplementedError('Observation source unknown')
+            print(f'Observation source unknown for {f}')
+            continue
 
         out = os.path.join(dst_dir, '{}.csv'.format(f))
         if os.path.exists(out) and not overwrite:
@@ -63,15 +67,20 @@ def join_daily_timeseries(stations, sta_dir, nldas_dir, dst_dir, gridmet_dir=Non
             df.dropna(subset=['rsds_obs', 'mean_temp_obs', 'vpd_obs',
                               'rn_obs', 'u2_obs', 'eto_obs'], inplace=True, axis=0)
             if df.empty:
-                empty_sdf.append(out)
-                print('obs file has all nan in a column: {}'.format(os.path.basename(out)))
-            print(os.path.basename(out), 'exists, skipping')
+                empty.at[eidx, 'fid'] = f
+                empty.at[eidx, 'source'] = row['source']
+                eidx += 1
+                print('obs file is empty: {}'.format(os.path.basename(out)))
+                continue
+
+            print('{} in {} exists, skipping'.format(os.path.basename(out), row['source']))
             continue
 
         nldas_file = os.path.join(nldas_dir, '{}.csv'.format(f))
         try:
             ndf = pd.read_csv(nldas_file, index_col=0, parse_dates=True)
         except FileNotFoundError:
+            empty, eidx = add_empty_entry(empty, eidx, f, row, 'does not exist', nldas_file)
             print('nldas_file {} does not exist'.format(os.path.basename(nldas_file)))
             continue
 
@@ -85,6 +94,7 @@ def join_daily_timeseries(stations, sta_dir, nldas_dir, dst_dir, gridmet_dir=Non
         try:
             gdf = pd.read_csv(gridmet_file, index_col=0, parse_dates=True)
         except FileNotFoundError:
+            empty, eidx = add_empty_entry(empty, eidx, f, row, 'does not exist', gridmet_file)
             print('gridmet_file {} does not exist'.format(os.path.basename(gridmet_file)))
             continue
 
@@ -100,6 +110,7 @@ def join_daily_timeseries(stations, sta_dir, nldas_dir, dst_dir, gridmet_dir=Non
         except ValueError:
             sdf = pd.read_csv(sta_file, index_col='date', parse_dates=True)
         except FileNotFoundError:
+            empty, eidx = add_empty_entry(empty, eidx, f, row, 'does not exist', sta_file)
             print('sta_file {} does not exist'.format(os.path.basename(sta_file)))
             continue
 
@@ -123,16 +134,27 @@ def join_daily_timeseries(stations, sta_dir, nldas_dir, dst_dir, gridmet_dir=Non
         sdf.dropna(subset=['rsds_obs', 'mean_temp_obs', 'vpd_obs',
                            'rn_obs', 'u2_obs', 'eto_obs'], inplace=True, axis=0)
         if sdf.empty:
-            empty_sdf.append(sta_file)
+            empty, eidx = add_empty_entry(empty, eidx, f, row, 'col all nan', sta_file)
             print('obs file has all nan in a column: {}'.format(os.path.basename(sta_file)))
             continue
         else:
             sdf = sdf.reindex(sorted(sdf.columns), axis=1)
             sdf.to_csv(out)
-            ct += 1
 
-        print('wrote {} to {}, {} records'.format(f, os.path.basename(out), ct))
-    print(empty_sdf)
+        print('wrote {} station {} to {}, {} records'.format(row['source'], f, os.path.basename(out), sdf.shape[0]))
+
+    if write_missing:
+        empty.to_csv(missing_list)
+        print('wrote', missing_list)
+
+
+def add_empty_entry(edf, idx, feat, row_, reason, file_):
+    edf.at[idx, 'fid'] = feat
+    edf.at[idx, 'source'] = row_['source']
+    edf.at[idx, 'note'] = reason
+    edf.at[idx, 'dataset'] = file_
+    idx += 1
+    return edf, idx
 
 
 if __name__ == '__main__':
@@ -147,7 +169,9 @@ if __name__ == '__main__':
     gm = os.path.join(d, 'met', 'gridded', 'gridmet')
     nl = os.path.join(d, 'met', 'gridded', 'nldas2')
     joined = os.path.join(d, 'met', 'tables', 'obs_grid')
+    missing_list = os.path.join(d, 'met', 'tables', 'missing_data.csv')
 
-    join_daily_timeseries(fields, obs, nl, joined, gm, overwrite=False, shuffle=True, bounds=(-125., 40., -103., 49.))
+    join_daily_timeseries(fields, obs, nl, joined, gm, overwrite=False, shuffle=True,
+                          bounds=(-125., 25., -96., 49.), write_missing=missing_list)
 
 # ========================= EOF ====================================================================

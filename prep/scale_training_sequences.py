@@ -129,10 +129,10 @@ if __name__ == '__main__':
     zoran = '/home/dgketchum/training'
     nvm = '/media/nvm/training'
     if os.path.exists(zoran):
-        print('writing to zoran')
+        print('reading from zoran')
         training = zoran
     elif os.path.exists(nvm):
-        print('writing to UM drive')
+        print('reading from UM drive')
         training = nvm
     else:
         training = os.path.join(d, 'training')
