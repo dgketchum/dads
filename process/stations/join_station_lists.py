@@ -12,10 +12,15 @@ from utils.elevation import elevation_from_coordinate
 
 def join_stations(snotel, mesonet, agrimet, out_file, fill_elevation=False, bounds=None):
     ''''''
+
     snotel_data = pd.read_csv(snotel)
+    snotel_data = snotel_data[snotel_data['Network'] == 'SNOTEL']
     snotel_data['source'] = 'snotel'
+    snotel_data['orig_netid'] = snotel_data['ID'].apply(lambda x: x.strip())
+
     mesonet_data = pd.read_csv(mesonet)
     mesonet_data['source'] = 'madis'
+
     agrimet_data = pd.read_csv(agrimet)
     agrimet_data['source'] = agrimet_data['Source'] + '_gwx'
 
@@ -24,12 +29,15 @@ def join_stations(snotel, mesonet, agrimet, out_file, fill_elevation=False, boun
                                                 'ELEV_FT': 'elevation',
                                                 'STATION_LAT': 'latitude',
                                                 'STATION_LON': 'longitude'})
+
     agrimet_data['fid'] = agrimet_data['fid'].astype(str)
     agrimet_data['fid'] = [s.upper() for s in agrimet_data['fid']]
+    agrimet_data['orig_netid'] = [s.upper() for s in agrimet_data['fid']]
     agrimet_data['name'] = agrimet_data['name'].astype(str)
     agrimet_data['name'] = [s.upper() for s in agrimet_data['name']]
 
     mesonet_data = mesonet_data.rename(columns={'index': 'fid', 'NAME': 'name', 'ELEV': 'elevation'})
+    mesonet_data['orig_netid'] = mesonet_data['fid'].astype(str).copy()
     mesonet_data['fid'] = mesonet_data['fid'].astype(str)
     mesonet_data['fid'] = [s.upper() for s in mesonet_data['fid']]
     mesonet_data['name'] = mesonet_data['name'].astype(str)
@@ -41,19 +49,18 @@ def join_stations(snotel, mesonet, agrimet, out_file, fill_elevation=False, boun
     snotel_data['elevation'] /= 3.28084
     agrimet_data['elevation'] /= 3.28084
 
-    snotel_data = snotel_data[['fid', 'name', 'elevation', 'latitude', 'longitude', 'source']]
+    snotel_data = snotel_data[['fid', 'name', 'elevation', 'latitude', 'longitude', 'source', 'orig_netid']]
     snotel_data['fid'] = [f.strip() for f in snotel_data['fid']]
     snotel_data = snotel_data.drop_duplicates()
+
     d, suspects = {}, []
     add_records(d, snotel_data.to_dict(orient='index'), suspects)
 
-    mesonet_data = mesonet_data[['fid', 'name', 'elevation', 'latitude', 'longitude', 'source']]
+    mesonet_data = mesonet_data[['fid', 'name', 'elevation', 'latitude', 'longitude', 'source', 'orig_netid']]
     add_records(d, mesonet_data.to_dict(orient='index'), suspects)
 
-    agrimet_data = agrimet_data[['fid', 'name', 'elevation', 'latitude', 'longitude', 'source']]
+    agrimet_data = agrimet_data[['fid', 'name', 'elevation', 'latitude', 'longitude', 'source', 'orig_netid']]
     add_records(d, agrimet_data.to_dict(orient='index'), suspects)
-
-
 
     if fill_elevation:
         for e, (i, r) in enumerate(d.items(), start=1):
@@ -94,7 +101,6 @@ def join_stations(snotel, mesonet, agrimet, out_file, fill_elevation=False, boun
 
 
 def add_records(d, n, l):
-
     for k, v in n.items():
 
         try:
@@ -107,7 +113,6 @@ def add_records(d, n, l):
             r = re.sub(r'\W+', '_', v['name'])[:10].upper()
             d[r] = {kk: vv for kk, vv in v.items() if kk != 'fid'}
             continue
-
 
         if v['fid'] not in d.keys():
             d[v['fid']] = {kk: vv for kk, vv in v.items() if kk != 'fid'}
@@ -129,7 +134,8 @@ if __name__ == '__main__':
     sno_list = os.path.join(d, 'climate', 'snotel', 'snotel_list.csv')
     meso_list = os.path.join(d, 'climate', 'madis', 'mesonet_sites.csv')
     agrim_list = os.path.join(d, 'dads', 'met', 'stations', 'openet_gridwxcomp_input.csv')
-    stations = os.path.join(d, 'dads', 'met', 'stations', 'dads_stations_renamed_elev.shp')
-    join_stations(sno_list, meso_list, agrim_list, stations, bounds=None, fill_elevation=True)
+
+    stations = os.path.join(d, 'dads', 'met', 'stations', 'dads_stations_origid.shp')
+    join_stations(sno_list, meso_list, agrim_list, stations, bounds=None, fill_elevation=False)
 
 # ========================= EOF ====================================================================
