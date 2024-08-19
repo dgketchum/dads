@@ -2,6 +2,7 @@ import glob
 import gzip
 import os
 import subprocess
+import multiprocessing
 import time
 import warnings
 from datetime import datetime, timedelta
@@ -138,7 +139,7 @@ def download_and_extract(data_source, start_time, end_time, madis_data_dir, user
         current_dt += timedelta(days=1)
 
 
-def read_madis_hourly(data_directory, date, output_directory, shapefile=None):
+def read_madis_hourly(data_directory, date, output_directory, shapefile=None, bounds=(-125., 25., -96., 49.)):
     file_pattern = os.path.join(data_directory, f"*{date}*.gz")
     file_list = sorted(glob.glob(file_pattern))
     if not file_list:
@@ -161,8 +162,8 @@ def read_madis_hourly(data_directory, date, output_directory, shapefile=None):
                 valid_data = ds[required_vars]
                 df = valid_data.to_dataframe()
                 df['stationId'] = df['stationId'].astype(str)
-                df = df[(df['latitude'] < 49.1) & (df['latitude'] >= 25.0)]
-                df = df[(df['longitude'] < -65) & (df['longitude'] >= -125.0)]
+                df = df[(df['latitude'] < bounds[3]) & (df['latitude'] >= bounds[1])]
+                df = df[(df['longitude'] < bounds[2]) & (df['longitude'] >= bounds[0])]
                 df.dropna(how='any', inplace=True)
                 df.set_index('stationId', inplace=True, drop=True)
 
@@ -229,12 +230,13 @@ def write_locations(loc, shp):
 def process_time_chunk(time_tuple):
     start_time, end_time = time_tuple
     # aria gives a speedup of at least 50%
-    download_and_extract(dataset, start_time, end_time, madis_data_dir_, usr, pswd, downloader='aria2c')
+    # download_and_extract(dataset, start_time, end_time, madis_data_dir_, usr, pswd, downloader='aria2c')
 
     mesonet_dir = os.path.join(madis_data_dir_, 'LDAD', 'mesonet', 'netCDF')
-    out_dir = os.path.join(madis_data_dir_, 'LDAD', 'mesonet', 'csv')
-    outshp = os.path.join(madis_data_dir_, 'LDAD', 'mesonet', 'integrated_mesonet_{}.shp'.format(start_time))
-    read_madis_hourly(mesonet_dir, start_time[:6], out_dir, shapefile=outshp)
+    out_dir = os.path.join(madis_data_dir_, 'LDAD', 'mesonet', 'csv_north')
+    outshp = os.path.join(madis_data_dir_, 'LDAD', 'mesonet', 'shape_north',
+                          'integrated_mesonet_{}.shp'.format(start_time))
+    read_madis_hourly(mesonet_dir, start_time[:6], out_dir, shapefile=outshp, bounds=(-180., 49., -96., 85.))
 
 
 def madis_station_shapefile(mesonet_dir, meta_file, outfile):
@@ -294,7 +296,7 @@ if __name__ == "__main__":
     dataset = 'INTEGRATED_MESONET'
 
     # debug
-    # process_time_chunk(times[-1])
+    process_time_chunk(times[-1])
 
     print(f"Processing dataset: {dataset} with {num_processes} processes")
 
