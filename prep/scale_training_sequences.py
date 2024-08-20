@@ -26,7 +26,7 @@ def print_rsmse(o, n, g):
 
 
 def apply_scaling_and_save(csv_dir, scaling_json, training_metadata, output_dir, train_frac=0.8,
-                           chunk_size=10, chunks_per_file=1000, target='rsds'):
+                           chunk_size=100, chunks_per_file=1000, target='rsds'):
     with open(scaling_json, 'r') as f:
         scaling_data = json.load(f)
 
@@ -57,7 +57,10 @@ def apply_scaling_and_save(csv_dir, scaling_json, training_metadata, output_dir,
         scaling_data['{}_stations'.format(fate)].append(station)
 
         filepath = os.path.join(csv_dir, '{}.csv'.format(station))
-        df = pd.read_csv(filepath)
+        try:
+            df = pd.read_csv(filepath)
+        except FileNotFoundError:
+            continue
 
         if df.empty:
             continue
@@ -124,7 +127,7 @@ if __name__ == '__main__':
     if not os.path.exists(d):
         d = '/home/dgketchum/data/IrrigationGIS/dads'
 
-    target_var = 'vpd'
+    target_var = 'mean_temp'
 
     zoran = '/home/dgketchum/training'
     nvm = '/media/nvm/training'
