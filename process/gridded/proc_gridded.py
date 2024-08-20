@@ -7,7 +7,7 @@ from pandarallel import pandarallel
 from refet import calcs
 
 from extract.met_data.down_gridded import station_par_map
-from utils.calc_eto import calc_asce_params
+from utils.calc_eto import calc_asce_params, calc_asce_params_hourly
 
 PACIFIC = pytz.timezone('US/Pacific')
 
@@ -60,7 +60,7 @@ def extract_met_data(stations, gridded_dir, overwrite=False, station_type='opene
             proc_nldas(in_csv=in_file_, lon=lon, lat=lat, elev=elv, out_csv=out_file_, hourly_=hourly)
             print('nldas', fid)
         else:
-            # print('nldas {} exists'.format(fid))
+            print('nldas {} exists'.format(fid))
             pass
 
         if gridmet:
@@ -99,14 +99,15 @@ def proc_nldas(in_csv, lat, lon, elev, out_csv, hourly_=False):
         df['ea'] = calcs._actual_vapor_pressure(pair=calcs._air_pressure(elev),
                                                 q=df['humidity'])
 
-        df['max_temp'] = df['temp'].copy()
-        df['min_temp'] = df['temp'].copy()
         df['mean_temp'] = df['temp'].copy()
 
         if hourly_:
             df['doy'] = [i.dayofyear for i in df.index]
             df.to_csv(out_csv)
             return
+
+        df['max_temp'] = df['temp'].copy()
+        df['min_temp'] = df['temp'].copy()
 
         df = df.resample('D').agg(NLDAS_RESAMPLE_MAP)
 
@@ -170,7 +171,7 @@ if __name__ == '__main__':
 
     grid_dir = os.path.join(d, 'dads', 'met', 'gridded')
 
-    extract_met_data(sites, grid_dir, overwrite=False, station_type='dads',
+    extract_met_data(sites, grid_dir, overwrite=True, station_type='dads',
                      shuffle=True, bounds=(-125., 25., -96., 49.), gridmet=False,
                      hourly=True)
 
