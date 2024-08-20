@@ -230,13 +230,13 @@ def write_locations(loc, shp):
 def process_time_chunk(time_tuple):
     start_time, end_time = time_tuple
     # aria gives a speedup of at least 50%
-    # download_and_extract(dataset, start_time, end_time, madis_data_dir_, usr, pswd, downloader='aria2c')
+    download_and_extract(dataset, start_time, end_time, madis_data_dir_, usr, pswd, downloader='aria2c')
 
     mesonet_dir = os.path.join(madis_data_dir_, 'LDAD', 'mesonet', 'netCDF')
     out_dir = os.path.join(madis_data_dir_, 'LDAD', 'mesonet', 'csv_north')
     outshp = os.path.join(madis_data_dir_, 'LDAD', 'mesonet', 'shape_north',
                           'integrated_mesonet_{}.shp'.format(start_time))
-    read_madis_hourly(mesonet_dir, start_time[:6], out_dir, shapefile=outshp, bounds=(-180., 49., -96., 85.))
+    read_madis_hourly(mesonet_dir, start_time[:6], out_dir, shapefile=outshp, bounds=(-180., 25., -60., 85.))
 
 
 def madis_station_shapefile(mesonet_dir, meta_file, outfile):
@@ -251,7 +251,7 @@ def madis_station_shapefile(mesonet_dir, meta_file, outfile):
         print(os.path.basename(shapefile))
         gdf = gpd.read_file(shapefile)
         if 'index' in gdf.columns:
-            unique_rows = gdf[~gdf['index'].isin(unique_ids)]
+            unique_rows = gdf[~gdf['index'].isin(unique_ids)].copy()
             unique_rows.index = unique_rows['index']
             idx = [i for i in meta.index if i in unique_rows.index]
 
@@ -283,27 +283,29 @@ if __name__ == "__main__":
 
     usr, pswd = 'usr', 'pswd'
     madis_data_dir_ = os.path.join(d, 'climate', 'madis')
+    madis_shapes = os.path.join(madis_data_dir_, 'LDAD', 'mesonet', 'shape_north')
+
     stn_meta = os.path.join(d, 'climate', 'madis', 'public_stn_list.csv')
     mesonet_dir = os.path.join(madis_data_dir_, 'LDAD', 'mesonet')
 
     # the FTP we're currently using has from 2001-07-01
-    times = generate_monthly_time_tuples(2001, 2023)
+    times = generate_monthly_time_tuples(2023, 2024)
     times = [t for t in times if int(t[0][:6]) >= 200107]
 
-    num_processes = 1
-    # num_processes = 8
+    # num_processes = 1
+    num_processes = 8
 
     dataset = 'INTEGRATED_MESONET'
 
     # debug
-    process_time_chunk(times[-1])
+    # process_time_chunk(times[-1])
 
     print(f"Processing dataset: {dataset} with {num_processes} processes")
 
-    # with multiprocessing.Pool(processes=num_processes) as pool:
-    #     pool.map(process_time_chunk, times)
+    with multiprocessing.Pool(processes=num_processes) as pool:
+        pool.map(process_time_chunk, times)
 
-    sites = os.path.join(madis_data_dir_, 'mesonet_sites.shp')
-    madis_station_shapefile(mesonet_dir, stn_meta, sites)
+    # sites = os.path.join(madis_data_dir_, 'mesonet_sites_north.shp')
+    # madis_station_shapefile(madis_shapes, stn_meta, sites)
 
 # ========================= EOF ====================================================================
