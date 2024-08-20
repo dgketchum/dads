@@ -18,13 +18,13 @@ VAR_MAP = {'rsds': 'Rs (w/m2)',
 
 RENAME_MAP = {v: k for k, v in VAR_MAP.items()}
 
-COMPARISON_VARS = ['rsds', 'mean_temp', 'vpd', 'rn', 'u2', 'eto']
+COMPARISON_VARS = ['rsds', 'mean_temp', 'vpd', 'rn', 'u2']
 
 NLDAS_COL_DROP = ['doy', 'year', 'date_str']
 
 
 def join_daily_timeseries(stations, sta_dir, nldas_dir, dst_dir, gridmet_dir=None, overwrite=False, bounds=None,
-                          shuffle=False, write_missing=None):
+                          shuffle=False, write_missing=None, hourly=False):
     """"""
     stations = pd.read_csv(stations, index_col='index')
     stations.index = stations['fid'].astype(str)
@@ -46,8 +46,11 @@ def join_daily_timeseries(stations, sta_dir, nldas_dir, dst_dir, gridmet_dir=Non
         stations = stations[(stations['longitude'] < e) & (stations['longitude'] >= w)]
         print('dropped {} stations outside NLDAS-2 extent'.format(ln - stations.shape[0]))
 
-    ct, obs_dir = 0, None
+    ct, obs_dir, ndf_hr = 0, None, None
     empty, eidx = pd.DataFrame(columns=['fid', 'source', 'orig_netid']), 0
+
+    if hourly:
+        nldas_hr_dir = nldas_dir + '_hourly'
 
     for i, (f, row) in enumerate(stations.iterrows(), start=1):
 
@@ -61,11 +64,15 @@ def join_daily_timeseries(stations, sta_dir, nldas_dir, dst_dir, gridmet_dir=Non
             print(f'Observation source unknown for {f}')
             continue
 
-        out = os.path.join(dst_dir, '{}.csv'.format(f))
+        if hourly:
+            out = os.path.join(dst_dir, 'hourly', '{}.csv'.format(f))
+        else:
+            out = os.path.join(dst_dir, 'daily', '{}.csv'.format(f))
+
         if os.path.exists(out) and not overwrite:
             df = pd.read_csv(out)
             df.dropna(subset=['rsds_obs', 'mean_temp_obs', 'vpd_obs',
-                              'rn_obs', 'u2_obs', 'eto_obs'], inplace=True, axis=0)
+                              'rn_obs', 'u2_obs'], inplace=True, axis=0)
             if df.empty:
                 empty.at[eidx, 'fid'] = f
                 empty.at[eidx, 'source'] = row['source']
@@ -77,16 +84,27 @@ def join_daily_timeseries(stations, sta_dir, nldas_dir, dst_dir, gridmet_dir=Non
             continue
 
         nldas_file = os.path.join(nldas_dir, '{}.csv'.format(f))
+
         try:
             ndf = pd.read_csv(nldas_file, index_col=0, parse_dates=True)
+
+            if hourly:
+                nldas_hr_file = os.path.join(nldas_hr_dir, '{}.csv'.format(f))
+                ndf_hr = pd.read_csv(nldas_hr_file, index_col=0, parse_dates=True)
+                ndf_hr.index = pd.DatetimeIndex(
+                    [datetime.datetime(i.year, i.month, i.day, i.hour) for i in ndf_hr.index])
+                ndf_hr.drop(columns=['doy'], inplace=True)
+                nld_hr_cols = ['{}_nl_hr'.format(c) for c in ndf_hr.columns]
+                ndf_hr.columns = nld_hr_cols
+
         except FileNotFoundError:
             empty, eidx = add_empty_entry(empty, eidx, f, row, 'does not exist', nldas_file)
             print('nldas_file {} does not exist'.format(os.path.basename(nldas_file)))
             continue
 
         ndf.index = pd.DatetimeIndex([datetime.date(i.year, i.month, i.day) for i in ndf.index])
-        # ndf = ndf[COMPARISON_VARS]
         ndf.drop(columns=NLDAS_COL_DROP, inplace=True)
+
         nld_cols = ['{}_nl'.format(c) for c in ndf.columns]
         ndf.columns = nld_cols
 
@@ -123,22 +141,33 @@ def join_daily_timeseries(stations, sta_dir, nldas_dir, dst_dir, gridmet_dir=Non
         data_cols = obs_cols + grd_cols + nld_cols
         all_cols = ['FID'] + data_cols
 
+        if hourly:
+            gdf = gdf.resample('H').ffill()
+            sdf = sdf.resample('H').ffill()
+            ndf = ndf.resample('H').ffill()
+            ndf_hr = ndf_hr.loc[~ndf_hr.index.duplicated(keep='first')]
+            data_cols = obs_cols + grd_cols + nld_cols + nld_hr_cols
+            all_cols = ['FID'] + data_cols
+
         try:
-            sdf = pd.concat([sdf, gdf, ndf], ignore_index=False, axis=1)
+            if hourly:
+                sdf = pd.concat([sdf, gdf, ndf, ndf_hr], ignore_index=False, axis=1)
+            else:
+                sdf = pd.concat([sdf, gdf, ndf], ignore_index=False, axis=1)
         except pd.errors.InvalidIndexError:
             print('Non-unique index in {}'.format(f))
             continue
 
         sdf['FID'] = f
-        sdf = sdf[all_cols]
+        sdf = sdf[all_cols].copy()
         sdf.dropna(subset=['rsds_obs', 'mean_temp_obs', 'vpd_obs',
-                           'rn_obs', 'u2_obs', 'eto_obs'], inplace=True, axis=0)
+                           'rn_obs', 'u2_obs'], inplace=True, axis=0)
         if sdf.empty:
             empty, eidx = add_empty_entry(empty, eidx, f, row, 'col all nan', sta_file)
             print('obs file has all nan in a column: {}'.format(os.path.basename(sta_file)))
             continue
         else:
-            sdf = sdf.reindex(sorted(sdf.columns), axis=1)
+            sdf = sdf[sorted(sdf.columns)]
             sdf.to_csv(out)
 
         print('wrote {} station {} to {}, {} records'.format(row['source'], f, os.path.basename(out), sdf.shape[0]))
@@ -167,11 +196,12 @@ if __name__ == '__main__':
 
     obs = os.path.join(d, 'met', 'obs')
     gm = os.path.join(d, 'met', 'gridded', 'gridmet')
-    nl = os.path.join(d, 'met', 'gridded', 'nldas2')
-    joined = os.path.join(d, 'met', 'tables', 'obs_grid')
-    missing_list = os.path.join(d, 'met', 'tables', 'missing_data.csv')
+    joined = os.path.join(d, 'met', 'obs_grid')
+    missing_list = os.path.join(d, 'met', 'obs_grid', 'missing_data.csv')
 
+    hourly_ = True
+    nl = os.path.join(d, 'met', 'gridded', 'nldas2')
     join_daily_timeseries(fields, obs, nl, joined, gm, overwrite=False, shuffle=True,
-                          bounds=(-125., 25., -96., 49.), write_missing=missing_list)
+                          bounds=(-125., 25., -96., 49.), write_missing=missing_list, hourly=hourly_)
 
 # ========================= EOF ====================================================================
