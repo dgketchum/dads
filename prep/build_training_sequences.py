@@ -8,7 +8,8 @@ from tqdm import tqdm
 TERRAIN_FEATURES = ['slope', 'aspect', 'elevation', 'tpi_1250', 'tpi_250', 'tpi_150']
 
 
-def join_training(stations, ts_dir, rs_dir, dem_dir, out_dir, scaling_json, var='rsds', bounds=None, shuffle=False):
+def join_training(stations, ts_dir, rs_dir, dem_dir, out_dir, scaling_json, var='rsds', bounds=None, shuffle=False,
+                  overwrite=False):
     """"""
 
     stations = pd.read_csv(stations)
@@ -32,8 +33,8 @@ def join_training(stations, ts_dir, rs_dir, dem_dir, out_dir, scaling_json, var=
     tiles = stations['MGRS_TILE'].unique()
     for tile in tqdm(tiles, total=len(tiles)):
 
-        # if not tile != '13TEN':
-        #     continue
+        if tile not in ['12TUP', '12TVP', '12TUN', '12TVN']:
+            continue
 
         sol_file = os.path.join(dem_dir, 'tile_{}.csv'.format(tile))
 
@@ -49,6 +50,10 @@ def join_training(stations, ts_dir, rs_dir, dem_dir, out_dir, scaling_json, var=
 
             # if f != 'CAMINO':
             #     continue
+
+            outfile = os.path.join(out_dir, '{}.csv'.format(f))
+            if os.path.exists(outfile) and not overwrite:
+                continue
 
             if f in stations['orig_netid'].tolist():
                 fid = f
@@ -69,6 +74,10 @@ def join_training(stations, ts_dir, rs_dir, dem_dir, out_dir, scaling_json, var=
             # training depends on having the first three columns like so
             feats = [c for c in ts.columns if c.endswith('_nl') and var not in c]
             ts = ts[[f'{var}_obs', f'{var}_gm', f'{var}_nl'] + feats]
+            try:
+                ts.loc[:, 'lat'], ts.loc[:, 'lon'] = row['latitude'], row['longitude']
+            except ValueError:
+                continue
             ts = ts.astype(float)
 
             # currently will find non-unique original FID file in case original FID is non-unique integer
@@ -132,7 +141,6 @@ def join_training(stations, ts_dir, rs_dir, dem_dir, out_dir, scaling_json, var=
                 # print('{} is empty, skipped it'.format(f))
                 continue
 
-            outfile = os.path.join(out_dir, '{}.csv'.format(f))
             # write csv without dt index
             ts.to_csv(outfile, index=False)
             ct += ts.shape[0]
@@ -152,11 +160,11 @@ if __name__ == '__main__':
     if not os.path.exists(d):
         d = '/home/dgketchum/data/IrrigationGIS/dads'
 
-    target_var = 'vpd'
+    target_var = 'mean_temp'
     glob_ = 'dads_stations_elev_mgrs'
 
     fields = os.path.join(d, 'met', 'stations', '{}.csv'.format(glob_))
-    sta = os.path.join(d, 'met', 'tables', 'obs_grid')
+    sta = os.path.join(d, 'met', 'obs_grid')
     rs = os.path.join(d, 'rs', 'dads_stations', 'landsat', 'station_data')
     solrad = os.path.join(d, 'dem', 'rsun_tables')
 
@@ -175,8 +183,10 @@ if __name__ == '__main__':
     param_dir = os.path.join(training, target_var)
     out_csv = os.path.join(param_dir, 'compiled_csv')
 
-    overwrite = False
-    if overwrite:
+    overwrite_ = False
+    remove_existing = False
+
+    if overwrite_ or remove_existing:
         l = [os.path.join(out_csv, f) for f in os.listdir(out_csv)]
         [os.remove(f) for f in l]
         print('removed existing data in {}'.format(out_csv))
@@ -193,7 +203,6 @@ if __name__ == '__main__':
         os.mkdir(out_csv)
 
     join_training(fields, sta, rs, solrad, out_csv, scaling_json=scaling_, var=target_var,
-                  bounds=(-125., 25., -96., 49.), shuffle=True)
-
+                  bounds=(-125., 25., -96., 49.), shuffle=True, overwrite=overwrite_)
 
 # ========================= EOF ==============================================================================
