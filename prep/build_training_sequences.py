@@ -8,7 +8,7 @@ from tqdm import tqdm
 TERRAIN_FEATURES = ['slope', 'aspect', 'elevation', 'tpi_1250', 'tpi_250', 'tpi_150']
 
 
-def join_training(stations, ts_dir, landsat_dir, dem_dir, out_dir, scaling_json, var='rsds',
+def join_training(stations, ts_dir, landsat_dir, dem_dir, out_dir, scaling_json=None, var='rsds',
                   bounds=None, shuffle=False, overwrite=False, hourly=False):
     """"""
 
@@ -115,24 +115,30 @@ def join_training(stations, ts_dir, landsat_dir, dem_dir, out_dir, scaling_json,
             except TypeError:
                 pass
 
-            for c in ts.columns:
+            if scaling_json:
+                for c in ts.columns:
 
-                for mm in ['max', 'min']:
+                    for mm in ['max', 'min']:
 
-                    p = '{}_{}'.format(c, mm)
-                    v = ts[c].agg(mm, axis=0)
+                        p = '{}_{}'.format(c, mm)
+                        v = ts[c].agg(mm, axis=0)
 
-                    if p not in scaling.keys():
-                        scaling[p] = v.item()
+                        if p not in scaling.keys():
+                            scaling[p] = v.item()
 
-                    if mm == 'max' and v > scaling[p]:
-                        scaling[p] = v.item()
+                        if mm == 'max' and v > scaling[p]:
+                            scaling[p] = v.item()
 
-                    if mm == 'min' and v < scaling[p]:
-                        scaling[p] = v.item()
+                        if mm == 'min' and v < scaling[p]:
+                            scaling[p] = v.item()
 
             # mark consecutive days
-            ts['doy_diff'] = ts.index.to_series().diff().dt.days.fillna(1)
+            if hourly:
+                deltas = ts.index.to_series().diff().dt.seconds.fillna(3600)
+                ts.loc[deltas != 3600, 'dt_diff'] = 2
+                ts.loc[deltas == 3600, 'dt_diff'] = 1
+            else:
+                ts['dt_diff'] = ts.index.to_series().diff().dt.days.fillna(1)
 
             if first:
                 shape = ts.shape[1]
@@ -151,8 +157,9 @@ def join_training(stations, ts_dir, landsat_dir, dem_dir, out_dir, scaling_json,
             ct += ts.shape[0]
             scaling['stations'].append(f)
 
-    with open(scaling_json, 'w') as fp:
-        json.dump(scaling, fp, indent=4)
+    if scaling_json:
+        with open(scaling_json, 'w') as fp:
+            json.dump(scaling, fp, indent=4)
 
     print('\ntime series obs count {}\n{} stations'.format(ct, len(scaling['stations'])))
     print('wrote {} features'.format(ts.shape[1] - 3))
@@ -189,6 +196,7 @@ if __name__ == '__main__':
 
     hourly = True
     overwrite_ = False
+    write_scaling = False
     remove_existing = False
 
     if hourly:
@@ -201,7 +209,10 @@ if __name__ == '__main__':
         [os.remove(f) for f in l]
         print('removed existing data in {}'.format(out_csv))
 
-    scaling_ = os.path.join(param_dir, 'scaling_metadata.json')
+    if write_scaling:
+        scaling_ = os.path.join(param_dir, 'scaling_metadata.json')
+    else:
+        scaling_ = None
 
     if not os.path.exists(training):
         os.mkdir(training)
