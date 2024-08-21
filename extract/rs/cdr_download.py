@@ -121,7 +121,7 @@ if __name__ == '__main__':
     cdr_data = os.path.join(d, 'dads', 'rs', 'cdr')
     cdr_meta = os.path.join(d, 'dads', 'rs', 'cdr_catalog.json')
 
-    # get_catalog(cdr_meta)
+    get_catalog(cdr_meta)
     download(cdr_data, cdr_meta)
 
 # ========================= EOF ====================================================================
