@@ -1,13 +1,10 @@
-import os
 import json
+import os
 import subprocess
 import time
-from datetime import datetime
-from pathlib import Path
-import requests
-from pprint import pprint
-from urllib.parse import urlunparse
+from multiprocessing import Pool
 
+import requests
 from bs4 import BeautifulSoup
 
 CATALOG = {
@@ -74,41 +71,45 @@ def get_catalog(out_meta):
         json.dump(catalog, fp, indent=4)
 
 
-def download(data_dir, meta):
+def download_chunk(chunk):
+    local_dir, urls, targets = chunk
+    if not all([os.path.exists(f) for f in targets]):
+        try:
+            input_file = "aria2c_input.txt"
+            with open(input_file, "w") as f:
+                for file_name in urls:
+                    f.write('{}\n'.format(file_name))
+            aria2c_cmd = [
+                "aria2c", "-x", "16", "-s", "16", "--http-user",
+                "--allow-overwrite=false", "--dir", local_dir, "--input-file", input_file,
+            ]
+            subprocess.run(aria2c_cmd, check=True)
+            time.sleep(0.5)
+
+        except subprocess.CalledProcessError as e:
+            print(f"Failed download on {targets[0]}")
+
+        print(f"Download {os.path.basename(targets[0])} : {os.path.basename(targets[-1])}")
+    else:
+        print('chunks exist')
+
+
+def download(data_dir, meta, num_proc):
     """Download and extract data for a given dataset."""
 
     with open(meta, 'r') as f:
         catalog = json.load(f)
 
-    local_dir = os.path.join(data_dir, 'nc')
-    download_count = 0
-
     for year in range(2000, 2025):
-        start = time.perf_counter()
-        urls = [v[1] for k, v in catalog[str(year)].items()]
-        targets = [os.path.join(local_dir, v[0]) for k, v in catalog[str(year)].items()]
+        all_urls = [v[1] for k, v in catalog[str(year)].items()]
+        all_targets = [os.path.join(data_dir, v[0]) for k, v in catalog[str(year)].items()]
 
-        if not all([os.path.exists(f) for f in targets]):
-            try:
-                input_file = "aria2c_input.txt"
-                with open(input_file, "w") as f:
-                    for file_name in urls:
-                        f.write('{}\n'.format(file_name))
-                aria2c_cmd = [
-                    "aria2c", "-x", "16", "-s", "16", "--http-user",
-                    "--allow-overwrite=true", "--dir", local_dir, "--input-file", input_file,
-                ]
-                subprocess.run(aria2c_cmd, check=True)
+        urls_chunked = [all_urls[i:i + 5] for i in range(0, len(all_urls), 5)]
+        targets_chunked = [all_targets[i:i + 5] for i in range(0, len(all_targets), 5)]
+        dirs = [data_dir for _ in targets_chunked]
 
-            except subprocess.CalledProcessError as e:
-                print(f"Failed download to {local_dir} for {year} {e}")
-
-            if download_count % 10 == 0:
-                print('sleep wait')
-                time.sleep(0.5)
-
-            end = time.perf_counter()
-            print(f"Download {year} took {end - start:0.2f} seconds")
+        with Pool(processes=num_proc) as p:
+            p.map(download_chunk, zip(dirs, urls_chunked, targets_chunked))
 
 
 if __name__ == '__main__':
@@ -118,10 +119,10 @@ if __name__ == '__main__':
         d = '/home/dgketchum/data/IrrigationGIS'
 
     usr, pswd = 'usr', 'pswd'
-    cdr_data = os.path.join(d, 'dads', 'rs', 'cdr')
-    cdr_meta = os.path.join(d, 'dads', 'rs', 'cdr_catalog.json')
+    cdr_data = os.path.join(d, 'dads', 'rs', 'cdr', 'nc')
+    cdr_meta = os.path.join(d, 'dads', 'rs', 'cdr', 'cdr_catalog.json')
 
     get_catalog(cdr_meta)
-    download(cdr_data, cdr_meta)
+    download(cdr_data, cdr_meta, num_proc=8)
 
 # ========================= EOF ====================================================================
