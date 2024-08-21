@@ -70,16 +70,6 @@ def join_daily_timeseries(stations, sta_dir, nldas_dir, dst_dir, gridmet_dir=Non
             out = os.path.join(dst_dir, 'daily', '{}.csv'.format(f))
 
         if os.path.exists(out) and not overwrite:
-            df = pd.read_csv(out)
-            df.dropna(subset=['rsds_obs', 'mean_temp_obs', 'vpd_obs',
-                              'rn_obs', 'u2_obs'], inplace=True, axis=0)
-            if df.empty:
-                empty.at[eidx, 'fid'] = f
-                empty.at[eidx, 'source'] = row['source']
-                eidx += 1
-                print('obs file is empty: {}'.format(os.path.basename(out)))
-                continue
-
             print('{} in {} exists, skipping'.format(os.path.basename(out), row['source']))
             continue
 
