@@ -9,7 +9,7 @@ TERRAIN_FEATURES = ['slope', 'aspect', 'elevation', 'tpi_1250', 'tpi_250', 'tpi_
 
 
 def join_training(stations, ts_dir, landsat_dir, dem_dir, out_dir, scaling_json=None, var='rsds',
-                  bounds=None, shuffle=False, overwrite=False, hourly=False):
+                  bounds=None, shuffle=False, overwrite=False, hourly=False, sample_frac=1.0):
     """"""
 
     stations = pd.read_csv(stations)
@@ -22,7 +22,7 @@ def join_training(stations, ts_dir, landsat_dir, dem_dir, out_dir, scaling_json=
         stations = stations[(stations['longitude'] < e) & (stations['longitude'] >= w)]
 
     if shuffle:
-        stations = stations.sample(frac=1)
+        stations = stations.sample(frac=sample_frac)
 
     ts, ct, scaling, first, shape = None, 0, {}, True, None
     missing = {'sol_file': 0, 'station_file': 0, 'rs_file': 0, 'snotel': 0, 'rs_obs_time_misalign': 0,
@@ -132,13 +132,20 @@ def join_training(stations, ts_dir, landsat_dir, dem_dir, out_dir, scaling_json=
                         if mm == 'min' and v < scaling[p]:
                             scaling[p] = v.item()
 
+            if ts.empty:
+                # print('{} is empty, skipped it'.format(f))
+                continue
+
             # mark consecutive days
-            if hourly:
-                deltas = ts.index.to_series().diff().dt.seconds.fillna(3600)
-                ts.loc[deltas != 3600, 'dt_diff'] = 2
-                ts.loc[deltas == 3600, 'dt_diff'] = 1
-            else:
-                ts['dt_diff'] = ts.index.to_series().diff().dt.days.fillna(1)
+            try:
+                if hourly:
+                    deltas = ts.index.to_series().diff().dt.seconds.fillna(3600)
+                    ts.loc[deltas != 3600, 'dt_diff'] = 2
+                    ts.loc[deltas == 3600, 'dt_diff'] = 1
+                else:
+                    ts['dt_diff'] = ts.index.to_series().diff().dt.days.fillna(1)
+            except ValueError:
+                continue
 
             if first:
                 shape = ts.shape[1]
@@ -147,10 +154,6 @@ def join_training(stations, ts_dir, landsat_dir, dem_dir, out_dir, scaling_json=
                 if ts.shape[1] != shape:
                     print('{} has {} cols, should have {}, skipped it'.format(f, ts.shape[1], shape))
                     continue
-
-            if ts.empty:
-                # print('{} is empty, skipped it'.format(f))
-                continue
 
             # write csv without dt index
             ts.to_csv(outfile, index=False)
@@ -172,7 +175,7 @@ if __name__ == '__main__':
     if not os.path.exists(d):
         d = '/home/dgketchum/data/IrrigationGIS/dads'
 
-    target_var = 'mean_temp'
+    target_var = 'vpd'
     glob_ = 'dads_stations_elev_mgrs'
 
     fields = os.path.join(d, 'met', 'stations', '{}.csv'.format(glob_))
@@ -196,7 +199,7 @@ if __name__ == '__main__':
 
     hourly = True
     overwrite_ = False
-    write_scaling = False
+    write_scaling = True
     remove_existing = False
 
     if hourly:
@@ -223,7 +226,10 @@ if __name__ == '__main__':
     if not os.path.exists(out_csv):
         os.mkdir(out_csv)
 
+    print('========================== writing {} =========================='.format(target_var))
+
+    # W. MT: (-117., 42.5, -110., 49.)
     join_training(fields, sta, landsat_, solrad, out_csv, scaling_json=scaling_, var=target_var,
-                  bounds=(-117., 42.5, -110., 49.), shuffle=True, overwrite=overwrite_, hourly=True)
+                  bounds=(-125., 25., -96., 49.), shuffle=True, overwrite=overwrite_, hourly=True, sample_frac=0.2)
 
 # ========================= EOF ==============================================================================

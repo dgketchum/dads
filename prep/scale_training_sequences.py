@@ -127,7 +127,7 @@ if __name__ == '__main__':
     if not os.path.exists(d):
         d = '/home/dgketchum/data/IrrigationGIS/dads'
 
-    target_var = 'mean_temp'
+    target_var = 'vpd'
 
     zoran = '/home/dgketchum/training'
     nvm = '/media/nvm/training'
@@ -160,6 +160,8 @@ if __name__ == '__main__':
 
     if not os.path.exists(out_pth):
         os.mkdir(out_pth)
+
+    print('========================== scaling {} =========================='.format(target_var))
 
     apply_scaling_and_save(out_csv, scaling_, metadata, out_pth, target=target_var)
 # ========================= EOF ==============================================================================
