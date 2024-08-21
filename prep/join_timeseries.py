@@ -132,9 +132,9 @@ def join_daily_timeseries(stations, sta_dir, nldas_dir, dst_dir, gridmet_dir=Non
         all_cols = ['FID'] + data_cols
 
         if hourly:
-            gdf = gdf.resample('H').ffill()
-            sdf = sdf.resample('H').ffill()
-            ndf = ndf.resample('H').ffill()
+            gdf = gdf.resample('h').ffill()
+            sdf = sdf.resample('h').ffill()
+            ndf = ndf.resample('h').ffill()
             ndf_hr = ndf_hr.loc[~ndf_hr.index.duplicated(keep='first')]
             data_cols = obs_cols + grd_cols + nld_cols + nld_hr_cols
             all_cols = ['FID'] + data_cols
@@ -186,12 +186,12 @@ if __name__ == '__main__':
 
     obs = os.path.join(d, 'met', 'obs')
     gm = os.path.join(d, 'met', 'gridded', 'gridmet')
-    joined = os.path.join(d, 'met', 'obs_grid')
-    missing_list = os.path.join(d, 'met', 'obs_grid', 'missing_data.csv')
+    joined = os.path.join(d, 'met', 'joined')
+    missing_list = os.path.join(d, 'met', 'joined', 'missing_data.csv')
 
     hourly_ = True
     nl = os.path.join(d, 'met', 'gridded', 'nldas2')
     join_daily_timeseries(fields, obs, nl, joined, gm, overwrite=False, shuffle=True,
-                          bounds=(-125., 25., -96., 49.), write_missing=missing_list, hourly=hourly_)
+                          bounds=(-117., 42.5, -110., 49.), write_missing=missing_list, hourly=hourly_)
 
 # ========================= EOF ====================================================================
