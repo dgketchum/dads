@@ -8,8 +8,8 @@ from tqdm import tqdm
 TERRAIN_FEATURES = ['slope', 'aspect', 'elevation', 'tpi_1250', 'tpi_250', 'tpi_150']
 
 
-def join_training(stations, ts_dir, rs_dir, dem_dir, out_dir, scaling_json, var='rsds', bounds=None, shuffle=False,
-                  overwrite=False):
+def join_training(stations, ts_dir, landsat_dir, dem_dir, out_dir, scaling_json, var='rsds',
+                  bounds=None, shuffle=False, overwrite=False, hourly=False):
     """"""
 
     stations = pd.read_csv(stations)
@@ -33,8 +33,8 @@ def join_training(stations, ts_dir, rs_dir, dem_dir, out_dir, scaling_json, var=
     tiles = stations['MGRS_TILE'].unique()
     for tile in tqdm(tiles, total=len(tiles)):
 
-        if tile not in ['12TUP', '12TVP', '12TUN', '12TVN']:
-            continue
+        # if tile not in ['12TUP', '12TVP', '12TUN', '12TVN']:
+        #     continue
 
         sol_file = os.path.join(dem_dir, 'tile_{}.csv'.format(tile))
 
@@ -72,7 +72,8 @@ def join_training(stations, ts_dir, rs_dir, dem_dir, out_dir, scaling_json, var=
             ts = pd.read_csv(sta_file, index_col='Unnamed: 0', parse_dates=True)
 
             # training depends on having the first three columns like so
-            feats = [c for c in ts.columns if c.endswith('_nl') and var not in c]
+            feats = [c for c in ts.columns if c.endswith('_nl') or c.endswith('_nl_hr')]
+            feats = [c for c in feats if var not in c]
             ts = ts[[f'{var}_obs', f'{var}_gm', f'{var}_nl'] + feats]
             try:
                 ts.loc[:, 'lat'], ts.loc[:, 'lon'] = row['latitude'], row['longitude']
@@ -81,12 +82,14 @@ def join_training(stations, ts_dir, rs_dir, dem_dir, out_dir, scaling_json, var=
             ts = ts.astype(float)
 
             # currently will find non-unique original FID file in case original FID is non-unique integer
-            rs_file = os.path.join(rs_dir, '{}.csv'.format(fid))
+            rs_file = os.path.join(landsat_dir, '{}.csv'.format(fid))
             if not os.path.exists(rs_file):
                 missing['rs_file'] += 1
                 continue
 
             rs = pd.read_csv(rs_file, index_col='Unnamed: 0', parse_dates=True)
+            if hourly:
+                rs = rs.resample('h').ffill()
             idx = [i for i in rs.index if i in ts.index]
             if not idx:
                 missing['rs_obs_time_misalign'] += 1
@@ -100,6 +103,8 @@ def join_training(stations, ts_dir, rs_dir, dem_dir, out_dir, scaling_json, var=
             sol = sol_df[fid].to_dict()
             ts['doy'] = ts.index.dayofyear
             ts['rsun'] = ts['doy'].map(sol) * 0.0036
+
+            ts = ts.loc[~ts.index.duplicated(keep='first')]
 
             try:
                 nan_shape = ts.shape[0]
@@ -164,8 +169,7 @@ if __name__ == '__main__':
     glob_ = 'dads_stations_elev_mgrs'
 
     fields = os.path.join(d, 'met', 'stations', '{}.csv'.format(glob_))
-    sta = os.path.join(d, 'met', 'obs_grid')
-    rs = os.path.join(d, 'rs', 'dads_stations', 'landsat', 'station_data')
+    landsat_ = os.path.join(d, 'rs', 'dads_stations', 'landsat', 'station_data')
     solrad = os.path.join(d, 'dem', 'rsun_tables')
 
     zoran = '/home/dgketchum/training'
@@ -183,8 +187,14 @@ if __name__ == '__main__':
     param_dir = os.path.join(training, target_var)
     out_csv = os.path.join(param_dir, 'compiled_csv')
 
+    hourly = True
     overwrite_ = False
     remove_existing = False
+
+    if hourly:
+        sta = os.path.join(d, 'met', 'joined', 'hourly')
+    else:
+        sta = os.path.join(d, 'met', 'joined', 'daily')
 
     if overwrite_ or remove_existing:
         l = [os.path.join(out_csv, f) for f in os.listdir(out_csv)]
@@ -202,7 +212,7 @@ if __name__ == '__main__':
     if not os.path.exists(out_csv):
         os.mkdir(out_csv)
 
-    join_training(fields, sta, rs, solrad, out_csv, scaling_json=scaling_, var=target_var,
-                  bounds=(-125., 25., -96., 49.), shuffle=True, overwrite=overwrite_)
+    join_training(fields, sta, landsat_, solrad, out_csv, scaling_json=scaling_, var=target_var,
+                  bounds=(-117., 42.5, -110., 49.), shuffle=True, overwrite=overwrite_, hourly=True)
 
 # ========================= EOF ==============================================================================
