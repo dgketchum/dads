@@ -1,12 +1,16 @@
 import json
 import os
+import glob
 import time
 
+import geopandas as gpd
 import requests
 import urllib3
-import numpy as np
+
+import xarray as xr
 import pandas as pd
-import geopandas as gpd
+import numpy as np
+from scipy.spatial import cKDTree
 
 from utils.state_county_names_codes import state_county_code, state_fips_code
 
@@ -82,32 +86,33 @@ def download_county_air_quality_data(key_file, state_fips, county_fips, start_da
                 continue
 
 
-def build_aq_metadata(d, outshp, out_json):
-    state_fips, county_fips = None, None
-    stco_code = '{}{}'.format(state_fips, county_fips)
+def create_daily_idw_raster(csv_files_pattern):
+    dfs = []
+    for file in glob.glob(csv_files_pattern):
+        df = pd.read_csv(file)
+        df['timestamp'] = pd.to_datetime(df['timestamp'])
+        dfs.append(df)
 
-    meta = {}
+    df = pd.concat(dfs)
+    ds = xr.Dataset.from_dataframe(df.set_index(['timestamp', 'latitude', 'longitude']))
 
-    if not isinstance(df, pd.DataFrame):
-        meta[stco_code] = 'nodata'
-        pass
-    else:
-        df.index = pd.DatetimeIndex(df.index)
-        df.sort_index(inplace=True)
-        meta[stco_code] = {'state': st_fips[state_fips]}
-        meta[stco_code].update({'county': name})
-        meta[stco_code].update({'site_no': site_no})
-        _ = [meta[stco_code].update({'{}_len'.format(v): np.isfinite(df[v]).sum(axis=0).item()
-        if v in df.columns else 0 for k, v in AQS_PARAMETERS.items()})]
-        meta[stco_code].update({'start': df.index[0].strftime('%Y-%m-%d')})
-        meta[stco_code].update({'end': df.index[-1].strftime('%Y-%m-%d')})
-        meta[stco_code].update({'lat': lat.item()})
-        meta[stco_code].update({'lon': lon.item()})
-        df.to_csv(filoutshpe_)
-        print('write {}, {}'.format(name, st_fips[state_fips]))
+    grid_lon = np.arange(-130, -60, 0.1)
+    grid_lat = np.arange(25, 50, 0.1)
 
-    with open(meta_js, 'w') as fp:
-        json.dump(meta, fp, indent=4)
+    def compute_idw(data):
+        station_coords = data[['longitude', 'latitude']].values
+        tree = cKDTree(station_coords)
+        grid_coords = np.array(np.meshgrid(grid_lon, grid_lat)).T.reshape(-1, 2)
+        distances, indices = tree.query(grid_coords, k=5)
+        weights = 1.0 / distances**2
+        weights /= weights.sum(axis=1, keepdims=True)
+        aqi_values = data['aqi'].values[indices]
+        interpolated_aqi = np.sum(weights * aqi_values, axis=1)
+        return interpolated_aqi.reshape(len(grid_lat), len(grid_lon))
+
+    daily_idw = ds.groupby('timestamp.date').apply(compute_idw)
+    daily_idw_da = xr.DataArray(daily_idw.values, coords=[daily_idw.index, grid_lat, grid_lon], dims=['time', 'lat', 'lon'])
+    daily_idw_da.to_netcdf('daily_aqi_idw.nc')
 
 
 def write_aqs_shapefile(meta_js, shapefile_out):
@@ -149,8 +154,8 @@ if __name__ == '__main__':
 
         for geoid, name_ in counties.items():
             st_code, co_code = geoid[:2], geoid[2:]
-            download_county_air_quality_data(js, st_code, co_code, 2000, 2024, data_dst=aq_data)
+            # download_county_air_quality_data(js, st_code, co_code, 2000, 2024, data_dst=aq_data)
 
-        # write_aqs_shapefile(meta_js=aq_meta, shapefile_out=aq_shp)
+        write_aqs_shapefile(meta_js=aq_meta, shapefile_out=aq_shp)
 
 # ========================= EOF ====================================================================
