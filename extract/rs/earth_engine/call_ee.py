@@ -5,9 +5,9 @@ import time
 import ee
 import pandas as pd
 
-sys.path.insert(0, os.path.abspath('..'))
-from extract.earth_engine.cdl import get_cdl
-from extract.earth_engine.ee_utils import is_authorized, landsat_composites
+sys.path.insert(0, os.path.abspath('../..'))
+from extract.rs.earth_engine.cdl import get_cdl
+from extract.rs.earth_engine.ee_utils import is_authorized, landsat_composites
 
 sys.setrecursionlimit(2000)
 

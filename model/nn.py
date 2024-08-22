@@ -74,31 +74,21 @@ class LSTMPredictor(pl.LightningModule):
         self.input_expansion = nn.Sequential(
             nn.Linear(num_bands, num_bands * expansion_factor),
             nn.ReLU(),
-            nn.Linear(num_bands * expansion_factor, num_bands * expansion_factor * 2),
-            nn.ReLU(),
-            nn.Dropout(dropout_rate),
-            nn.Linear(num_bands * expansion_factor * 2, num_bands * expansion_factor * 4),
-            nn.ReLU(),
             nn.Dropout(dropout_rate)
         )
 
-        self.bilstm = nn.LSTM(num_bands * expansion_factor * 4, hidden_size, num_layers, batch_first=True,
+        self.bilstm = nn.LSTM(num_bands * expansion_factor, hidden_size, num_layers, batch_first=True,
                               bidirectional=True)
 
         self.output_layers = nn.Sequential(
             nn.Dropout(dropout_rate),
-            nn.Linear(hidden_size * 2, hidden_size * 8),
+            nn.Linear(hidden_size * 2, hidden_size * 2),
             nn.ReLU(),
             nn.Dropout(dropout_rate),
-            nn.Linear(hidden_size * 8, hidden_size * 4),
-            nn.ReLU(),
-            nn.Linear(hidden_size * 4, hidden_size * 2),
-            nn.ReLU(),
             nn.Linear(hidden_size * 2, hidden_size),
             nn.ReLU(),
-            nn.Linear(hidden_size, hidden_size // 2),
-            nn.ReLU(),
-            nn.Linear(hidden_size // 2, 1)
+            nn.Dropout(dropout_rate),
+            nn.Linear(hidden_size, 1)
         )
 
         self.criterion = nn.MSELoss()
@@ -122,7 +112,7 @@ class LSTMPredictor(pl.LightningModule):
         loss = self.criterion(y_hat, y_obs)
         self.log("train_loss", loss)
 
-        self.logger.experiment.add_scalar("Loss/Train", loss, self.current_epoch)  # Log training loss
+        self.logger.experiment.add_scalar("Loss/Train", loss, self.current_epoch)
         return loss
 
     def validation_step(self, batch, batch_idx):
@@ -133,7 +123,7 @@ class LSTMPredictor(pl.LightningModule):
         y_gm = y_gm.squeeze()[:, -1]
 
         loss_obs = self.criterion(y_hat, y_obs)
-        self.log("val_loss_obs", loss_obs, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
+        self.log("val_loss", loss_obs, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
 
         y_hat_obs_np = y_hat.detach().cpu().numpy()
         y_obs_np = y_obs.detach().cpu().numpy()
@@ -161,12 +151,12 @@ class LSTMPredictor(pl.LightningModule):
 
     def configure_optimizers(self):
         optimizer = optim.Adam(self.parameters(), lr=self.learning_rate)
-        scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=10)
+        scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=5)
         return {
             'optimizer': optimizer,
             'lr_scheduler': {
                 'scheduler': scheduler,
-                'monitor': 'val_loss_obs'
+                'monitor': 'val_loss'
             }
         }
 
@@ -199,7 +189,7 @@ def train_model(pth, metadata, batch_size=1, learning_rate=0.01, n_workers=1):
 
     logger = TensorBoardLogger(save_dir=param_dir, name="lstm_logs")
 
-    early_stopping = EarlyStopping(monitor="val_loss_obs", patience=50, mode="min")
+    early_stopping = EarlyStopping(monitor="val_loss", patience=50, mode="min")
     trainer = pl.Trainer(max_epochs=1000, callbacks=[early_stopping], logger=logger)
 
     trainer.fit(model, train_dataloader, val_dataloader)
@@ -211,7 +201,7 @@ if __name__ == '__main__':
     if not os.path.exists(d):
         d = '/home/dgketchum/data/IrrigationGIS/dads'
 
-    target_var = 'vpd'
+    target_var = 'mean_temp'
 
     if device_name == 'NVIDIA GeForce RTX 2080':
         workers = 6
@@ -226,14 +216,17 @@ if __name__ == '__main__':
         print('writing to zoran')
         training = zoran
     elif os.path.exists(nvm):
-        print('writing to UM drive')
+        print('writing to NVM drive')
         training = nvm
     else:
+        print('writing to UM drive')
         training = os.path.join(d, 'training')
+
+    print('========================== modeling {} =========================='.format(target_var))
 
     param_dir = os.path.join(training, target_var)
     pth_ = os.path.join(param_dir, 'scaled_pth')
     metadata_ = os.path.join(param_dir, 'training_metadata.json')
 
-    train_model(pth_, metadata_, batch_size=128, learning_rate=0.01, n_workers=workers)
+    train_model(pth_, metadata_, batch_size=256, learning_rate=0.0001, n_workers=workers)
 # ========================= EOF ====================================================================

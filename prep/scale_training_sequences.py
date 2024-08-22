@@ -26,7 +26,7 @@ def print_rsmse(o, n, g):
 
 
 def apply_scaling_and_save(csv_dir, scaling_json, training_metadata, output_dir, train_frac=0.8,
-                           chunk_size=100, chunks_per_file=1000, target='rsds'):
+                           chunk_size=72, chunks_per_file=1000, target='rsds'):
     with open(scaling_json, 'r') as f:
         scaling_data = json.load(f)
 
@@ -70,8 +70,8 @@ def apply_scaling_and_save(csv_dir, scaling_json, training_metadata, output_dir,
             gm.extend(df[f'{target}_gm'].to_list())
             nl.extend(df[f'{target}_nl'].to_list())
 
-        day_diff = df['doy_diff'].astype(int).to_list()
-        df.drop(columns=['doy_diff'], inplace=True)
+        day_diff = df['dt_diff'].astype(int).to_list()
+        df.drop(columns=['dt_diff'], inplace=True)
 
         for col in df.columns:
 
@@ -127,17 +127,18 @@ if __name__ == '__main__':
     if not os.path.exists(d):
         d = '/home/dgketchum/data/IrrigationGIS/dads'
 
-    target_var = 'mean_temp'
+    target_var = 'vpd'
 
     zoran = '/home/dgketchum/training'
     nvm = '/media/nvm/training'
     if os.path.exists(zoran):
         print('reading from zoran')
         training = zoran
-    elif os.path.exists(nvm):
-        print('reading from UM drive')
-        training = nvm
+    # elif os.path.exists(nvm):
+    #     print('reading from local NVM drive')
+    #     training = nvm
     else:
+        print('reading from UM drive')
         training = os.path.join(d, 'training')
 
     param_dir = os.path.join(training, target_var)
@@ -159,6 +160,8 @@ if __name__ == '__main__':
 
     if not os.path.exists(out_pth):
         os.mkdir(out_pth)
+
+    print('========================== scaling {} =========================='.format(target_var))
 
     apply_scaling_and_save(out_csv, scaling_, metadata, out_pth, target=target_var)
 # ========================= EOF ==============================================================================
