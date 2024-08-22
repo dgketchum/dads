@@ -5,6 +5,12 @@ from sklearn.metrics.pairwise import haversine_distances
 import numpy as np
 
 
+"""
+This file is unused because the MODIS data has large regions not covered on a daily basis. Moving to use NOAA CDDR 
+Surface Reflectance.
+"""
+
+
 def read_and_merge_rs_files(directory, stations_csv, out_csv):
     """"""
     stations = pd.read_csv(stations_csv)
