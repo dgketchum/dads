@@ -72,8 +72,9 @@ def join_training(stations, ts_dir, landsat_dir, dem_dir, out_dir, scaling_json=
             ts = pd.read_csv(sta_file, index_col='Unnamed: 0', parse_dates=True)
 
             # training depends on having the first three columns like so
-            feats = [c for c in ts.columns if c.endswith('_nl') or c.endswith('_nl_hr')]
+            feats = [c for c in ts.columns if c.endswith('_nl')]
             feats = [c for c in feats if var not in c]
+
             ts = ts[[f'{var}_obs', f'{var}_gm', f'{var}_nl'] + feats]
             try:
                 ts.loc[:, 'lat'], ts.loc[:, 'lon'] = row['latitude'], row['longitude']
@@ -156,7 +157,7 @@ def join_training(stations, ts_dir, landsat_dir, dem_dir, out_dir, scaling_json=
                     continue
 
             # write csv without dt index
-            ts.to_csv(outfile, index=False)
+            ts.to_csv(outfile)
             ct += ts.shape[0]
             scaling['stations'].append(f)
 
@@ -197,9 +198,9 @@ if __name__ == '__main__':
     param_dir = os.path.join(training, target_var)
     out_csv = os.path.join(param_dir, 'compiled_csv')
 
-    hourly = True
+    hourly = False
     overwrite_ = False
-    write_scaling = True
+    write_scaling = False
     remove_existing = False
 
     if hourly:
@@ -230,6 +231,6 @@ if __name__ == '__main__':
 
     # W. MT: (-117., 42.5, -110., 49.)
     join_training(fields, sta, landsat_, solrad, out_csv, scaling_json=scaling_, var=target_var,
-                  bounds=(-125., 25., -96., 49.), shuffle=True, overwrite=overwrite_, hourly=True, sample_frac=0.2)
+                  bounds=(-125., 25., -96., 49.), shuffle=False, overwrite=overwrite_, hourly=hourly, sample_frac=1.0)
 
 # ========================= EOF ==============================================================================

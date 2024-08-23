@@ -189,7 +189,7 @@ if __name__ == '__main__':
     joined = os.path.join(d, 'met', 'joined')
     missing_list = os.path.join(d, 'met', 'joined', 'missing_data.csv')
 
-    hourly_ = True
+    hourly_ = False
     nl = os.path.join(d, 'met', 'gridded', 'nldas2')
     join_daily_timeseries(fields, obs, nl, joined, gm, overwrite=False, shuffle=True,
                           bounds=(-125., 25., -96., 49.), write_missing=missing_list, hourly=hourly_)

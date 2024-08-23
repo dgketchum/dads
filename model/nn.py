@@ -7,7 +7,6 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from pytorch_lightning.callbacks.early_stopping import EarlyStopping
-from pytorch_lightning.loggers import TensorBoardLogger
 
 from sklearn.metrics import r2_score, root_mean_squared_error
 from torch.optim.lr_scheduler import ReduceLROnPlateau
@@ -31,10 +30,11 @@ torch.multiprocessing.set_sharing_strategy('file_system')
 
 
 class PTHLSTMDataset(Dataset):
-    def __init__(self, file_path, chunk_size, transform=None):
+    def __init__(self, file_path, col_index, chunk_size, transform=None):
         self.data = torch.load(file_path, weights_only=True)
         self.chunk_size = chunk_size
         self.transform = transform
+        self.col_index = col_index
 
     def __len__(self):
         return len(self.data)
@@ -48,8 +48,12 @@ class PTHLSTMDataset(Dataset):
         if len(chunk) < self.chunk_size:
             return None
 
-        x, y, gm = chunk[:, 2:], chunk[:, 0], chunk[:, 1]
-        return x, y, gm
+        y, gm, lf, hf = (chunk[:, self.col_index[0]],
+                         chunk[:, self.col_index[1]],
+                         chunk[:, self.col_index[2]: self.col_index[3]],
+                         chunk[:, self.col_index[3]:])
+
+        return y, gm, lf, hf
 
 
 def custom_collate(batch):
@@ -60,67 +64,95 @@ def custom_collate(batch):
 
 
 def stack_batch(batch):
-    x = torch.stack([item[0] for item in batch])
-    y = torch.stack([item[1] for item in batch])
-    g = torch.stack([item[2] for item in batch])
-    return x, y, g
+    y = torch.stack([item[0] for item in batch])
+    gm = torch.stack([item[1] for item in batch])
+    lf = torch.stack([item[2] for item in batch])
+    hf = torch.stack([item[3] for item in batch])
+    return y, gm, lf, hf
 
 
 class LSTMPredictor(pl.LightningModule):
-    def __init__(self, num_bands=10, hidden_size=64, num_layers=2, learning_rate=0.001,
-                 expansion_factor=2, dropout_rate=0.5):
+    def __init__(self,
+                 num_bands_lf=32,
+                 num_bands_hf=14,
+                 hidden_size=64,
+                 num_layers=2,
+                 learning_rate=0.01,
+                 expansion_factor=2,
+                 dropout_rate=0.1):
         super().__init__()
 
-        self.input_expansion = nn.Sequential(
-            nn.Linear(num_bands, num_bands * expansion_factor),
+        self.input_expansion_hf = nn.Sequential(
+            nn.Linear(num_bands_hf, num_bands_hf * expansion_factor),
             nn.ReLU(),
-            nn.Dropout(dropout_rate)
+            nn.Linear(num_bands_hf * expansion_factor, num_bands_hf * expansion_factor * 2),
+            nn.ReLU(),
+            nn.Linear(num_bands_hf * expansion_factor * 2, num_bands_hf * expansion_factor * 4),
+            nn.ReLU(),
         )
 
-        self.bilstm = nn.LSTM(num_bands * expansion_factor, hidden_size, num_layers, batch_first=True,
-                              bidirectional=True)
+        self.input_expansion_lf = nn.Sequential(
+            nn.Linear(num_bands_lf, num_bands_lf * expansion_factor),
+            nn.ReLU(),
+            nn.Linear(num_bands_lf * expansion_factor, num_bands_lf * expansion_factor * 2),
+            nn.ReLU(),
+        )
+
+        self.lstm_hf = nn.LSTM(num_bands_hf * expansion_factor * 4, hidden_size, num_layers, batch_first=True,
+                               bidirectional=True)
+
+        self.lstm_lf = nn.LSTM(num_bands_lf * expansion_factor * 2, hidden_size, num_layers, batch_first=True,
+                               bidirectional=True)
+
+        self.fc1 = nn.Linear(4 * hidden_size, hidden_size * 4)
 
         self.output_layers = nn.Sequential(
-            nn.Dropout(dropout_rate),
-            nn.Linear(hidden_size * 2, hidden_size * 2),
             nn.ReLU(),
             nn.Dropout(dropout_rate),
-            nn.Linear(hidden_size * 2, hidden_size),
+            nn.Linear(hidden_size * 4, hidden_size),
             nn.ReLU(),
             nn.Dropout(dropout_rate),
             nn.Linear(hidden_size, 1)
         )
 
-        self.criterion = nn.MSELoss()
+        self.criterion = nn.L1Loss()
         self.learning_rate = learning_rate
 
-    def forward(self, x):
-        x = x.squeeze()
-        x = self.input_expansion(x)
-        out, _ = self.bilstm(x)
-        out = out[:, -1, :]
+    def forward(self, x_lf, x_hf):
+        x_lf = x_lf.squeeze()
+        x_lf = self.input_expansion_lf(x_lf)
+        out_lf, _ = self.lstm_lf(x_lf)
+        out_lf = out_lf[:, -1, :]
+
+        x_hf = x_hf.squeeze()
+        x_hf = self.input_expansion_hf(x_hf)
+        out_hf, _ = self.lstm_hf(x_hf)
+        out_hf = out_hf[:, -1, :]
+
+        combined = torch.cat((out_hf, out_lf), dim=1)
+        out = self.fc1(combined)
         out = self.output_layers(out)
         return out
 
     def training_step(self, batch, batch_idx):
-        x, y_obs, y_gm = stack_batch(batch)
-
-        x = x.squeeze()
-        y_hat = self(x).squeeze()
-        y_obs = y_obs.squeeze()[:, -1]
+        y, gm, lf, hf = stack_batch(batch)
+        y_hat = self(lf, hf)
+        y_obs = y[:, -1]
 
         loss = self.criterion(y_hat, y_obs)
         self.log("train_loss", loss)
-
-        self.logger.experiment.add_scalar("Loss/Train", loss, self.current_epoch)
         return loss
 
-    def validation_step(self, batch, batch_idx):
-        x, y_obs, y_gm = batch
+    def on_validation_epoch_end(self):
+        current_lr = self.trainer.optimizers[0].param_groups[0]['lr']
+        lr_ratio = current_lr / self.learning_rate
+        print(f"Current Learning Rate: {current_lr}, Ratio to Starting LR: {lr_ratio}")
 
-        y_hat = self(x).squeeze()
-        y_obs = y_obs.squeeze()[:, -1]
-        y_gm = y_gm.squeeze()[:, -1]
+    def validation_step(self, batch, batch_idx):
+        y, gm, lf, hf = batch
+        y_hat = self(lf, hf)
+        y_obs = y[:, -1]
+        y_gm = gm[:, -1]
 
         loss_obs = self.criterion(y_hat, y_obs)
         self.log("val_loss", loss_obs, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
@@ -139,13 +171,6 @@ class LSTMPredictor(pl.LightningModule):
 
         self.log("val_rmse", rmse_obs, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
         self.log("val_rmse_gm", rmse_gm, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
-
-        self.logger.experiment.add_scalar("Loss/Val_Obs", loss_obs, self.current_epoch)
-
-        self.logger.experiment.add_scalar("Metrics/Val_R2", r2_obs, self.current_epoch)
-        self.logger.experiment.add_scalar("Metrics/Val_R2_GM", r2_gm, self.current_epoch)
-        self.logger.experiment.add_scalar("Metrics/Val_RMSE", rmse_obs, self.current_epoch)
-        self.logger.experiment.add_scalar("Metrics/Val_RMSE_GM", rmse_gm, self.current_epoch)
 
         return loss_obs
 
@@ -167,13 +192,16 @@ def train_model(pth, metadata, batch_size=1, learning_rate=0.01, n_workers=1):
     with open(metadata, 'r') as f:
         meta = json.load(f)
 
+    data_frequency = meta['data_frequency']
+    # idxs: obs, gm, start_daily: end_daily, start_hourly:
+    hf_idx = data_frequency.index('hf')
+    idxs = (0, 1, 2, hf_idx)
+    hf_bands = data_frequency.count('hf')
+    lf_bands = data_frequency.count('lf') - 2
     chunk_size = meta['chunk_size']
 
-    features = [c for c, s in zip(meta['column_order'], meta['scaling_status']) if s == 'scaled']
-    feature_len = len(features)
-
     train_file = os.path.join(pth, 'train', 'all_data.pth')
-    train_dataset = PTHLSTMDataset(train_file, chunk_size=chunk_size)
+    train_dataset = PTHLSTMDataset(train_file, idxs, chunk_size=chunk_size)
     train_dataloader = DataLoader(train_dataset,
                                   batch_size=batch_size,
                                   shuffle=True,
@@ -181,16 +209,18 @@ def train_model(pth, metadata, batch_size=1, learning_rate=0.01, n_workers=1):
                                   collate_fn=lambda batch: [x for x in batch if x is not None])
 
     val_file = os.path.join(pth, 'val', 'all_data.pth')
-    val_dataset = PTHLSTMDataset(val_file, chunk_size=chunk_size)
+    val_dataset = PTHLSTMDataset(val_file, idxs, chunk_size=chunk_size)
     val_dataloader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=n_workers,
                                 collate_fn=custom_collate)
 
-    model = LSTMPredictor(num_bands=feature_len, learning_rate=learning_rate)
+    model = LSTMPredictor(num_bands_lf=lf_bands,
+                          num_bands_hf=hf_bands,
+                          learning_rate=learning_rate)
 
-    logger = TensorBoardLogger(save_dir=param_dir, name="lstm_logs")
+    # logger = TensorBoardLogger(save_dir=param_dir, name="lstm_logs")
 
     early_stopping = EarlyStopping(monitor="val_loss", patience=50, mode="min")
-    trainer = pl.Trainer(max_epochs=1000, callbacks=[early_stopping], logger=logger)
+    trainer = pl.Trainer(max_epochs=1000, callbacks=[early_stopping])
 
     trainer.fit(model, train_dataloader, val_dataloader)
 
@@ -201,7 +231,7 @@ if __name__ == '__main__':
     if not os.path.exists(d):
         d = '/home/dgketchum/data/IrrigationGIS/dads'
 
-    target_var = 'mean_temp'
+    target_var = 'vpd'
 
     if device_name == 'NVIDIA GeForce RTX 2080':
         workers = 6
@@ -228,5 +258,5 @@ if __name__ == '__main__':
     pth_ = os.path.join(param_dir, 'scaled_pth')
     metadata_ = os.path.join(param_dir, 'training_metadata.json')
 
-    train_model(pth_, metadata_, batch_size=256, learning_rate=0.0001, n_workers=workers)
+    train_model(pth_, metadata_, batch_size=256, learning_rate=0.01, n_workers=workers)
 # ========================= EOF ====================================================================

@@ -1,11 +1,13 @@
 import os
 import json
 import random
-from tqdm import tqdm
+from datetime import datetime
 
+from tqdm import tqdm
 import numpy as np
 import pandas as pd
 import torch
+
 from sklearn.metrics import r2_score, root_mean_squared_error
 
 from process.rs.landsat_prep import build_landsat_tables
@@ -26,12 +28,13 @@ def print_rsmse(o, n, g):
 
 
 def apply_scaling_and_save(csv_dir, scaling_json, training_metadata, output_dir, train_frac=0.8,
-                           chunk_size=72, chunks_per_file=1000, target='rsds'):
+                           chunk_size=72, chunks_per_file=1000, target='rsds', hourly_dir=None):
     with open(scaling_json, 'r') as f:
         scaling_data = json.load(f)
 
     scaling_data['column_order'] = []
     scaling_data['scaling_status'] = []
+    scaling_data['data_frequency'] = []
     scaling_data['observation_count'] = 0
 
     stations = scaling_data['stations']
@@ -58,7 +61,17 @@ def apply_scaling_and_save(csv_dir, scaling_json, training_metadata, output_dir,
 
         filepath = os.path.join(csv_dir, '{}.csv'.format(station))
         try:
-            df = pd.read_csv(filepath)
+            df = pd.read_csv(filepath, index_col=0, parse_dates=True)
+            if hourly_dir:
+                hr_filepath = os.path.join(hourly_dir, '{}.csv'.format(station))
+                dfhr = pd.read_csv(hr_filepath, index_col=0, parse_dates=True)
+                dfhr.index = [datetime(i.year, i.month, i.day, i.hour) for i in dfhr.index]
+
+                start_date = max(df.index.min(), dfhr.index.min())
+                end_date = min(df.index.max(), dfhr.index.max())
+                df = df.loc[start_date:end_date]
+                dfhr = dfhr.loc[start_date:end_date]
+
         except FileNotFoundError:
             continue
 
@@ -79,6 +92,7 @@ def apply_scaling_and_save(csv_dir, scaling_json, training_metadata, output_dir,
                 if first:
                     scaling_data['column_order'].append(col)
                     scaling_data['scaling_status'].append('unscaled')
+                    scaling_data['data_frequency'].append('lf')
                 continue
             else:
                 min_val = scaling_data[f'{col}_min']
@@ -87,25 +101,50 @@ def apply_scaling_and_save(csv_dir, scaling_json, training_metadata, output_dir,
                 if first:
                     scaling_data['column_order'].append(col)
                     scaling_data['scaling_status'].append('scaled')
+                    scaling_data['data_frequency'].append('lf')
+
+        for col in dfhr.columns:
+            if col == 'doy':
+                min_val, max_val = 0, 365
+            else:
+                min_val = scaling_data[f'{col}_nl_hr_min']
+                max_val = scaling_data[f'{col}_nl_hr_max']
+            dfhr[col] = (dfhr[col] - min_val) / (max_val - min_val)
+            if first:
+                scaling_data['column_order'].append(col)
+                scaling_data['scaling_status'].append('scaled')
+                scaling_data['data_frequency'].append('hf')
 
         first = False
 
-        data_tensor = torch.tensor(df.values, dtype=torch.float32)
-        num_chunks = len(data_tensor) // chunk_size
+        data_tensor_daily = torch.tensor(df.values, dtype=torch.float32)
+        data_tensor_hourly = torch.tensor(dfhr.values, dtype=torch.float32)
+
+        matching_timestamps = df.index.intersection(dfhr.index)
+        num_chunks = len(matching_timestamps) // chunk_size
 
         for i in range(num_chunks):
-            chunk = data_tensor[i * chunk_size: (i + 1) * chunk_size]
+            end_timestamp = matching_timestamps[(i + 1) * chunk_size - 1]
+
+            end_index_daily = df.index.get_loc(end_timestamp)
+            end_index_hourly = dfhr.index.get_loc(end_timestamp)
+
+            chunk_daily_start = max(0, end_index_daily - chunk_size + 1)
+            chunk_daily = data_tensor_daily[chunk_daily_start: end_index_daily + 1]
+
+            chunk_hourly_start = max(0, end_index_hourly - chunk_size + 1)
+            chunk_hourly = data_tensor_hourly[chunk_hourly_start: end_index_hourly + 1]
 
             consecutive = np.array(day_diff[i * chunk_size: (i + 1) * chunk_size])
             sequence_check = np.all(consecutive == 1)
             if not sequence_check:
                 continue
 
-            if len(chunk) < chunk_size:
-                padding = torch.full((chunk_size - len(chunk), chunk.shape[1]), fill_value=float('nan'))
-                chunk = torch.cat([chunk, padding], dim=0)
+            if len(chunk_hourly) < chunk_size or len(chunk_daily) < chunk_size:
+                continue
 
-            all_data[fate].append(chunk)
+            combined_chunk = torch.cat([chunk_daily, chunk_hourly], dim=1)
+            all_data[fate].append(combined_chunk)
 
     for fate in ['train', 'val']:
         outfile = os.path.join(output_dir, fate, 'all_data.pth')
@@ -134,9 +173,9 @@ if __name__ == '__main__':
     if os.path.exists(zoran):
         print('reading from zoran')
         training = zoran
-    # elif os.path.exists(nvm):
-    #     print('reading from local NVM drive')
-    #     training = nvm
+    elif os.path.exists(nvm):
+        print('reading from local NVM drive')
+        training = nvm
     else:
         print('reading from UM drive')
         training = os.path.join(d, 'training')
@@ -148,6 +187,9 @@ if __name__ == '__main__':
 
     scaling_ = os.path.join(param_dir, 'scaling_metadata.json')
     metadata = os.path.join(param_dir, 'training_metadata.json')
+
+    # hourly_data = None
+    hourly_data = os.path.join(d, 'met', 'gridded', 'nldas2_hourly')
 
     if not os.path.exists(training):
         os.mkdir(training)
@@ -163,5 +205,5 @@ if __name__ == '__main__':
 
     print('========================== scaling {} =========================='.format(target_var))
 
-    apply_scaling_and_save(out_csv, scaling_, metadata, out_pth, target=target_var)
+    apply_scaling_and_save(out_csv, scaling_, metadata, out_pth, target=target_var, hourly_dir=hourly_data)
 # ========================= EOF ==============================================================================
