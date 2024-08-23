@@ -7,7 +7,7 @@ from pandarallel import pandarallel
 from refet import calcs
 
 from extract.met_data.gridded_download import station_par_map
-from utils.calc_eto import calc_asce_params, calc_asce_params_hourly
+from utils.calc_eto import calc_asce_params
 
 PACIFIC = pytz.timezone('US/Pacific')
 

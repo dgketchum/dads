@@ -94,7 +94,7 @@ def download_chunk(chunk):
         print('chunks exist')
 
 
-def download(data_dir, meta, num_proc):
+def download(data_dir, meta, num_proc, chunk_len=5):
     """Download and extract data for a given dataset."""
 
     with open(meta, 'r') as f:
@@ -104,8 +104,8 @@ def download(data_dir, meta, num_proc):
         all_urls = [v[1] for k, v in catalog[str(year)].items()]
         all_targets = [os.path.join(data_dir, v[0]) for k, v in catalog[str(year)].items()]
 
-        urls_chunked = [all_urls[i:i + 5] for i in range(0, len(all_urls), 5)]
-        targets_chunked = [all_targets[i:i + 5] for i in range(0, len(all_targets), 5)]
+        urls_chunked = [all_urls[i:i + chunk_len] for i in range(0, len(all_urls), chunk_len)]
+        targets_chunked = [all_targets[i:i + chunk_len] for i in range(0, len(all_targets), chunk_len)]
         dirs = [data_dir for _ in targets_chunked]
 
         with Pool(processes=num_proc) as p:
@@ -123,6 +123,6 @@ if __name__ == '__main__':
     cdr_meta = os.path.join(d, 'dads', 'rs', 'cdr', 'cdr_catalog.json')
 
     # get_catalog(cdr_meta)
-    download(cdr_data, cdr_meta, num_proc=8)
+    download(cdr_data, cdr_meta, num_proc=8, chunk_len=1)
 
 # ========================= EOF ====================================================================
