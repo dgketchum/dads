@@ -1,6 +1,8 @@
 import os
+import csv
 import json
 import resource
+from datetime import datetime
 
 import pytorch_lightning as pl
 import torch
@@ -30,11 +32,17 @@ torch.multiprocessing.set_sharing_strategy('file_system')
 
 
 class PTHLSTMDataset(Dataset):
-    def __init__(self, file_path, col_index, chunk_size, transform=None):
-        self.data = torch.load(file_path, weights_only=True)
+    def __init__(self, file_paths, col_index, chunk_size, transform=None):
         self.chunk_size = chunk_size
         self.transform = transform
         self.col_index = col_index
+
+        all_data = []
+        for file_path in file_paths:
+            data = torch.load(file_path, weights_only=True)
+            all_data.append(data)
+
+        self.data = torch.cat(all_data, dim=0)
 
     def __len__(self):
         return len(self.data)
@@ -79,7 +87,8 @@ class LSTMPredictor(pl.LightningModule):
                  num_layers=2,
                  learning_rate=0.01,
                  expansion_factor=2,
-                 dropout_rate=0.1):
+                 dropout_rate=0.1,
+                 log_csv=None):
         super().__init__()
 
         self.input_expansion_hf = nn.Sequential(
@@ -118,6 +127,8 @@ class LSTMPredictor(pl.LightningModule):
         self.criterion = nn.L1Loss()
         self.learning_rate = learning_rate
 
+        self.log_csv = log_csv
+
     def forward(self, x_lf, x_hf):
         x_lf = x_lf.squeeze()
         x_lf = self.input_expansion_lf(x_lf)
@@ -131,7 +142,7 @@ class LSTMPredictor(pl.LightningModule):
 
         combined = torch.cat((out_hf, out_lf), dim=1)
         out = self.fc1(combined)
-        out = self.output_layers(out)
+        out = self.output_layers(out).squeeze()
         return out
 
     def training_step(self, batch, batch_idx):
@@ -143,14 +154,43 @@ class LSTMPredictor(pl.LightningModule):
         self.log("train_loss", loss)
         return loss
 
-    def on_validation_epoch_end(self):
-        current_lr = self.trainer.optimizers[0].param_groups[0]['lr']
-        lr_ratio = current_lr / self.learning_rate
-        print(f"Current Learning Rate: {current_lr}, Ratio to Starting LR: {lr_ratio}")
+    def on_train_epoch_end(self):
+
+        if self.log_csv:
+            train_loss = self.trainer.callback_metrics["train_loss"].item()
+            val_loss = self.trainer.callback_metrics["val_loss"].item()
+            val_r2 = self.trainer.callback_metrics["val_r2"].item()
+            gm_r2 = self.trainer.callback_metrics["val_r2_gm"].item()
+            val_rmse = self.trainer.callback_metrics["val_rmse"].item()
+            gm_rmse = self.trainer.callback_metrics["val_rmse_gm"].item()
+            current_lr = self.trainer.optimizers[0].param_groups[0]['lr']
+
+            log_data = [self.current_epoch,
+                        round(train_loss, 4),
+                        round(val_loss, 4),
+                        round(val_r2, 4),
+                        round(gm_r2, 4),
+                        round(val_rmse, 4),
+                        round(gm_rmse, 4),
+                        round(current_lr, 4)]
+
+            with open(self.log_csv, "a", newline='') as f:
+                writer = csv.writer(f)
+                writer.writerow(log_data)
+
+            if self.current_epoch == 0:
+                with open(self.log_csv, "r+", newline='') as f:
+                    reader = csv.reader(f)
+                    header = next(reader)
+                    f.seek(0)
+                    writer = csv.writer(f)
+                    writer.writerow(["epoch", "train_loss", "val_loss", "val_r2", "val_rmse", "gm_r2", "gm_rmse",
+                                     "lr"])
+                    writer.writerow(header)
 
     def validation_step(self, batch, batch_idx):
         y, gm, lf, hf = batch
-        y_hat = self(lf, hf)
+        y_hat = self(lf, hf).squeeze()
         y_obs = y[:, -1]
         y_gm = gm[:, -1]
 
@@ -172,6 +212,11 @@ class LSTMPredictor(pl.LightningModule):
         self.log("val_rmse", rmse_obs, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
         self.log("val_rmse_gm", rmse_gm, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
 
+        current_lr = self.trainer.optimizers[0].param_groups[0]['lr']
+        self.log("lr", current_lr, on_step=False, on_epoch=True, prog_bar=True)
+        lr_ratio = current_lr / self.learning_rate
+        self.log("lr_rat", lr_ratio, on_step=False, on_epoch=True, prog_bar=True)
+
         return loss_obs
 
     def configure_optimizers(self):
@@ -186,7 +231,7 @@ class LSTMPredictor(pl.LightningModule):
         }
 
 
-def train_model(pth, metadata, batch_size=1, learning_rate=0.01, n_workers=1):
+def train_model(pth, metadata, batch_size=1, learning_rate=0.01, n_workers=1, logging_csv=None):
     """"""
 
     with open(metadata, 'r') as f:
@@ -200,26 +245,27 @@ def train_model(pth, metadata, batch_size=1, learning_rate=0.01, n_workers=1):
     lf_bands = data_frequency.count('lf') - 2
     chunk_size = meta['chunk_size']
 
-    train_file = os.path.join(pth, 'train', 'all_data.pth')
-    train_dataset = PTHLSTMDataset(train_file, idxs, chunk_size=chunk_size)
+    model = LSTMPredictor(num_bands_lf=lf_bands,
+                          num_bands_hf=hf_bands,
+                          learning_rate=learning_rate,
+                          log_csv=logging_csv)
+
+    tdir = os.path.join(pth, 'train')
+    t_files = [os.path.join(tdir, f) for f in os.listdir(tdir)]
+    train_dataset = PTHLSTMDataset(t_files, idxs, chunk_size=chunk_size)
     train_dataloader = DataLoader(train_dataset,
                                   batch_size=batch_size,
                                   shuffle=True,
                                   num_workers=n_workers,
                                   collate_fn=lambda batch: [x for x in batch if x is not None])
 
-    val_file = os.path.join(pth, 'val', 'all_data.pth')
-    val_dataset = PTHLSTMDataset(val_file, idxs, chunk_size=chunk_size)
+    vdir = os.path.join(pth, 'train')
+    v_files = [os.path.join(vdir, f) for f in os.listdir(vdir)]
+    val_dataset = PTHLSTMDataset(v_files, idxs, chunk_size=chunk_size)
     val_dataloader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=n_workers,
                                 collate_fn=custom_collate)
 
-    model = LSTMPredictor(num_bands_lf=lf_bands,
-                          num_bands_hf=hf_bands,
-                          learning_rate=learning_rate)
-
-    # logger = TensorBoardLogger(save_dir=param_dir, name="lstm_logs")
-
-    early_stopping = EarlyStopping(monitor="val_loss", patience=50, mode="min")
+    early_stopping = EarlyStopping(monitor="val_loss", patience=100, mode="min")
     trainer = pl.Trainer(max_epochs=1000, callbacks=[early_stopping])
 
     trainer.fit(model, train_dataloader, val_dataloader)
@@ -234,7 +280,7 @@ if __name__ == '__main__':
     target_var = 'vpd'
 
     if device_name == 'NVIDIA GeForce RTX 2080':
-        workers = 6
+        workers = 1
     elif device_name == 'NVIDIA RTX A6000':
         workers = 6
     else:
@@ -243,13 +289,13 @@ if __name__ == '__main__':
     zoran = '/home/dgketchum/training'
     nvm = '/media/nvm/training'
     if os.path.exists(zoran):
-        print('writing to zoran')
+        print('modeling with data from zoran')
         training = zoran
     elif os.path.exists(nvm):
-        print('writing to NVM drive')
+        print('modeling with data from NVM drive')
         training = nvm
     else:
-        print('writing to UM drive')
+        print('modeling with data from UM drive')
         training = os.path.join(d, 'training')
 
     print('========================== modeling {} =========================='.format(target_var))
@@ -258,5 +304,8 @@ if __name__ == '__main__':
     pth_ = os.path.join(param_dir, 'scaled_pth')
     metadata_ = os.path.join(param_dir, 'training_metadata.json')
 
-    train_model(pth_, metadata_, batch_size=256, learning_rate=0.01, n_workers=workers)
+    now = datetime.now().strftime('%m%d%H%M')
+    logger_csv = os.path.join(param_dir, 'training_{}.csv'.format(now))
+
+    train_model(pth_, metadata_, batch_size=64, learning_rate=0.01, n_workers=workers, logging_csv=logger_csv)
 # ========================= EOF ====================================================================
