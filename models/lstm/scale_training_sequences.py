@@ -37,6 +37,7 @@ def apply_scaling_and_save(csv_dir, scaling_json, training_metadata, output_dir,
     scaling_data['column_order'] = []
     scaling_data['scaling_status'] = []
     scaling_data['data_frequency'] = []
+    scaling_data['observation_count'] = 0
 
     files_ = [f for f in os.listdir(csv_dir) if f.endswith('.csv')]
 
@@ -52,14 +53,14 @@ def apply_scaling_and_save(csv_dir, scaling_json, training_metadata, output_dir,
     first, write_files = True, 0
     for j, (fate, station) in enumerate(zip(destiny, stations)):
 
-        if station != 'TMPF7':
-            continue
+        # if station != 'LWAO2':
+        #     continue
 
         v_file = os.path.join(output_dir, 'train', '{}.pth'.format(station))
         t_file = os.path.join(output_dir, 'val', '{}.pth'.format(station))
 
-        # if any([os.path.exists(t_file), os.path.exists(v_file)]):
-        #     continue
+        if any([os.path.exists(t_file), os.path.exists(v_file)]):
+            continue
 
         filepath = os.path.join(csv_dir, '{}.csv'.format(station))
         try:
@@ -85,14 +86,6 @@ def apply_scaling_and_save(csv_dir, scaling_json, training_metadata, output_dir,
             obs.extend(df[f'{target}_obs'].to_list())
             gm.extend(df[f'{target}_gm'].to_list())
             nl.extend(df[f'{target}_nl'].to_list())
-
-        # pre-scaling sanity check for time alignment
-        # count = dfhr[['prcp']].resample('d').agg('count')
-        # hrprcp = dfhr[['prcp']].resample('d').agg('sum')
-        # idx = [i for i in hrprcp.index if i in df.index]
-        # hrval, dval = hrprcp.loc['2004-04-05', 'prcp'], df.loc['2004-04-05', 'prcp_nl']
-        # print('{} Prcp {} from daily/hourly: {:.3f}/{:.3f}'.format(station, '2004-04-05', dval.item(), hrval.item()))
-        # continue
 
         day_diff = df['dt_diff'].astype(int).to_list()
         df.drop(columns=['dt_diff'], inplace=True)
@@ -163,7 +156,7 @@ def apply_scaling_and_save(csv_dir, scaling_json, training_metadata, output_dir,
             torch.save(torch.stack(station_chunks), outfile)
             write_files += 1
             print(station, j, 'of', len(stations), station_chunk_ct, 'new sequences')
-            scaling_data['observation_count'] = chunk_size * len(station_chunks)
+            scaling_data['observation_count'] += chunk_size * len(station_chunks)
 
     if training_metadata:
         with open(training_metadata, 'w') as fp:
@@ -216,8 +209,8 @@ if __name__ == '__main__':
 
     print('========================== scaling {} =========================='.format(target_var))
 
-    metadata = None
-    # metadata = os.path.join(param_dir, 'training_metadata.json')
+    # metadata = None
+    metadata = os.path.join(param_dir, 'training_metadata.json')
     apply_scaling_and_save(out_csv, scaling_, metadata, out_pth, target=target_var, hourly_dir=hourly_data,
                            chunk_size=48, shuffle=True)
 # ========================= EOF ==============================================================================

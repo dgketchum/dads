@@ -33,7 +33,7 @@ torch.multiprocessing.set_sharing_strategy('file_system')
 
 
 class PTHLSTMDataset(Dataset):
-    def __init__(self, file_paths, col_index, chunk_size, transform=None):
+    def __init__(self, file_paths, col_index, expected_width, chunk_size, transform=None):
         self.chunk_size = chunk_size
         self.transform = transform
         self.col_index = col_index
@@ -41,6 +41,9 @@ class PTHLSTMDataset(Dataset):
         all_data = []
         for file_path in file_paths:
             data = torch.load(file_path, weights_only=True)
+            if data.shape[2] != expected_width:
+                print(f"Skipping {file_path} due to shape mismatch. Expected {expected_width} columns, got {data.shape[2]}")
+                continue
             all_data.append(data)
 
         self.data = torch.cat(all_data, dim=0)
@@ -82,8 +85,8 @@ def stack_batch(batch):
 
 class LSTMPredictor(pl.LightningModule):
     def __init__(self,
-                 num_bands_lf=32,
-                 num_bands_hf=14,
+                 num_bands_lf=5,
+                 num_bands_hf=3,
                  hidden_size=64,
                  num_layers=2,
                  learning_rate=0.01,
@@ -106,12 +109,14 @@ class LSTMPredictor(pl.LightningModule):
             nn.ReLU(),
             nn.Linear(num_bands_lf * expansion_factor, num_bands_lf * expansion_factor * 2),
             nn.ReLU(),
+            nn.Linear(num_bands_lf * expansion_factor * 2, num_bands_lf * expansion_factor * 4),
+            nn.ReLU(),
         )
 
         self.lstm_hf = nn.LSTM(num_bands_hf * expansion_factor * 4, hidden_size, num_layers, batch_first=True,
                                bidirectional=True)
 
-        self.lstm_lf = nn.LSTM(num_bands_lf * expansion_factor * 2, hidden_size, num_layers, batch_first=True,
+        self.lstm_lf = nn.LSTM(num_bands_lf * expansion_factor * 4, hidden_size, num_layers, batch_first=True,
                                bidirectional=True)
 
         self.fc1 = nn.Linear(4 * hidden_size, hidden_size * 4)
@@ -240,24 +245,6 @@ class LSTMPredictor(pl.LightningModule):
         }
 
 
-class RestoreBestOnPlateau(Callback):
-    def __init__(self, monitor='val_loss', mode='min'):
-        super().__init__()
-        self.monitor = monitor
-        self.mode = mode
-
-    def on_validation_epoch_end(self, trainer, pl_module):
-        scheduler = trainer.lr_schedulers[0]['scheduler']
-        if scheduler.in_cooldown:
-            checkpoint_callback = trainer.checkpoint_callback
-            best_model_path = checkpoint_callback.best_model_path
-
-            if best_model_path:
-                print(f"Restoring best model from {best_model_path} due to learning rate reduction")
-                state_dict = torch.load(best_model_path)["state_dict"]
-                pl_module.load_state_dict(state_dict)
-
-
 def train_model(pth, metadata, batch_size=1, learning_rate=0.01, n_workers=1, logging_csv=None):
     """"""
 
@@ -270,6 +257,8 @@ def train_model(pth, metadata, batch_size=1, learning_rate=0.01, n_workers=1, lo
     idxs = (0, 1, 2, hf_idx)
     hf_bands = data_frequency.count('hf')
     lf_bands = data_frequency.count('lf') - 2
+    tensor_width = data_frequency.count('lf') + data_frequency.count('hf')
+    print('tensor cols: {}'.format(tensor_width))
     chunk_size = meta['chunk_size']
 
     model = LSTMPredictor(num_bands_lf=lf_bands,
@@ -279,7 +268,11 @@ def train_model(pth, metadata, batch_size=1, learning_rate=0.01, n_workers=1, lo
 
     tdir = os.path.join(pth, 'train')
     t_files = [os.path.join(tdir, f) for f in os.listdir(tdir)]
-    train_dataset = PTHLSTMDataset(t_files, idxs, chunk_size=chunk_size)
+    train_dataset = PTHLSTMDataset(file_paths=t_files,
+                                   col_index=idxs,
+                                   expected_width=tensor_width,
+                                   chunk_size=chunk_size)
+
     train_dataloader = DataLoader(train_dataset,
                                   batch_size=batch_size,
                                   shuffle=True,
@@ -288,7 +281,11 @@ def train_model(pth, metadata, batch_size=1, learning_rate=0.01, n_workers=1, lo
 
     vdir = os.path.join(pth, 'val')
     v_files = [os.path.join(vdir, f) for f in os.listdir(vdir)]
-    val_dataset = PTHLSTMDataset(v_files, idxs, chunk_size=chunk_size)
+    val_dataset = PTHLSTMDataset(file_paths=v_files,
+                                 col_index=idxs,
+                                 expected_width=tensor_width,
+                                 chunk_size=chunk_size)
+
     val_dataloader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=n_workers,
                                 collate_fn=custom_collate)
 
@@ -353,5 +350,5 @@ if __name__ == '__main__':
     now = datetime.now().strftime('%m%d%H%M')
     logger_csv = os.path.join(param_dir, 'training_{}.csv'.format(now))
 
-    train_model(pth_, metadata_, batch_size=35, learning_rate=0.01, n_workers=workers, logging_csv=logger_csv)
+    train_model(pth_, metadata_, batch_size=256, learning_rate=0.01, n_workers=workers, logging_csv=logger_csv)
 # ========================= EOF ====================================================================
