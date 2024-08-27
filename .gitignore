@@ -162,3 +162,5 @@ cython_debug/
 #.idea/
 /extract/air_quality/aqs_key.json
 /model/lightning_logs/
+/extract/met_data/credentials.json
+/extract/met_data/synoptic_key.json
