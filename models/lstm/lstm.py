@@ -29,8 +29,6 @@ torch.cuda.get_device_name(torch.cuda.current_device())
 rlimit = resource.getrlimit(resource.RLIMIT_NOFILE)
 resource.setrlimit(resource.RLIMIT_NOFILE, (4096, rlimit[1]))
 
-torch.multiprocessing.set_sharing_strategy('file_system')
-
 
 class PTHLSTMDataset(Dataset):
     def __init__(self, file_paths, col_index, expected_width, chunk_size, transform=None):
@@ -310,7 +308,8 @@ def train_model(pth, metadata, batch_size=1, learning_rate=0.01, n_workers=1, lo
 
     # restore_best_callback = RestoreBestOnPlateau(monitor="val_loss", mode="min")
 
-    trainer = pl.Trainer(max_epochs=1000, callbacks=[early_stop_callback, checkpoint_callback])
+    trainer = pl.Trainer(max_epochs=1000, callbacks=[early_stop_callback, checkpoint_callback],
+                         accelerator='gpu', devices=1)
     trainer.fit(model, train_dataloader, val_dataloader)
 
 
