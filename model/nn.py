@@ -125,6 +125,8 @@ class LSTMPredictor(pl.LightningModule):
             nn.Linear(hidden_size, 1)
         )
 
+        self.attn = nn.Linear(4 * hidden_size, 1)
+
         self.criterion = nn.L1Loss()
         self.learning_rate = learning_rate
 
@@ -141,7 +143,11 @@ class LSTMPredictor(pl.LightningModule):
         out_hf, _ = self.lstm_hf(x_hf)
         out_hf = out_hf[:, -1, :]
 
-        combined = torch.cat((out_hf, out_lf), dim=1)
+        cat_out = torch.cat((out_hf, out_lf), dim=1)
+        attn_weights = torch.softmax(self.attn(cat_out), dim=1)
+        attn_weights = attn_weights.unsqueeze(-1)
+        combined = torch.sum(attn_weights * cat_out.unsqueeze(1), dim=1)
+
         out = self.fc1(combined)
         out = self.output_layers(out).squeeze()
         return out
@@ -193,7 +199,7 @@ class LSTMPredictor(pl.LightningModule):
 
     def validation_step(self, batch, batch_idx):
         y, gm, lf, hf = batch
-        y_hat = self(lf, hf).squeeze()
+        y_hat = self(lf, hf)
         y_obs = y[:, -1]
         y_gm = gm[:, -1]
 
@@ -347,5 +353,5 @@ if __name__ == '__main__':
     now = datetime.now().strftime('%m%d%H%M')
     logger_csv = os.path.join(param_dir, 'training_{}.csv'.format(now))
 
-    train_model(pth_, metadata_, batch_size=64, learning_rate=0.01, n_workers=workers, logging_csv=logger_csv)
+    train_model(pth_, metadata_, batch_size=35, learning_rate=0.01, n_workers=workers, logging_csv=logger_csv)
 # ========================= EOF ====================================================================
