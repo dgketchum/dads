@@ -39,6 +39,9 @@ def extract_met_data(stations, gridded_dir, overwrite=False, station_type='opene
     record_ct = station_list.shape[0]
     for i, (fid, row) in enumerate(station_list.iterrows(), start=1):
 
+        # if fid != 'TMPF7':
+        #     continue
+
         lon, lat, elv = row[kw['lon']], row[kw['lat']], row[kw['elev']]
         if np.isnan(elv):
             print('{} has nan elevation'.format(fid))
@@ -171,8 +174,7 @@ if __name__ == '__main__':
 
     grid_dir = os.path.join(d, 'dads', 'met', 'gridded')
 
-    extract_met_data(sites, grid_dir, overwrite=True, station_type='dads',
-                     shuffle=True, bounds=(-125., 25., -96., 49.), gridmet=False,
-                     hourly=True)
+    extract_met_data(sites, grid_dir, overwrite=True, station_type='dads',  shuffle=True,
+                     bounds=(-125., 25., -96., 49.), gridmet=False, hourly=True)
 
 # ========================= EOF ====================================================================

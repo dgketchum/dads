@@ -33,6 +33,9 @@ def extract_met_data(stations, gridded_dir, overwrite=False, station_type='opene
     record_ct = station_list.shape[0]
     for i, (fid, row) in enumerate(station_list.iterrows(), start=1):
 
+        # if fid != 'TMPF7':
+        #     continue
+
         lon, lat, elv = row[kw['lon']], row[kw['lat']], row[kw['elev']]
         print('{}: {} of {}; {:.2f}, {:.2f}'.format(fid, i, record_ct, lat, lon))
 

@@ -1,7 +1,7 @@
 import os
 import json
 import random
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from tqdm import tqdm
 import numpy as np
@@ -27,8 +27,8 @@ def print_rmse(o, n, g):
     print('rmse_gridmet', rmse_gm)
 
 
-def apply_scaling_and_save(csv_dir, scaling_json, training_metadata, output_dir, train_frac=0.8,
-                           chunk_size=72, chunks_per_file=1000, target='rsds', hourly_dir=None, shuffle=False):
+def apply_scaling_and_save(csv_dir, scaling_json, training_metadata, output_dir, train_frac=0.8, chunk_size=72,
+                           chunks_per_file=1000, target='rsds', hourly_dir=None, shuffle=False):
     with open(scaling_json, 'r') as f:
         scaling_data = json.load(f)
 
@@ -52,10 +52,14 @@ def apply_scaling_and_save(csv_dir, scaling_json, training_metadata, output_dir,
     first, write_files = True, 0
     for j, (fate, station) in enumerate(zip(destiny, stations)):
 
+        if station != 'TMPF7':
+            continue
+
         v_file = os.path.join(output_dir, 'train', '{}.pth'.format(station))
         t_file = os.path.join(output_dir, 'val', '{}.pth'.format(station))
-        if any([os.path.exists(t_file), os.path.exists(v_file)]):
-            continue
+
+        # if any([os.path.exists(t_file), os.path.exists(v_file)]):
+        #     continue
 
         filepath = os.path.join(csv_dir, '{}.csv'.format(station))
         try:
@@ -81,6 +85,14 @@ def apply_scaling_and_save(csv_dir, scaling_json, training_metadata, output_dir,
             obs.extend(df[f'{target}_obs'].to_list())
             gm.extend(df[f'{target}_gm'].to_list())
             nl.extend(df[f'{target}_nl'].to_list())
+
+        # pre-scaling sanity check for time alignment
+        # count = dfhr[['prcp']].resample('d').agg('count')
+        # hrprcp = dfhr[['prcp']].resample('d').agg('sum')
+        # idx = [i for i in hrprcp.index if i in df.index]
+        # hrval, dval = hrprcp.loc['2004-04-05', 'prcp'], df.loc['2004-04-05', 'prcp_nl']
+        # print('{} Prcp {} from daily/hourly: {:.3f}/{:.3f}'.format(station, '2004-04-05', dval.item(), hrval.item()))
+        # continue
 
         day_diff = df['dt_diff'].astype(int).to_list()
         df.drop(columns=['dt_diff'], inplace=True)
@@ -120,11 +132,10 @@ def apply_scaling_and_save(csv_dir, scaling_json, training_metadata, output_dir,
         data_tensor_hourly = torch.tensor(dfhr.values, dtype=torch.float32)
 
         matching_timestamps = df.index.intersection(dfhr.index)
-        num_chunks = len(matching_timestamps) // chunk_size
 
         station_chunk_ct, station_chunks = 0, []
-        for i in range(num_chunks):
-            end_timestamp = matching_timestamps[(i + 1) * chunk_size - 1]
+        for i in range(len(matching_timestamps) - chunk_size + 1):
+            end_timestamp = matching_timestamps[i + chunk_size - 1]
 
             end_index_daily = df.index.get_loc(end_timestamp)
             end_index_hourly = dfhr.index.get_loc(end_timestamp)
@@ -135,8 +146,8 @@ def apply_scaling_and_save(csv_dir, scaling_json, training_metadata, output_dir,
             chunk_hourly_start = max(0, end_index_hourly - chunk_size + 1)
             chunk_hourly = data_tensor_hourly[chunk_hourly_start: end_index_hourly + 1]
 
-            consecutive = np.array(day_diff[i * chunk_size: (i + 1) * chunk_size])
-            sequence_check = np.all(consecutive == 1)
+            check_consecutive = np.array(day_diff[i + chunk_size - 1])
+            sequence_check = np.all(check_consecutive == 1)
             if not sequence_check:
                 continue
 
@@ -190,7 +201,6 @@ if __name__ == '__main__':
     out_pth = os.path.join(param_dir, 'scaled_pth')
 
     scaling_ = os.path.join(param_dir, 'scaling_metadata.json')
-    metadata = os.path.join(param_dir, 'training_metadata.json')
 
     # hourly_data = None
     hourly_data = os.path.join(d, 'met', 'gridded', 'nldas2_hourly')
@@ -206,8 +216,8 @@ if __name__ == '__main__':
 
     print('========================== scaling {} =========================='.format(target_var))
 
-    # metadata = None
-    metadata = os.path.join(param_dir, 'training_metadata.json')
+    metadata = None
+    # metadata = os.path.join(param_dir, 'training_metadata.json')
     apply_scaling_and_save(out_csv, scaling_, metadata, out_pth, target=target_var, hourly_dir=hourly_data,
                            chunk_size=48, shuffle=True)
 # ========================= EOF ==============================================================================
