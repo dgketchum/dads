@@ -244,8 +244,8 @@ def process_time_chunk(time_tuple):
     download_and_extract(dataset, start_time, end_time, madis_data_dir_, USR, PSWD, downloader='aria2c')
 
     mesonet_dir = os.path.join(madis_data_dir_, 'LDAD', 'mesonet', 'netCDF')
-    out_dir = os.path.join(madis_data_dir_, 'LDAD', 'mesonet', 'csv_north')
-    outshp = os.path.join(madis_data_dir_, 'LDAD', 'mesonet', 'shape_north',
+    out_dir = os.path.join(madis_data_dir_, 'LDAD', 'mesonet', 'csv')
+    outshp = os.path.join(madis_data_dir_, 'LDAD', 'mesonet', 'shapes',
                           'integrated_mesonet_{}.shp'.format(start_time))
     read_madis_hourly(mesonet_dir, start_time[:6], out_dir, shapefile=outshp, bounds=(-180., 25., -60., 85.))
 
