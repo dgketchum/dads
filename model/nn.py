@@ -8,19 +8,20 @@ import pytorch_lightning as pl
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from pytorch_lightning.callbacks.early_stopping import EarlyStopping
+from pytorch_lightning.callbacks import ModelCheckpoint, EarlyStopping
 
 from sklearn.metrics import r2_score, root_mean_squared_error
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from torch.utils.data import DataLoader, Dataset
 from torch.utils.data._utils.collate import default_collate
+from pytorch_lightning.callbacks import Callback
 
 device_name = None
 if torch.cuda.is_available():
     device_name = torch.cuda.get_device_name(0)
-    print(f"Using GPU: {device_name}")
+    print(f'Using GPU: {device_name}')
 else:
-    print("CUDA is not available. PyTorch will use the CPU.")
+    print('CUDA is not available. PyTorch will use the CPU.')
 
 torch.set_float32_matmul_precision('medium')
 torch.cuda.get_device_name(torch.cuda.current_device())
@@ -151,19 +152,20 @@ class LSTMPredictor(pl.LightningModule):
         y_obs = y[:, -1]
 
         loss = self.criterion(y_hat, y_obs)
-        self.log("train_loss", loss)
+        self.log('train_loss', loss)
         return loss
 
     def on_train_epoch_end(self):
 
         if self.log_csv:
-            train_loss = self.trainer.callback_metrics["train_loss"].item()
-            val_loss = self.trainer.callback_metrics["val_loss"].item()
-            val_r2 = self.trainer.callback_metrics["val_r2"].item()
-            gm_r2 = self.trainer.callback_metrics["val_r2_gm"].item()
-            val_rmse = self.trainer.callback_metrics["val_rmse"].item()
-            gm_rmse = self.trainer.callback_metrics["val_rmse_gm"].item()
+            train_loss = self.trainer.callback_metrics['train_loss'].item()
+            val_loss = self.trainer.callback_metrics['val_loss'].item()
+            val_r2 = self.trainer.callback_metrics['val_r2'].item()
+            gm_r2 = self.trainer.callback_metrics['val_r2_gm'].item()
+            val_rmse = self.trainer.callback_metrics['val_rmse'].item()
+            gm_rmse = self.trainer.callback_metrics['val_rmse_gm'].item()
             current_lr = self.trainer.optimizers[0].param_groups[0]['lr']
+            lr_ratio = current_lr / self.learning_rate
 
             log_data = [self.current_epoch,
                         round(train_loss, 4),
@@ -172,20 +174,21 @@ class LSTMPredictor(pl.LightningModule):
                         round(gm_r2, 4),
                         round(val_rmse, 4),
                         round(gm_rmse, 4),
-                        round(current_lr, 4)]
+                        round(current_lr, 4),
+                        round(lr_ratio, 4)]
 
-            with open(self.log_csv, "a", newline='') as f:
+            with open(self.log_csv, 'a', newline='') as f:
                 writer = csv.writer(f)
                 writer.writerow(log_data)
 
             if self.current_epoch == 0:
-                with open(self.log_csv, "r+", newline='') as f:
+                with open(self.log_csv, 'r+', newline='') as f:
                     reader = csv.reader(f)
                     header = next(reader)
                     f.seek(0)
                     writer = csv.writer(f)
-                    writer.writerow(["epoch", "train_loss", "val_loss", "val_r2", "val_rmse", "gm_r2", "gm_rmse",
-                                     "lr"])
+                    writer.writerow(['epoch', 'train_loss', 'val_loss', 'val_r2', 'gm_r2', 'val_rmse', 'gm_rmse',
+                                     'lr', 'lr_ratio'])
                     writer.writerow(header)
 
     def validation_step(self, batch, batch_idx):
@@ -195,7 +198,7 @@ class LSTMPredictor(pl.LightningModule):
         y_gm = gm[:, -1]
 
         loss_obs = self.criterion(y_hat, y_obs)
-        self.log("val_loss", loss_obs, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
+        self.log('val_loss', loss_obs, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
 
         y_hat_obs_np = y_hat.detach().cpu().numpy()
         y_obs_np = y_obs.detach().cpu().numpy()
@@ -206,16 +209,16 @@ class LSTMPredictor(pl.LightningModule):
         r2_gm = r2_score(y_obs_np, y_gm_np)
         rmse_gm = root_mean_squared_error(y_obs_np, y_gm_np)
 
-        self.log("val_r2", r2_obs, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
-        self.log("val_r2_gm", r2_gm, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
+        self.log('val_r2', r2_obs, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
+        self.log('val_r2_gm', r2_gm, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
 
-        self.log("val_rmse", rmse_obs, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
-        self.log("val_rmse_gm", rmse_gm, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
+        self.log('val_rmse', rmse_obs, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
+        self.log('val_rmse_gm', rmse_gm, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
 
         current_lr = self.trainer.optimizers[0].param_groups[0]['lr']
-        self.log("lr", current_lr, on_step=False, on_epoch=True, prog_bar=True)
+        self.log('lr', current_lr, on_step=False, on_epoch=True, prog_bar=True)
         lr_ratio = current_lr / self.learning_rate
-        self.log("lr_rat", lr_ratio, on_step=False, on_epoch=True, prog_bar=True)
+        self.log('lr_ratio', lr_ratio, on_step=False, on_epoch=True, prog_bar=True)
 
         return loss_obs
 
@@ -229,6 +232,24 @@ class LSTMPredictor(pl.LightningModule):
                 'monitor': 'val_loss'
             }
         }
+
+
+class RestoreBestOnPlateau(Callback):
+    def __init__(self, monitor='val_loss', mode='min'):
+        super().__init__()
+        self.monitor = monitor
+        self.mode = mode
+
+    def on_validation_epoch_end(self, trainer, pl_module):
+        scheduler = trainer.lr_schedulers[0]['scheduler']
+        if scheduler.in_cooldown:
+            checkpoint_callback = trainer.checkpoint_callback
+            best_model_path = checkpoint_callback.best_model_path
+
+            if best_model_path:
+                print(f"Restoring best model from {best_model_path} due to learning rate reduction")
+                state_dict = torch.load(best_model_path)["state_dict"]
+                pl_module.load_state_dict(state_dict)
 
 
 def train_model(pth, metadata, batch_size=1, learning_rate=0.01, n_workers=1, logging_csv=None):
@@ -259,15 +280,34 @@ def train_model(pth, metadata, batch_size=1, learning_rate=0.01, n_workers=1, lo
                                   num_workers=n_workers,
                                   collate_fn=lambda batch: [x for x in batch if x is not None])
 
-    vdir = os.path.join(pth, 'train')
+    vdir = os.path.join(pth, 'val')
     v_files = [os.path.join(vdir, f) for f in os.listdir(vdir)]
     val_dataset = PTHLSTMDataset(v_files, idxs, chunk_size=chunk_size)
     val_dataloader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=n_workers,
                                 collate_fn=custom_collate)
 
-    early_stopping = EarlyStopping(monitor="val_loss", patience=100, mode="min")
-    trainer = pl.Trainer(max_epochs=1000, callbacks=[early_stopping])
+    print(f"Number of training samples: {len(train_dataset)}")
+    print(f"Number of validation samples: {len(val_dataset)}")
 
+    checkpoint_callback = ModelCheckpoint(
+        monitor="val_loss",
+        filename="best_model",
+        save_top_k=1,
+        mode="min"
+    )
+
+    early_stop_callback = EarlyStopping(
+        monitor="val_loss",
+        min_delta=0.00,
+        patience=100,
+        verbose=False,
+        mode="min",
+        check_finite=True,
+    )
+
+    # restore_best_callback = RestoreBestOnPlateau(monitor="val_loss", mode="min")
+
+    trainer = pl.Trainer(max_epochs=1000, callbacks=[early_stop_callback, checkpoint_callback])
     trainer.fit(model, train_dataloader, val_dataloader)
 
 
