@@ -1,6 +1,7 @@
+import os
+import json
 import glob
 import gzip
-import os
 import subprocess
 import multiprocessing
 import time
@@ -16,7 +17,7 @@ from utils.elevation import elevation_from_coordinate
 
 warnings.filterwarnings("ignore", category=xr.SerializationWarning)
 
-BASE_URL = "https://madis-data.ncep.noaa.gov/madisPublic/data"
+BASE_URL = "https://madis-data.ncep.noaa.gov/madisResearch/data"
 
 DATASET_PATHS = {
     "INTEGRATED_MESONET": "LDAD/mesonet/netCDF",
@@ -52,6 +53,16 @@ SUBHOUR_RESAMPLE_MAP = {'relHumidity': 'mean',
                         'windSpeed': 'mean',
                         'longitude': 'mean',
                         'latitude': 'mean'}
+
+credentials_file = os.path.join(os.path.expanduser('~'), 'PycharmProjects', 'dads', 'extract', 'met_data',
+                                'credentials.json')
+
+with open(credentials_file, 'r') as fp:
+    creds = json.load(fp)
+USR = creds['usr']
+PSWD = creds['pswd']
+
+print('Requesting data for User: {}'.format(USR))
 
 
 def generate_monthly_time_tuples(start_year, end_year):
@@ -230,7 +241,7 @@ def write_locations(loc, shp):
 def process_time_chunk(time_tuple):
     start_time, end_time = time_tuple
     # aria gives a speedup of at least 50%
-    download_and_extract(dataset, start_time, end_time, madis_data_dir_, usr, pswd, downloader='aria2c')
+    download_and_extract(dataset, start_time, end_time, madis_data_dir_, USR, PSWD, downloader='aria2c')
 
     mesonet_dir = os.path.join(madis_data_dir_, 'LDAD', 'mesonet', 'netCDF')
     out_dir = os.path.join(madis_data_dir_, 'LDAD', 'mesonet', 'csv_north')
@@ -283,17 +294,16 @@ if __name__ == "__main__":
 
     usr, pswd = 'usr', 'pswd'
     madis_data_dir_ = os.path.join(d, 'climate', 'madis')
-    madis_shapes = os.path.join(madis_data_dir_, 'LDAD', 'mesonet', 'shape_north')
+    madis_shapes = os.path.join(madis_data_dir_, 'LDAD', 'mesonet', 'shapes')
 
-    stn_meta = os.path.join(d, 'climate', 'madis', 'public_stn_list.csv')
     mesonet_dir = os.path.join(madis_data_dir_, 'LDAD', 'mesonet')
 
     # the FTP we're currently using has from 2001-07-01
-    times = generate_monthly_time_tuples(2023, 2024)
+    times = generate_monthly_time_tuples(2001, 2024)
     times = [t for t in times if int(t[0][:6]) >= 200107]
 
     # num_processes = 1
-    num_processes = 8
+    num_processes = 12
 
     dataset = 'INTEGRATED_MESONET'
 
