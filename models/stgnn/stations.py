@@ -5,29 +5,7 @@ import pandas as pd
 import geopandas as gpd
 from shapely.geometry import Point
 
-SIMILARITY_COLS = {
-    'lat': 'first',
-    'lon': 'first',
-    'B10': 'mean',
-    'B2': 'mean',
-    'B3': 'mean',
-    'B4': 'mean',
-    'B5': 'mean',
-    'B6': 'mean',
-    'B7': 'mean',
-    'evi': 'mean',
-    'gi': 'mean',
-    'nd': 'mean',
-    'nw': 'mean',
-    'slope': 'first',
-    'aspect': 'first',
-    'elevation': 'first',
-    'tpi_1250': 'first',
-    'tpi_250': 'first',
-    'tpi_150': 'first',
-    'rsun': 'mean',
-}
-
+from models.stgnn import SIMILARITY_COLS
 
 def get_stations(stations, csv_dir, out_csv, bounds=None, validation_frac=0.2, validation_stations=None):
     stations = pd.read_csv(stations)

@@ -51,7 +51,7 @@ def apply_scaling_and_save(csv_dir, scaling_json, training_metadata, output_dir,
     obs, gm, nl = [], [], []
 
     first, write_files = True, 0
-    for j, (fate, station) in enumerate(zip(destiny, stations)):
+    for j, (fate, station) in enumerate(zip(destiny, stations), start=1):
 
         # if station != 'LWAO2':
         #     continue
@@ -60,6 +60,7 @@ def apply_scaling_and_save(csv_dir, scaling_json, training_metadata, output_dir,
         t_file = os.path.join(output_dir, 'val', '{}.pth'.format(station))
 
         if any([os.path.exists(t_file), os.path.exists(v_file)]):
+            print('{} exists'.format(station))
             continue
 
         filepath = os.path.join(csv_dir, '{}.csv'.format(station))
@@ -153,18 +154,20 @@ def apply_scaling_and_save(csv_dir, scaling_json, training_metadata, output_dir,
 
         if len(station_chunks) > 0:
             outfile = os.path.join(output_dir, fate, '{}.pth'.format(station))
-            torch.save(torch.stack(station_chunks), outfile)
+            stack = torch.stack(station_chunks)
+            torch.save(stack, outfile)
             write_files += 1
-            print(station, j, 'of', len(stations), station_chunk_ct, 'new sequences')
+            print('{}; {} of {} to {}, {} chunks, size {}'.format(station, j, len(stations), fate,
+                                                                  station_chunk_ct, stack.shape))
             scaling_data['observation_count'] += chunk_size * len(station_chunks)
 
     if training_metadata:
         with open(training_metadata, 'w') as fp:
             json.dump(scaling_data, fp, indent=4)
 
-    print('\n{} sites\n{} records; {} observations and {} validation records'.format(write_files, len(obs),
-                                                                                     target_var,
-                                                                                     scaling_data['observation_count']))
+    print('\n{} sites\n{}; {} observations, {} held out for validation'.format(write_files, target_var,
+                                                                               scaling_data['observation_count'],
+                                                                               len(obs)))
     print_rmse(obs, nl, gm)
 
 

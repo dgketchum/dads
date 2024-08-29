@@ -8,87 +8,46 @@ import numpy as np
 from shapely.geometry import LineString, Point
 from sklearn.metrics.pairwise import cosine_similarity
 from sklearn.preprocessing import MinMaxScaler
-# import torch
 import networkx as nx
 
+from tsl.data.datamodule.splitters import Splitter, disjoint_months
+from tsl.data.synch_mode import HORIZON
+from tsl.datasets.prototypes import DatetimeDataset
+from tsl.datasets.prototypes.mixin import MissingValuesMixin
+from tsl.utils import download_url, extract_zip
 
-class Graph:
-    def __init__(self, stations, meteorology_dir, output_dir, k_nearest=2, index_col='FID', bounds=None):
-        self.fields = stations
-        self.valid_target_stations = None
-        self.meteorology_dir = meteorology_dir
-        self.output_dir = output_dir
-        self.k_nearest = k_nearest
-        self.index_col = index_col
-        self.pth_stations = []
-        self.bounds = bounds
+from models.stgnn import SIMILARITY_COLS
 
-    def preprocess_data(self):
-        edge_list, gdf, index_to_staid = self.generate_edge_index()
 
-        valid_stations = gdf[self.index_col].isin(index_to_staid.values())
-        gdf = gdf[valid_stations]
+from tsl.datasets import AirQuality
 
-        years = list(range(2000, 2021))
-        years.reverse()
+dataset = AirQuality(root='./data')
 
-        for yr in years:
-            all_dates = pd.date_range(start=f'{yr}-01-01', end=f'{yr}-12-31', freq='D')
-            max_timesteps = len(all_dates)
-            node_features_list = []
-            labels_list = []
-            masks_list = []
-            for e, staid in enumerate(gdf[self.index_col]):
-                file_ = f"{self.meteorology_dir}/{staid}_{yr}.csv"
-                if not os.path.exists(file_):
-                    continue
-                meteorology_data = pd.read_csv(file_, index_col=0, parse_dates=True)
+print(dataset)
 
-                meteorology_data = meteorology_data.reindex(all_dates)
-                mask = ~meteorology_data["eto_nl"].isna()
-                meteorology_data = meteorology_data.fillna(0)
 
-                eto_nl = meteorology_data['eto_nl'].values
-                elevation = gdf[gdf[self.index_col] == staid]['STATION_EL'].values[0]
-                longitude = gdf[gdf[self.index_col] == staid]['STATION_LO'].values[0]
-                latitude = gdf[gdf[self.index_col] == staid]['STATION_LA'].values[0]
+class Meteorology(DatetimeDataset, MissingValuesMixin):
+    similarity_options = {'distance'}
 
-                padding_length = max_timesteps - len(eto_nl)
-                eto_nl_padded = np.pad(eto_nl, (0, padding_length), mode='constant')
-                labels_padded = np.pad(meteorology_data['eto_obs'].values, (0, padding_length), mode='constant')
-                mask_padded = np.pad(mask, (0, padding_length), mode='constant', constant_values=False)
+    def __init__(self,
+                 target_parameter,
+                 root=None,
+                 freq='D',
+                 ):
 
-                node_features_list.append(np.column_stack([eto_nl_padded, np.full_like(eto_nl_padded, elevation),
-                                                           np.full_like(eto_nl_padded, longitude),
-                                                           np.full_like(eto_nl_padded, latitude)]))
-                labels_list.append(labels_padded)
-                masks_list.append(mask_padded)
-                self.pth_stations.append(staid)
-            print(yr, len(self.pth_stations), 'stations')
+        self.root = root
 
-            # Create tensors (single tensor for all time steps)
-            node_features_list = np.array(node_features_list)
-            node_features_tensor = torch.tensor(node_features_list, dtype=torch.float)
+        df, mask, eval_mask, dist = self.load()
+        super().__init__(target=df,
+                         mask=mask,
+                         freq=freq,
+                         similarity_score='distance',
+                         temporal_aggregation='mean',
+                         spatial_aggregation='mean',
+                         default_splitting_method='val',
+                         name=target_parameter)
 
-            edge_list = np.array(edge_list)
-            edge_index_tensor = torch.tensor(edge_list, dtype=torch.long).t().contiguous()
-
-            labels_list = np.array(labels_list)
-            labels_tensor = torch.tensor(labels_list, dtype=torch.float)
-
-            masks_list = np.array(masks_list)
-            mask_tensor = torch.tensor(np.asarray(masks_list), dtype=torch.bool)
-
-            # Save tensors
-            os.makedirs(self.output_dir, exist_ok=True)
-            torch.save(node_features_tensor, os.path.join(self.output_dir, 'node_features_{}.pth'.format(yr)))
-            torch.save(edge_index_tensor, os.path.join(self.output_dir, 'edge_index_{}.pth'.format(yr)))
-            torch.save(labels_tensor, os.path.join(self.output_dir, 'labels_{}.pth'.format(yr)))
-            torch.save(mask_tensor, os.path.join(self.output_dir, 'mask_{}.pth'.format(yr)))
-
-            with open(os.path.join(self.output_dir, f'tensor_index_{yr}.txt'), 'w') as f:
-                for station in self.pth_stations:
-                    f.write(station + '\n')
+        self.set_eval_mask(eval_mask)
 
     def generate_edge_index(self):
         gdf = gpd.read_file(self.fields)

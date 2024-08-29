@@ -40,7 +40,7 @@ class PTHLSTMDataset(Dataset):
         for file_path in file_paths:
             data = torch.load(file_path, weights_only=True)
             if data.shape[2] != expected_width:
-                print(f"Skipping {file_path} due to shape mismatch. Expected {expected_width} columns, got {data.shape[2]}")
+                print(f"Skipping {file_path},shape mismatch. Expected {expected_width} columns, got {data.shape[2]}")
                 continue
             all_data.append(data)
 
@@ -134,6 +134,8 @@ class LSTMPredictor(pl.LightningModule):
         self.learning_rate = learning_rate
 
         self.log_csv = log_csv
+        self.checkpoint_callback = None
+        self.best_model_path = None
 
     def forward(self, x_lf, x_hf):
         x_lf = x_lf.squeeze()
@@ -155,6 +157,9 @@ class LSTMPredictor(pl.LightningModule):
         out = self.output_layers(out).squeeze()
         return out
 
+    def on_fit_start(self):
+        self.checkpoint_callback = self.trainer.checkpoint_callback
+
     def training_step(self, batch, batch_idx):
         y, gm, lf, hf = stack_batch(batch)
         y_hat = self(lf, hf)
@@ -163,6 +168,18 @@ class LSTMPredictor(pl.LightningModule):
         loss = self.criterion(y_hat, y_obs)
         self.log('train_loss', loss)
         return loss
+
+    def on_validation_epoch_end(self):
+        scheduler = self.trainer.lr_scheduler_configs[0].scheduler
+        if scheduler.num_bad_epochs == 0:
+            self.best_model_path = self.checkpoint_callback.best_model_path
+        elif scheduler.num_bad_epochs == scheduler.num_bad_epochs:
+            if self.best_model_path:
+                print(f"Loading best model from {self.best_model_path} due to learning rate plateau")
+                best_model = LSTMPredictor.load_from_checkpoint(self.best_model_path)
+                self.load_state_dict(best_model.state_dict())
+            else:
+                print("No best model saved yet. Continuing training.")
 
     def on_train_epoch_end(self):
 
@@ -243,7 +260,7 @@ class LSTMPredictor(pl.LightningModule):
         }
 
 
-def train_model(pth, metadata, batch_size=1, learning_rate=0.01, n_workers=1, logging_csv=None):
+def train_model(dirpath, pth, metadata, batch_size=1, learning_rate=0.01, n_workers=1, logging_csv=None):
     """"""
 
     with open(metadata, 'r') as f:
@@ -293,6 +310,7 @@ def train_model(pth, metadata, batch_size=1, learning_rate=0.01, n_workers=1, lo
     checkpoint_callback = ModelCheckpoint(
         monitor="val_loss",
         filename="best_model",
+        dirpath=dirpath,
         save_top_k=1,
         mode="min"
     )
@@ -306,9 +324,7 @@ def train_model(pth, metadata, batch_size=1, learning_rate=0.01, n_workers=1, lo
         check_finite=True,
     )
 
-    # restore_best_callback = RestoreBestOnPlateau(monitor="val_loss", mode="min")
-
-    trainer = pl.Trainer(max_epochs=1000, callbacks=[early_stop_callback, checkpoint_callback],
+    trainer = pl.Trainer(max_epochs=1000, callbacks=[checkpoint_callback, early_stop_callback],
                          accelerator='gpu', devices=1)
     trainer.fit(model, train_dataloader, val_dataloader)
 
@@ -322,9 +338,9 @@ if __name__ == '__main__':
     target_var = 'vpd'
 
     if device_name == 'NVIDIA GeForce RTX 2080':
-        workers = 1
-    elif device_name == 'NVIDIA RTX A6000':
         workers = 6
+    elif device_name == 'NVIDIA RTX A6000':
+        workers = 12
     else:
         raise NotImplementedError('Specify the machine this is running on')
 
@@ -347,7 +363,9 @@ if __name__ == '__main__':
     metadata_ = os.path.join(param_dir, 'training_metadata.json')
 
     now = datetime.now().strftime('%m%d%H%M')
-    logger_csv = os.path.join(param_dir, 'training_{}.csv'.format(now))
+    chk = os.path.join(param_dir, 'checkpoints', now)
+    os.mkdir(chk)
+    logger_csv = os.path.join(chk, 'training_{}.csv'.format(now))
 
-    train_model(pth_, metadata_, batch_size=256, learning_rate=0.01, n_workers=workers, logging_csv=logger_csv)
+    train_model(chk, pth_, metadata_, batch_size=512, learning_rate=0.001, n_workers=workers, logging_csv=logger_csv)
 # ========================= EOF ====================================================================
