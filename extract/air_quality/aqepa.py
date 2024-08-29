@@ -37,7 +37,7 @@ def download_county_air_quality_data(key_file, state_fips, county_fips, start_da
     # st/co/site/code/yr
     exists = ['_'.join(f.split('.')[0].split('_')[1:3]) for f in os.listdir(data_dst)]
 
-    years = list(range(start_date, end_date))
+    years = list(range(start_date, end_date + 1))
     years.reverse()
 
     for code, obsname in AQS_PARAMETERS.items():
@@ -110,8 +110,9 @@ def create_daily_idw_raster(csv_files_pattern):
         interpolated_aqi = np.sum(weights * aqi_values, axis=1)
         return interpolated_aqi.reshape(len(grid_lat), len(grid_lon))
 
-    daily_idw = ds.groupby('timestamp.date').apply(compute_idw)
-    daily_idw_da = xr.DataArray(daily_idw.values, coords=[daily_idw.index, grid_lat, grid_lon], dims=['time', 'lat', 'lon'])
+    daily_idw = ds.groupby('timestamp.date').map(compute_idw)
+    daily_idw_da = xr.DataArray(daily_idw.values, coords=[daily_idw.index, grid_lat, grid_lon],
+                                dims=['time', 'lat', 'lon'])
     daily_idw_da.to_netcdf('daily_aqi_idw.nc')
 
 
@@ -154,8 +155,8 @@ if __name__ == '__main__':
 
         for geoid, name_ in counties.items():
             st_code, co_code = geoid[:2], geoid[2:]
-            # download_county_air_quality_data(js, st_code, co_code, 2000, 2024, data_dst=aq_data)
+            download_county_air_quality_data(js, st_code, co_code, 2000, 2024, data_dst=aq_data)
 
-        write_aqs_shapefile(meta_js=aq_meta, shapefile_out=aq_shp)
+        # write_aqs_shapefile(meta_js=aq_meta, shapefile_out=aq_shp)
 
 # ========================= EOF ====================================================================
