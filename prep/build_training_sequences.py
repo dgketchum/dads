@@ -33,7 +33,7 @@ def join_training(stations, ts_dir, landsat_dir, dem_dir, out_dir, scaling_json=
     tiles = stations['MGRS_TILE'].unique()
     for tile in tqdm(tiles, total=len(tiles)):
 
-        # if tile not in ['12TUP', '12TVP', '12TUN', '12TVN']:
+        # if tile not in ['12TWS']:
         #     continue
 
         sol_file = os.path.join(dem_dir, 'tile_{}.csv'.format(tile))
@@ -48,7 +48,7 @@ def join_training(stations, ts_dir, landsat_dir, dem_dir, out_dir, scaling_json=
 
         for i, (f, row) in enumerate(tile_sites.iterrows(), start=1):
 
-            # if f != 'CAMINO':
+            # if f != 'TMPF7':
             #     continue
 
             outfile = os.path.join(out_dir, '{}.csv'.format(f))
@@ -208,7 +208,7 @@ if __name__ == '__main__':
     else:
         sta = os.path.join(d, 'met', 'joined', 'daily')
 
-    if overwrite_ or remove_existing:
+    if remove_existing:
         l = [os.path.join(out_csv, f) for f in os.listdir(out_csv)]
         [os.remove(f) for f in l]
         print('removed existing data in {}'.format(out_csv))

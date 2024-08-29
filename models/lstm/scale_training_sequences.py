@@ -1,7 +1,7 @@
 import os
 import json
 import random
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from tqdm import tqdm
 import numpy as np
@@ -15,7 +15,7 @@ from process.rs.landsat_prep import build_landsat_tables
 TERRAIN_FEATURES = ['slope', 'aspect', 'elevation', 'tpi_1250', 'tpi_250', 'tpi_150']
 
 
-def print_rsmse(o, n, g):
+def print_rmse(o, n, g):
     r2_nl = r2_score(o, n)
     rmse_nl = root_mean_squared_error(o, n)
     print("r2_nldas", r2_nl)
@@ -27,37 +27,40 @@ def print_rsmse(o, n, g):
     print('rmse_gridmet', rmse_gm)
 
 
-def apply_scaling_and_save(csv_dir, scaling_json, training_metadata, output_dir, train_frac=0.8,
-                           chunk_size=72, chunks_per_file=1000, target='rsds', hourly_dir=None):
+def apply_scaling_and_save(csv_dir, scaling_json, training_metadata, output_dir, train_frac=0.8, chunk_size=72,
+                           chunks_per_file=1000, target='rsds', hourly_dir=None, shuffle=False):
     with open(scaling_json, 'r') as f:
         scaling_data = json.load(f)
 
+    scaling_data['chunk_size'] = chunk_size
+    scaling_data['chunks_per_file'] = chunks_per_file
     scaling_data['column_order'] = []
     scaling_data['scaling_status'] = []
     scaling_data['data_frequency'] = []
     scaling_data['observation_count'] = 0
 
-    stations = scaling_data['stations']
-    scaling_data['train_stations'] = []
-    scaling_data['val_stations'] = []
-    scaling_data['chunk_size'] = chunk_size
-    scaling_data['chunks_per_file'] = chunks_per_file
+    files_ = [f for f in os.listdir(csv_dir) if f.endswith('.csv')]
 
-    if not os.path.exists(os.path.join(output_dir, 'val')):
-        os.mkdir(os.path.join(output_dir, 'val'))
-
-    if not os.path.exists(os.path.join(output_dir, 'train')):
-        os.mkdir(os.path.join(output_dir, 'train'))
+    if shuffle:
+        stations = [f.split('.')[0] for f in files_]
+        random.shuffle(stations)
+    else:
+        stations = sorted([f.split('.')[0] for f in files_])
 
     destiny = ['train' if random.random() < train_frac else 'val' for _ in stations]
-
     obs, gm, nl = [], [], []
-    all_data = {'train': [], 'val': []}
 
-    first = True
-    for fate, station in tqdm(zip(destiny, stations), total=len(destiny)):
+    first, write_files = True, 0
+    for j, (fate, station) in enumerate(zip(destiny, stations)):
 
-        scaling_data['{}_stations'.format(fate)].append(station)
+        # if station != 'LWAO2':
+        #     continue
+
+        v_file = os.path.join(output_dir, 'train', '{}.pth'.format(station))
+        t_file = os.path.join(output_dir, 'val', '{}.pth'.format(station))
+
+        if any([os.path.exists(t_file), os.path.exists(v_file)]):
+            continue
 
         filepath = os.path.join(csv_dir, '{}.csv'.format(station))
         try:
@@ -74,7 +77,8 @@ def apply_scaling_and_save(csv_dir, scaling_json, training_metadata, output_dir,
 
         except FileNotFoundError:
             continue
-
+        except TypeError:
+            continue
         if df.empty:
             continue
 
@@ -121,10 +125,10 @@ def apply_scaling_and_save(csv_dir, scaling_json, training_metadata, output_dir,
         data_tensor_hourly = torch.tensor(dfhr.values, dtype=torch.float32)
 
         matching_timestamps = df.index.intersection(dfhr.index)
-        num_chunks = len(matching_timestamps) // chunk_size
 
-        for i in range(num_chunks):
-            end_timestamp = matching_timestamps[(i + 1) * chunk_size - 1]
+        station_chunk_ct, station_chunks = 0, []
+        for i in range(len(matching_timestamps) - chunk_size + 1):
+            end_timestamp = matching_timestamps[i + chunk_size - 1]
 
             end_index_daily = df.index.get_loc(end_timestamp)
             end_index_hourly = dfhr.index.get_loc(end_timestamp)
@@ -135,8 +139,8 @@ def apply_scaling_and_save(csv_dir, scaling_json, training_metadata, output_dir,
             chunk_hourly_start = max(0, end_index_hourly - chunk_size + 1)
             chunk_hourly = data_tensor_hourly[chunk_hourly_start: end_index_hourly + 1]
 
-            consecutive = np.array(day_diff[i * chunk_size: (i + 1) * chunk_size])
-            sequence_check = np.all(consecutive == 1)
+            check_consecutive = np.array(day_diff[i + chunk_size - 1])
+            sequence_check = np.all(check_consecutive == 1)
             if not sequence_check:
                 continue
 
@@ -144,20 +148,24 @@ def apply_scaling_and_save(csv_dir, scaling_json, training_metadata, output_dir,
                 continue
 
             combined_chunk = torch.cat([chunk_daily, chunk_hourly], dim=1)
-            all_data[fate].append(combined_chunk)
+            station_chunks.append(combined_chunk)
+            station_chunk_ct += 1
 
-    for fate in ['train', 'val']:
-        outfile = os.path.join(output_dir, fate, 'all_data.pth')
-        torch.save(torch.stack(all_data[fate]), outfile)
-        scaling_data['observation_count'] = chunk_size * len(all_data[fate])
+        if len(station_chunks) > 0:
+            outfile = os.path.join(output_dir, fate, '{}.pth'.format(station))
+            torch.save(torch.stack(station_chunks), outfile)
+            write_files += 1
+            print(station, j, 'of', len(stations), station_chunk_ct, 'new sequences')
+            scaling_data['observation_count'] += chunk_size * len(station_chunks)
 
-    with open(training_metadata, 'w') as fp:
-        json.dump(scaling_data, fp, indent=4)
+    if training_metadata:
+        with open(training_metadata, 'w') as fp:
+            json.dump(scaling_data, fp, indent=4)
 
-    print('\n{} sites\n{} {} observations and {} validation records'.format(len(scaling_data['stations']), len(obs),
-                                                                            target_var,
-                                                                            scaling_data['observation_count']))
-    print_rsmse(obs, nl, gm)
+    print('\n{} sites\n{} records; {} observations and {} validation records'.format(write_files, len(obs),
+                                                                                     target_var,
+                                                                                     scaling_data['observation_count']))
+    print_rmse(obs, nl, gm)
 
 
 if __name__ == '__main__':
@@ -186,24 +194,23 @@ if __name__ == '__main__':
     out_pth = os.path.join(param_dir, 'scaled_pth')
 
     scaling_ = os.path.join(param_dir, 'scaling_metadata.json')
-    metadata = os.path.join(param_dir, 'training_metadata.json')
 
     # hourly_data = None
     hourly_data = os.path.join(d, 'met', 'gridded', 'nldas2_hourly')
 
-    if not os.path.exists(training):
-        os.mkdir(training)
-
-    if not os.path.exists(param_dir):
-        os.mkdir(param_dir)
-
-    if not os.path.exists(out_csv):
-        os.mkdir(out_csv)
-
     if not os.path.exists(out_pth):
         os.mkdir(out_pth)
 
+    if not os.path.exists(os.path.join(out_pth, 'val')):
+        os.mkdir(os.path.join(out_pth, 'val'))
+
+    if not os.path.exists(os.path.join(out_pth, 'train')):
+        os.mkdir(os.path.join(out_pth, 'train'))
+
     print('========================== scaling {} =========================='.format(target_var))
 
-    apply_scaling_and_save(out_csv, scaling_, metadata, out_pth, target=target_var, hourly_dir=hourly_data)
+    # metadata = None
+    metadata = os.path.join(param_dir, 'training_metadata.json')
+    apply_scaling_and_save(out_csv, scaling_, metadata, out_pth, target=target_var, hourly_dir=hourly_data,
+                           chunk_size=48, shuffle=True)
 # ========================= EOF ==============================================================================
