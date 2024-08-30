@@ -34,8 +34,6 @@ def get_stations(stations, csv_dir, out_csv, bounds=None, validation_frac=0.2, v
         else:
             df = pd.concat([df, data.copy()], ignore_index=False)
 
-    df.index = df['fid']
-
     if validation_stations:
         df['val'] = 0
         df.loc[validation_stations, 'val'] = 1
@@ -82,7 +80,7 @@ if __name__ == '__main__':
     param_dir = os.path.join(training, target_var)
     csv_dir_ = os.path.join(param_dir, 'compiled_csv')
 
-    out_csv_ = os.path.join(d, 'graphs', 'stgnn', 'stations.csv')
+    out_csv_ = os.path.join(param_dir, 'graph', 'stations.csv')
 
     bounds = (-116., 44., -110., 49.)
 
