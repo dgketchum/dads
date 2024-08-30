@@ -2,6 +2,7 @@ import os
 import json
 import glob
 import gzip
+import random
 import subprocess
 import multiprocessing
 import time
@@ -309,6 +310,7 @@ if __name__ == "__main__":
     # the FTP we're currently using has from 2001-07-01
     times = generate_monthly_time_tuples(2001, 2024)
     times = [t for t in times if int(t[0][:6]) >= 200107]
+    random.shuffle(times)
 
     # num_processes = 1
     num_processes = 12
