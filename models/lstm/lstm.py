@@ -169,18 +169,6 @@ class LSTMPredictor(pl.LightningModule):
         self.log('train_loss', loss)
         return loss
 
-    def on_validation_epoch_end(self):
-        scheduler = self.trainer.lr_scheduler_configs[0].scheduler
-        if scheduler.num_bad_epochs == 0:
-            self.best_model_path = self.checkpoint_callback.best_model_path
-        elif scheduler.num_bad_epochs == scheduler.num_bad_epochs:
-            if self.best_model_path:
-                print(f"Loading best model from {self.best_model_path} due to learning rate plateau")
-                best_model = LSTMPredictor.load_from_checkpoint(self.best_model_path)
-                self.load_state_dict(best_model.state_dict())
-            else:
-                print("No best model saved yet. Continuing training.")
-
     def on_train_epoch_end(self):
 
         if self.log_csv:
@@ -340,7 +328,7 @@ if __name__ == '__main__':
     if device_name == 'NVIDIA GeForce RTX 2080':
         workers = 6
     elif device_name == 'NVIDIA RTX A6000':
-        workers = 12
+        workers = 6
     else:
         raise NotImplementedError('Specify the machine this is running on')
 
