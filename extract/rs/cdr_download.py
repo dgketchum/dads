@@ -8,6 +8,16 @@ import requests
 from bs4 import BeautifulSoup
 
 CATALOG = {
+    1990: 'AVHRR-Land_v005_AVH09C1_NOAA-11',
+    1991: 'AVHRR-Land_v005_AVH09C1_NOAA-11',
+    1992: 'AVHRR-Land_v005_AVH09C1_NOAA-11',
+    1993: 'AVHRR-Land_v005_AVH09C1_NOAA-11',
+    1994: 'AVHRR-Land_v005_AVH09C1_NOAA-11',
+    1995: 'AVHRR-Land_v005_AVH09C1_NOAA-14',
+    1996: 'AVHRR-Land_v005_AVH09C1_NOAA-14',
+    1997: 'AVHRR-Land_v005_AVH09C1_NOAA-14',
+    1998: 'AVHRR-Land_v005_AVH09C1_NOAA-14',
+    1999: 'AVHRR-Land_v005_AVH09C1_NOAA-14',
     2000: 'AVHRR-Land_v005_AVH09C1_NOAA-14',
     2001: 'AVHRR-Land_v005_AVH09C1_NOAA-16',
     2002: 'AVHRR-Land_v005_AVH09C1_NOAA-16',
@@ -42,7 +52,7 @@ CATALOG_URL = 'https://www.ncei.noaa.gov/thredds/catalog/cdr/surface-reflectance
 
 def get_catalog(out_meta):
     catalog = {}
-    for year in range(2000, 2025):
+    for year in range(1990, 2025):
         catalog[year] = {}
         catalog_url = CATALOG_URL.format(year)
         response = requests.get(catalog_url)
