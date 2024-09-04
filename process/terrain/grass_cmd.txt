@@ -1,0 +1,18 @@
+(base) dgketchum@dgketchum-r:/media/nvm/IrrigationGIS/dads/dem$ grass grassdata/conus/dads_map/
+
+/media/nvm/IrrigationGIS/dads/dem$ grass grassdata/conus/dads_map/
+
+# download DEM from Earth Engine: dads/extract/rs/earth_engine/call_ee.py
+
+# project the data (no longer necessary, it's exported as EPSG:5071
+for file in dem/dem_250/*.tif; do
+  gdalwarp -t_srs EPSG:5071 "$file" "dem/proj/$(basename "$file")"
+done
+
+# from GRASS cmd
+g.mapset mapset=dads_map
+
+# run grass-based python code on projected data: process/terrain/sun.py (calculate_terrain_irradiance)
+
+# export the GRASS rasters to .tif files for point extraction:   process/terrain/sun.py (export_rasters)
+
