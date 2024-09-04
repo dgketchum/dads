@@ -1,20 +1,29 @@
 import os
 import json
+import concurrent.futures
+
+import numpy as np
 import pandas as pd
 import xarray as xr
 from datetime import datetime
 
-from utils.station_parameters import station_par_map
+AVHRR_VARS = ['SREFL_CH1',
+              'SREFL_CH2',
+              'SREFL_CH3',
+              'BT_CH3',
+              'BT_CH4',
+              'BT_CH5']
 
-import os
-import pandas as pd
-import xarray as xr
-from datetime import datetime
+VIIRS_VARS = ['BRDF_corrected_I1_SurfRefl_CMG',
+              'BRDF_corrected_I2_SurfRefl_CMG',
+              'BRDF_corrected_I3_SurfRefl_CMG',
+              'BT_CH12',
+              'BT_CH15',
+              'BT_CH16']
 
-from utils.station_parameters import station_par_map
 
-
-def extract_surface_reflectance(stations, gridded_dir, incomplete_out, overwrite=False, bounds=None):
+def extract_surface_reflectance(stations, gridded_dir, incomplete_out, out_data, overwrite=False, bounds=None,
+                                num_workers=1):
     if os.path.exists(incomplete_out):
         with open(incomplete_out, 'r') as f:
             incomplete = json.load(f)
@@ -34,9 +43,15 @@ def extract_surface_reflectance(stations, gridded_dir, incomplete_out, overwrite
         station_list = station_list[(station_list['longitude'] < e) & (station_list['longitude'] >= w)]
         print('dropped {} stations outside NLDAS-2 extent'.format(ln - station_list.shape[0]))
 
-    start, end = datetime(2020, 1, 1), datetime(2024, 8, 1)
+    start, end = datetime(2000, 1, 1), datetime(2024, 8, 1)
 
     for year in range(start.year, end.year + 1):
+
+        if year <= 2013:
+            extract_vars = AVHRR_VARS
+        else:
+            extract_vars = VIIRS_VARS
+
         for month in range(1, 13):
             if year == start.year and month < start.month:
                 continue
@@ -44,7 +59,6 @@ def extract_surface_reflectance(stations, gridded_dir, incomplete_out, overwrite
                 break
 
             month_start = datetime(year, month, 1)
-            month_end = (month_start + pd.DateOffset(months=1)) - pd.DateOffset(days=1)
             date_string = month_start.strftime('%Y%m')
 
             nc_files = [f for f in os.listdir(gridded_dir) if date_string in f]
@@ -66,43 +80,38 @@ def extract_surface_reflectance(stations, gridded_dir, incomplete_out, overwrite
             if not complete:
                 continue
 
-            combined = xr.concat(datasets, dim='time')
+            ds = xr.concat(datasets, dim='time')
+            time_values = pd.to_datetime(ds['time'].values, unit='D', origin=pd.Timestamp('1981-01-01'))
+            ds = ds.assign_coords(time=time_values).set_index(time='time')
 
             indexer = station_list[['latitude', 'longitude']].to_xarray()
-            site_data = combined.sel(latitude=indexer.latitude, longitude=indexer.longitude, method='nearest')
-            df = site_data.to_dataframe()
+            ds = ds.sel(latitude=indexer.latitude, longitude=indexer.longitude, method='nearest')
 
+            # TODO: consider making use of zenith, overpass time and QA data
+            fids = np.unique(indexer.fid.values).tolist()
 
-            record_ct = station_list.shape[0]
-            for i, (fid, row) in enumerate(station_list.iterrows(), start=1):
-                lon, lat, elv = row['longitude', 'latitude', 'elevation']
-                print('{}: {} of {}; {:.2f}, {:.2f}'.format(fid, i, record_ct, lat, lon))
-
-                dst_dir = os.path.join(gridded_dir, 'cdr_raw', fid)
-                if not os.path.exists(dst_dir):
-                    os.mkdir(dst_dir)
-
-                _file = os.path.join(dst_dir, '{}_{}_{}.csv'.format(fid, year, month))
-
-                if not os.path.exists(_file) or overwrite:
-                    subset = combined.sel(lon=lon, lat=lat, method='nearest')
-                    subset = subset.loc[dict(day=slice(month_start, month_end))]
-                    subset = subset.rename({'day': 'time'})
-
-                    date_ind = pd.date_range(month_start, month_end, freq='d')
-                    subset['time'] = date_ind
-
-                    time = subset['time'].values
-                    series = subset[var_].values
-                    df = pd.DataFrame(data=series, index=time)
-                    df.columns = [var_]
-
-                    df.to_csv(_file, mode='a', header=not os.path.exists(_file))  # Append if file exists
-                    print('cdr', fid)
+            with concurrent.futures.ThreadPoolExecutor(max_workers=num_workers) as executor:
+                futures = [executor.submit(process_fid, fid, year, month, ds, extract_vars,
+                                           out_data, overwrite) for fid in fids]
+                concurrent.futures.wait(futures)
 
     if len(incomplete) > 0:
         with open(incomplete_out, 'w') as fp:
             json.dump(incomplete, fp, indent=4)
+
+
+def process_fid(fid, year, month, ds, extract_vars, out_data, overwrite):
+    dst_dir = os.path.join(out_data, fid)
+    if not os.path.exists(dst_dir):
+        os.mkdir(dst_dir)
+    _file = os.path.join(dst_dir, '{}_{}_{}.csv'.format(fid, year, month))
+
+    if not os.path.exists(_file) or overwrite:
+        df_station = ds.sel(fid=fid).to_dataframe()
+        df_station = df_station.groupby(df_station.index.get_level_values('time').date).first()
+        df_station = df_station[extract_vars]
+        df_station.to_csv(_file)
+        print(_file)
 
 
 if __name__ == '__main__':
@@ -117,8 +126,11 @@ if __name__ == '__main__':
     sites = os.path.join(d, 'dads', 'met', 'stations', 'dads_stations_elev_mgrs.csv')
 
     grid_dir = os.path.join(d, 'dads', 'rs', 'cdr', 'nc')
+    out_dir = os.path.join(d, 'dads', 'rs', 'cdr', 'csv')
     incomp = os.path.join(d, 'dads', 'rs', 'cdr', 'incomplete_files.json')
 
-    extract_surface_reflectance(sites, grid_dir, incomp, overwrite=False, bounds=(-125.0, 25.0, -67.0, 53.0))
+    workers = 20
+    extract_surface_reflectance(sites, grid_dir, incomp, out_dir, num_workers=workers,
+                                overwrite=False, bounds=(-125.0, 25.0, -67.0, 53.0))
 
 # ========================= EOF ====================================================================
