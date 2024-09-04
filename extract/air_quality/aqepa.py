@@ -96,15 +96,15 @@ def create_daily_idw_raster(csv_files_pattern):
     df = pd.concat(dfs)
     ds = xr.Dataset.from_dataframe(df.set_index(['timestamp', 'latitude', 'longitude']))
 
-    grid_lon = np.arange(-130, -60, 0.1)
-    grid_lat = np.arange(25, 50, 0.1)
+    grid_lon = np.arange(-130, -60, 0.05)
+    grid_lat = np.arange(25, 50, 0.05)
 
     def compute_idw(data):
         station_coords = data[['longitude', 'latitude']].values
         tree = cKDTree(station_coords)
         grid_coords = np.array(np.meshgrid(grid_lon, grid_lat)).T.reshape(-1, 2)
         distances, indices = tree.query(grid_coords, k=5)
-        weights = 1.0 / distances**2
+        weights = 1.0 / distances ** 2
         weights /= weights.sum(axis=1, keepdims=True)
         aqi_values = data['aqi'].values[indices]
         interpolated_aqi = np.sum(weights * aqi_values, axis=1)
@@ -116,19 +116,67 @@ def create_daily_idw_raster(csv_files_pattern):
     daily_idw_da.to_netcdf('daily_aqi_idw.nc')
 
 
-def write_aqs_shapefile(meta_js, shapefile_out):
-    with open(meta_js, 'r') as fp:
-        meta = json.load(fp)
+def join_aq_data(data_src, data_dst, out_csv):
 
-    pop = []
-    for k, v in meta.items():
-        if v == 'nodata':
-            pop.append(k)
-    [meta.pop(k) for k in pop]
-    gdf = pd.DataFrame().from_dict(meta).T
-    gdf = gpd.GeoDataFrame(gdf, geometry=gpd.points_from_xy(gdf['lon'], gdf['lat'], crs='EPSG:4326'))
-    gdf.to_file(shapefile_out)
+    metadata = {}
+    data_frames = {}
+    dt = pd.date_range('2000-01-01', '2024-06-30', freq='D')
+    blank = pd.DataFrame(columns=[v for k, v in AQS_PARAMETERS.items()], index=pd.DatetimeIndex(dt))
 
+    files_ = [os.path.join(data_src, f) for f in os.listdir(data_src) if f.endswith('.csv')]
+    for filename in files_:
+
+        base = os.path.basename(filename)
+
+        if not base.startswith('MT'):
+            continue
+
+        parts = base.split('_')
+        state_name, state_fips, county_fips, site_no, code, year = (parts[0], parts[1][:2], parts[1][2:5],
+                                                                    parts[1][5:], parts[2], parts[3].split('.')[0])
+
+        param = AQS_PARAMETERS[code]
+        df = pd.read_csv(filename, index_col='date', parse_dates=True)
+        df = df.groupby(df.index).agg('first')
+        key = f'{state_fips}{county_fips}{site_no}'
+
+        if key not in data_frames.keys():
+            data_frames[key] = blank.copy()
+
+        idx = [i for i in df.index if i in data_frames[key].index]
+        data_frames[key].loc[idx, param] = df.loc[idx, param].astype(float)
+
+        if key not in metadata:
+            metadata[key] = {
+                'state': state_name,
+                'st_fips': state_fips,
+                'co_fips': county_fips,
+                'site_no': site_no,
+                'latitude': df['latitude'].iloc[0],
+                'longitude': df['longitude'].iloc[0],
+            }
+            for param_code, param_name in AQS_PARAMETERS.items():
+                metadata[key][param_name] = 0
+
+            print('read', filename)
+
+    for key, df in data_frames.items():
+        out_file = os.path.join(data_dst, f'{key}.csv')
+        df.to_csv(out_file)
+        print('write', f'{key}.csv')
+
+        for k, v in AQS_PARAMETERS.items():
+            metadata[key][v] = np.count_nonzero(~pd.isna(df[v]))
+
+    metadata_df = pd.DataFrame(metadata.values())
+    metadata_df.to_csv(os.path.join(out_csv), index=False)
+
+    sums = metadata_df[[v for k, v in AQS_PARAMETERS.items()]].sum(axis=0)
+    [print(k, v) for k, v in sums.items()]
+
+    gdf = gpd.GeoDataFrame(metadata_df, geometry=gpd.points_from_xy(metadata_df.longitude, metadata_df.latitude))
+    shp = out_csv.replace('.csv', '.shp')
+    gdf.to_file(shp, driver='ESRI Shapefile', crs='EPSG:4326', engine='fiona')
 
 if __name__ == '__main__':
     root = '/media/research/IrrigationGIS/dads'
@@ -136,9 +184,10 @@ if __name__ == '__main__':
         root = '/home/dgketchum/data/IrrigationGIS/dads'
 
     aq_d = os.path.join(root, 'aq')
-    aq_data = os.path.join(root, 'aq', 'data')
+    aq_data_src = os.path.join(root, 'aq', 'data')
+    aq_data_dst = os.path.join(root, 'aq', 'joined_data')
     aq_meta = os.path.join(aq_d, 'aqs_meta.json')
-    aq_shp = os.path.join(aq_d, 'aqs.shp')
+    aq_csv = os.path.join(aq_d, 'aqs.csv')
 
     js = os.path.join(aq_d, 'aqs_key.json')
 
@@ -153,10 +202,10 @@ if __name__ == '__main__':
         state_dct = fips[state]
         counties = {v['GEOID']: v['NAME'] for k, v in state_dct.items()}
 
-        for geoid, name_ in counties.items():
-            st_code, co_code = geoid[:2], geoid[2:]
-            download_county_air_quality_data(js, st_code, co_code, 2000, 2024, data_dst=aq_data)
+        # for geoid, name_ in counties.items():
+        #     st_code, co_code = geoid[:2], geoid[2:]
+        #     download_county_air_quality_data(js, st_code, co_code, 2000, 2024, data_dst=aq_data)
 
-        # write_aqs_shapefile(meta_js=aq_meta, shapefile_out=aq_shp)
+    join_aq_data(aq_data_src, aq_data_dst, aq_csv)
 
 # ========================= EOF ====================================================================
