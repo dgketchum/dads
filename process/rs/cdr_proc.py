@@ -61,7 +61,7 @@ def extract_surface_reflectance(stations, gridded_dir, incomplete_out, out_data,
             month_start = datetime(year, month, 1)
             date_string = month_start.strftime('%Y%m')
 
-            nc_files = [f for f in os.listdir(gridded_dir) if date_string in f]
+            nc_files = [f for f in os.listdir(gridded_dir) if date_string == f.split('_')[-2][:6]]
             if not nc_files:
                 print(f"No NetCDF files found for {year}-{month}")
                 continue
@@ -72,10 +72,11 @@ def extract_surface_reflectance(stations, gridded_dir, incomplete_out, out_data,
                     nc_file = os.path.join(gridded_dir, f)
                     ds = xr.open_dataset(nc_file, engine='netcdf4', decode_cf=False)
                     datasets.append(ds.sel(latitude=slice(n, s), longitude=slice(w, e)))
-                except (TypeError, ValueError) as exc:
-                    incomplete['missing'].append(f)
+                except (TypeError, ValueError, OSError) as exc:
+                    incomplete['missing'].append((f, exc.args[0]))
+                    print(f"Unreadable NetCDF files found for {year}-{month}")
                     complete = False
-                    pass
+                    break
 
             if not complete:
                 continue
@@ -89,7 +90,6 @@ def extract_surface_reflectance(stations, gridded_dir, incomplete_out, out_data,
 
             # TODO: consider making use of zenith, overpass time and QA data
             fids = np.unique(indexer.fid.values).tolist()
-
             with concurrent.futures.ThreadPoolExecutor(max_workers=num_workers) as executor:
                 futures = [executor.submit(process_fid, fid, year, month, ds, extract_vars,
                                            out_data, overwrite) for fid in fids]
