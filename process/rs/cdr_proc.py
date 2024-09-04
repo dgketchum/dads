@@ -34,7 +34,7 @@ def extract_surface_reflectance(stations, gridded_dir, incomplete_out, overwrite
         station_list = station_list[(station_list['longitude'] < e) & (station_list['longitude'] >= w)]
         print('dropped {} stations outside NLDAS-2 extent'.format(ln - station_list.shape[0]))
 
-    start, end = datetime(2000, 1, 1), datetime(2024, 8, 1)
+    start, end = datetime(2020, 1, 1), datetime(2024, 8, 1)
 
     for year in range(start.year, end.year + 1):
         for month in range(1, 13):
@@ -52,23 +52,26 @@ def extract_surface_reflectance(stations, gridded_dir, incomplete_out, overwrite
                 print(f"No NetCDF files found for {year}-{month}")
                 continue
 
-            datasets = []
-            complete = True
+            datasets, complete = [], True
             for f in nc_files:
                 try:
                     nc_file = os.path.join(gridded_dir, f)
                     ds = xr.open_dataset(nc_file, engine='netcdf4', decode_cf=False)
-                    datasets.append(ds.sel(latitude=slice(n + 0.05, s - 0.05), longitude=slice(w - 0.05, e + 0.05)))
-                except (AttributeError, OSError) as exc:
-                    incomplete['missing'].append(f'{year}{month}')
+                    datasets.append(ds.sel(latitude=slice(n, s), longitude=slice(w, e)))
+                except (TypeError, ValueError) as exc:
+                    incomplete['missing'].append(f)
                     complete = False
-                    continue
+                    pass
 
             if not complete:
-                print('failed to open {}-{}'.format(year, month))
                 continue
 
             combined = xr.concat(datasets, dim='time')
+
+            indexer = station_list[['latitude', 'longitude']].to_xarray()
+            site_data = combined.sel(latitude=indexer.latitude, longitude=indexer.longitude, method='nearest')
+            df = site_data.to_dataframe()
+
 
             record_ct = station_list.shape[0]
             for i, (fid, row) in enumerate(station_list.iterrows(), start=1):
@@ -79,11 +82,13 @@ def extract_surface_reflectance(stations, gridded_dir, incomplete_out, overwrite
                 if not os.path.exists(dst_dir):
                     os.mkdir(dst_dir)
 
-                _file = os.path.join(dst_dir, '{}_{}.csv'.format(fid, year, month))
+                _file = os.path.join(dst_dir, '{}_{}_{}.csv'.format(fid, year, month))
 
                 if not os.path.exists(_file) or overwrite:
-                    subset = combined.sel(longitude=lon, latitude=lat, method='nearest')
+                    subset = combined.sel(lon=lon, lat=lat, method='nearest')
                     subset = subset.loc[dict(day=slice(month_start, month_end))]
+                    subset = subset.rename({'day': 'time'})
+
                     date_ind = pd.date_range(month_start, month_end, freq='d')
                     subset['time'] = date_ind
 
@@ -92,7 +97,7 @@ def extract_surface_reflectance(stations, gridded_dir, incomplete_out, overwrite
                     df = pd.DataFrame(data=series, index=time)
                     df.columns = [var_]
 
-                    df.to_csv(_file, mode='a', header=not os.path.exists(_file))
+                    df.to_csv(_file, mode='a', header=not os.path.exists(_file))  # Append if file exists
                     print('cdr', fid)
 
     if len(incomplete) > 0:
