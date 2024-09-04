@@ -128,9 +128,6 @@ def join_aq_data(data_src, data_dst, out_csv):
 
         base = os.path.basename(filename)
 
-        if not base.startswith('MT'):
-            continue
-
         parts = base.split('_')
         state_name, state_fips, county_fips, site_no, code, year = (parts[0], parts[1][:2], parts[1][2:5],
                                                                     parts[1][5:], parts[2], parts[3].split('.')[0])

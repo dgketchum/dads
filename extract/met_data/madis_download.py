@@ -1,4 +1,5 @@
 import os
+import io
 import json
 import glob
 import gzip
@@ -13,6 +14,7 @@ from pathlib import Path
 import geopandas as gpd
 import pandas as pd
 import xarray as xr
+import netCDF4 as nc
 
 from utils.elevation import elevation_from_coordinate
 
@@ -213,8 +215,10 @@ def read_madis_hourly(data_directory, date, output_directory, shapefile=None, bo
             continue
 
         except ValueError as e:
-            print('{}: {}'.format(os.path.basename(filename), e))
-            continue
+            print('{}: {}, {}'.format(os.path.basename(filename), dt, e))
+            # if 'buffer size' in e.args[0]:
+            #     os.remove(filename)
+            return
 
     for k, v in data.items():
         d = os.path.join(output_directory, k)
@@ -308,9 +312,9 @@ if __name__ == "__main__":
     mesonet_dir = os.path.join(madis_data_dir_, 'LDAD', 'mesonet')
 
     # the FTP we're currently using has from 2001-07-01
-    times = generate_monthly_time_tuples(2001, 2024)
+    times = generate_monthly_time_tuples(2000, 2024)
     times = [t for t in times if int(t[0][:6]) >= 200107]
-    random.shuffle(times)
+    # random.shuffle(times)
 
     # num_processes = 1
     num_processes = 12

@@ -72,8 +72,8 @@ def extract_surface_reflectance(stations, gridded_dir, incomplete_out, out_data,
                     nc_file = os.path.join(gridded_dir, f)
                     ds = xr.open_dataset(nc_file, engine='netcdf4', decode_cf=False)
                     datasets.append(ds.sel(latitude=slice(n, s), longitude=slice(w, e)))
-                except (TypeError, ValueError, OSError) as exc:
-                    incomplete['missing'].append((f, exc.args[0]))
+                except Exception as exc:
+                    incomplete['missing'].append(f)
                     print(f"Unreadable NetCDF files found for {year}-{month}")
                     complete = False
                     break

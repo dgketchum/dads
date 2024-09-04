@@ -64,9 +64,6 @@ def calculate_terrain_irradiance(terrain_dir, mapset='PERMANENT', overwrite=Fals
 
 def export_rasters(terrain_dir, out_dir, mapset='PERMANENT', overwrite=False, mgrs_list=None):
 
-    if mgrs_list:
-        mgrs_list = pd.read_csv(mgrs_list)['MGRS_TILE'].tolist()
-
     d = os.path.join(terrain_dir, 'proj')
 
     dem_files = sorted(os.listdir(d))
@@ -139,11 +136,12 @@ if __name__ == '__main__':
 
     dem_d = os.path.join(root, 'dem')
     out_dem = os.path.join(out, 'dem')
-    mgrs = os.path.join(out_dem, 'w17_tiles.csv')
 
-    # calculate_terrain_irradiance(dem_d, mapset="dads_map", overwrite=False)
+    calculate_terrain_irradiance(dem_d, mapset="dads_map", overwrite=False)
 
-    export_rasters(dem_d, out_dem, mapset="dads_map", overwrite=True, mgrs_list=mgrs)
+    stations_out = os.path.join(out, 'met', 'stations', 'dads_stations_res_elev_mgrs.csv')
+    tiles = pd.read_csv(stations_out)['MGRS_TILE'].unique().tolist()
+    # export_rasters(dem_d, out_dem, mapset="dads_map", overwrite=False, mgrs_list=tiles)
 
     # remove_rasters(dem_d, resolution=30)
 

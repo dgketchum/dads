@@ -5,7 +5,9 @@ import time
 from multiprocessing import Pool
 
 import requests
-from bs4 import BeautifulSoup
+
+# activate an interpreter with bs4 to read the catalog
+# from bs4 import BeautifulSoup
 
 CATALOG = {
     1990: 'AVHRR-Land_v005_AVH09C1_NOAA-11',
@@ -110,7 +112,7 @@ def download(data_dir, meta, num_proc, chunk_len=5):
     with open(meta, 'r') as f:
         catalog = json.load(f)
 
-    for year in range(2000, 2025):
+    for year in range(1990, 2025):
         all_urls = [v[1] for k, v in catalog[str(year)].items()]
         all_targets = [os.path.join(data_dir, v[0]) for k, v in catalog[str(year)].items()]
 

@@ -14,5 +14,11 @@ g.mapset mapset=dads_map
 
 # run grass-based python code on projected data: process/terrain/sun.py (calculate_terrain_irradiance)
 
+# put the data in GRASS env:
+for file in /media/nvm/IrrigationGIS/dads/dem/proj/*.tif; do
+  r.in.gdal input="$file" output="$(basename "$file" .tif)"
+done
+
+
 # export the GRASS rasters to .tif files for point extraction:   process/terrain/sun.py (export_rasters)
 
