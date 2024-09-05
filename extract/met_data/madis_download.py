@@ -169,46 +169,65 @@ def read_madis_hourly(data_directory, date, output_directory, shapefile=None, bo
     for filename in file_list:
 
         dt = os.path.basename(filename).split('.')[0].replace('_', '')
+        temp_nc_file = None
 
+        # following exception handler reads both new-style and classic NetCDF
         try:
             with gzip.open(filename) as fp:
                 ds = xr.open_dataset(fp, engine='scipy')
-                valid_data = ds[required_vars]
-                df = valid_data.to_dataframe()
-                df['stationId'] = df['stationId'].astype(str)
-                df = df[(df['latitude'] < bounds[3]) & (df['latitude'] >= bounds[1])]
-                df = df[(df['longitude'] < bounds[2]) & (df['longitude'] >= bounds[0])]
-                df.dropna(how='any', inplace=True)
-                df.set_index('stationId', inplace=True, drop=True)
+        except Exception as e:  # Catch any exceptions during xarray open
+            print(f"Error opening {filename} with xarray: {e}")
 
-                if first and shapefile:
-                    sites = df[['latitude', 'longitude']]
-                    sites = sites.groupby(sites.index).mean()
-                    sites = sites.to_dict(orient='index')
-                elif shapefile:
-                    for i, r in df.iterrows():
-                        if i not in sites.keys():
-                            sites[i] = {'latitude': r['latitude'], 'longitude': r['longitude']}
+            # write to a temporary .nc file and read with netCDF4
+            try:
+                temp_nc_file = filename.replace('.gz', '.nc')
+                with gzip.open(filename, 'rb') as f_in, open(temp_nc_file, 'wb') as f_out:
+                    f_out.write(f_in.read())
 
-                df = df.groupby(df.index).agg(SUBHOUR_RESAMPLE_MAP)
-                df['v'] = df.apply(lambda row: [float(row[v]) for v in required_vars[1:6]], axis=1)
-                df.drop(columns=required_vars[1:], inplace=True)
-                dct = df.to_dict(orient='index')
+                ds = xr.open_dataset(temp_nc_file, engine='netcdf4')
+                print(f"Successfully read {filename} after writing to temporary .nc file")
+            except Exception as e2:
+                print(f"Error writing to temporary .nc file or reading with netCDF4 for {filename}: {e2}")
+            finally:
+                if temp_nc_file and os.path.exists(temp_nc_file):
+                    os.remove(temp_nc_file)
 
-                for k, v in dct.items():
-                    if not k in data.keys():
+            valid_data = ds[required_vars]
+            df = valid_data.to_dataframe()
+            df['stationId'] = df['stationId'].astype(str)
+            df = df[(df['latitude'] < bounds[3]) & (df['latitude'] >= bounds[1])]
+            df = df[(df['longitude'] < bounds[2]) & (df['longitude'] >= bounds[0])]
+            df.dropna(how='any', inplace=True)
+            df.set_index('stationId', inplace=True, drop=True)
 
-                        data[k] = {dt: v['v']}
-                    else:
-                        data[k][dt] = v['v']
+            if first and shapefile:
+                sites = df[['latitude', 'longitude']]
+                sites = sites.groupby(sites.index).mean()
+                sites = sites.to_dict(orient='index')
+            elif shapefile:
+                for i, r in df.iterrows():
+                    if i not in sites.keys():
+                        sites[i] = {'latitude': r['latitude'], 'longitude': r['longitude']}
 
-                if first and shapefile:
-                    write_locations(sites, shapefile)
-                    first = False
+            df = df.groupby(df.index).agg(SUBHOUR_RESAMPLE_MAP)
+            df['v'] = df.apply(lambda row: [float(row[v]) for v in required_vars[1:6]], axis=1)
+            df.drop(columns=required_vars[1:], inplace=True)
+            dct = df.to_dict(orient='index')
+
+            for k, v in dct.items():
+                if not k in data.keys():
+
+                    data[k] = {dt: v['v']}
                 else:
-                    first = False
+                    data[k][dt] = v['v']
 
-                print('Wrote {} records from {}'.format(len(df), os.path.basename(filename)))
+            if first and shapefile:
+                write_locations(sites, shapefile)
+                first = False
+            else:
+                first = False
+
+            print('Wrote {} records from {}'.format(len(df), os.path.basename(filename)))
 
         except EOFError as e:
             print('{}: {}'.format(os.path.basename(filename), e))
@@ -245,7 +264,7 @@ def write_locations(loc, shp):
 
 def process_time_chunk(time_tuple):
     start_time, end_time = time_tuple
-    dt = pd.date_range(start_time, end_time, freq='H')
+    dt = pd.date_range(start_time, end_time, freq='h')
     dt = [d.strftime("%Y%m%d_%H00") for d in dt]
     hr_files = ['{}.gz'.format(d) for d in dt]
     target_dir = os.path.join(madis_data_dir_, 'LDAD', 'mesonet', 'netCDF')
@@ -312,22 +331,24 @@ if __name__ == "__main__":
     mesonet_dir = os.path.join(madis_data_dir_, 'LDAD', 'mesonet')
 
     # the FTP we're currently using has from 2001-07-01
-    times = generate_monthly_time_tuples(2000, 2024)
-    times = [t for t in times if int(t[0][:6]) >= 200107]
+    times = generate_monthly_time_tuples(2008, 2009)
+    times = [t for t in times if int(t[0][:6]) == 200807]
     # random.shuffle(times)
 
-    # num_processes = 1
-    num_processes = 12
+    num_processes = 1
+    # num_processes = 12
 
     dataset = 'INTEGRATED_MESONET'
 
+    mesonet_dir = os.path.join(madis_data_dir_, 'LDAD', 'mesonet')
     # debug
-    # process_time_chunk(times[50])
+    for t in times:
+        process_time_chunk(t)
 
     print(f"Processing dataset: {dataset} with {num_processes} processes")
 
-    with multiprocessing.Pool(processes=num_processes) as pool:
-        pool.map(process_time_chunk, times)
+    # with multiprocessing.Pool(processes=num_processes) as pool:
+    #     pool.map(process_time_chunk, times)
 
     # sites = os.path.join(madis_data_dir_, 'mesonet_sites.shp')
     # madis_station_shapefile(madis_shapes, stn_meta, sites)
