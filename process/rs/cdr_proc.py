@@ -145,6 +145,10 @@ def process_station(fid, in_dir, dst_dir, overwrite=False):
         return
 
     _dir = os.path.join(in_dir, fid)
+    if not os.path.exists(_dir):
+        print(_dir, 'does not exist')
+        return
+
     files_ = [os.path.join(_dir, f) for f in os.listdir(_dir) if f.endswith('.csv')]
     adfs, vdfs = [], []
     for f in files_:
@@ -171,13 +175,8 @@ def process_station(fid, in_dir, dst_dir, overwrite=False):
     df = pd.concat([avhrr_df, normalized_viirs_df], axis=0, ignore_index=False)
     df = df.sort_index()
     df = df.resample('D').asfreq()
-
-    df['DOY'] = df.index.dayofyear
-    doy_medians = df.groupby('DOY').median()
-    for doy, doy_median in doy_medians.iterrows():
-        df.loc[df['DOY'] == doy] = df.loc[df['DOY'] == doy].fillna(doy_median)
-
-    df.drop('DOY', axis=1, inplace=True)
+    df = df.ffill()
+    df = df[HARMONIZED_VARS].astype(int)
     df.to_csv(out_file)
     print(os.path.basename(out_file))
 
@@ -197,7 +196,7 @@ if __name__ == '__main__':
     csv_m_dir = os.path.join(d, 'dads', 'rs', 'cdr', 'csv')
     incomp = os.path.join(d, 'dads', 'rs', 'cdr', 'incomplete_files.json')
 
-    workers = 1
+    workers = 8
     # extract_surface_reflectance(sites, grid_dir, incomp, csv_m_dir, num_workers=workers,
     #                             overwrite=False, bounds=(-180., 25., -60., 85.))
 
