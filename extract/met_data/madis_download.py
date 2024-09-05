@@ -153,7 +153,8 @@ def download_and_extract(data_source, start_time, end_time, madis_data_dir, user
         current_dt += timedelta(days=1)
 
 
-def read_madis_hourly(data_directory, date, output_directory, shapefile=None, bounds=(-125., 25., -96., 49.)):
+def read_madis_hourly(data_directory, date, output_directory, shapefile=None, bounds=(-125., 25., -96., 49.),
+                      only_write_bad=False):
     file_pattern = os.path.join(data_directory, f"*{date}*.gz")
     file_list = sorted(glob.glob(file_pattern))
     if not file_list:
@@ -175,69 +176,61 @@ def read_madis_hourly(data_directory, date, output_directory, shapefile=None, bo
         try:
             with gzip.open(filename) as fp:
                 ds = xr.open_dataset(fp, engine='scipy')
+                if only_write_bad:
+                    continue
         except Exception as e:  # Catch any exceptions during xarray open
-            print(f"Error opening {filename} with xarray: {e}")
-
-            # write to a temporary .nc file and read with netCDF4
+            if first:
+                print(f"Error opening {filename} with xarray: {e}")
             try:
                 temp_nc_file = filename.replace('.gz', '.nc')
                 with gzip.open(filename, 'rb') as f_in, open(temp_nc_file, 'wb') as f_out:
                     f_out.write(f_in.read())
 
                 ds = xr.open_dataset(temp_nc_file, engine='netcdf4')
-                print(f"Successfully read {filename} after writing to temporary .nc file")
+                if first:
+                    print(f"Successfully read {filename} after writing to temporary .nc file")
             except Exception as e2:
                 print(f"Error writing to temporary .nc file or reading with netCDF4 for {filename}: {e2}")
             finally:
                 if temp_nc_file and os.path.exists(temp_nc_file):
                     os.remove(temp_nc_file)
 
-            valid_data = ds[required_vars]
-            df = valid_data.to_dataframe()
-            df['stationId'] = df['stationId'].astype(str)
-            df = df[(df['latitude'] < bounds[3]) & (df['latitude'] >= bounds[1])]
-            df = df[(df['longitude'] < bounds[2]) & (df['longitude'] >= bounds[0])]
-            df.dropna(how='any', inplace=True)
-            df.set_index('stationId', inplace=True, drop=True)
+        valid_data = ds[required_vars]
+        df = valid_data.to_dataframe()
+        df['stationId'] = df['stationId'].astype(str)
+        df = df[(df['latitude'] < bounds[3]) & (df['latitude'] >= bounds[1])]
+        df = df[(df['longitude'] < bounds[2]) & (df['longitude'] >= bounds[0])]
+        df.dropna(how='any', inplace=True)
+        df.set_index('stationId', inplace=True, drop=True)
 
-            if first and shapefile:
-                sites = df[['latitude', 'longitude']]
-                sites = sites.groupby(sites.index).mean()
-                sites = sites.to_dict(orient='index')
-            elif shapefile:
-                for i, r in df.iterrows():
-                    if i not in sites.keys():
-                        sites[i] = {'latitude': r['latitude'], 'longitude': r['longitude']}
+        if first and shapefile:
+            sites = df[['latitude', 'longitude']]
+            sites = sites.groupby(sites.index).mean()
+            sites = sites.to_dict(orient='index')
+        elif shapefile:
+            for i, r in df.iterrows():
+                if i not in sites.keys():
+                    sites[i] = {'latitude': r['latitude'], 'longitude': r['longitude']}
 
-            df = df.groupby(df.index).agg(SUBHOUR_RESAMPLE_MAP)
-            df['v'] = df.apply(lambda row: [float(row[v]) for v in required_vars[1:6]], axis=1)
-            df.drop(columns=required_vars[1:], inplace=True)
-            dct = df.to_dict(orient='index')
+        df = df.groupby(df.index).agg(SUBHOUR_RESAMPLE_MAP)
+        df['v'] = df.apply(lambda row: [float(row[v]) for v in required_vars[1:6]], axis=1)
+        df.drop(columns=required_vars[1:], inplace=True)
+        dct = df.to_dict(orient='index')
 
-            for k, v in dct.items():
-                if not k in data.keys():
+        for k, v in dct.items():
+            if not k in data.keys():
 
-                    data[k] = {dt: v['v']}
-                else:
-                    data[k][dt] = v['v']
-
-            if first and shapefile:
-                write_locations(sites, shapefile)
-                first = False
+                data[k] = {dt: v['v']}
             else:
-                first = False
+                data[k][dt] = v['v']
 
-            print('Wrote {} records from {}'.format(len(df), os.path.basename(filename)))
+        if first and shapefile:
+            write_locations(sites, shapefile)
+            first = False
+        else:
+            first = False
 
-        except EOFError as e:
-            print('{}: {}'.format(os.path.basename(filename), e))
-            continue
-
-        except ValueError as e:
-            print('{}: {}, {}'.format(os.path.basename(filename), dt, e))
-            # if 'buffer size' in e.args[0]:
-            #     os.remove(filename)
-            return
+        print('Wrote {} records from {}'.format(len(df), dt))
 
     for k, v in data.items():
         d = os.path.join(output_directory, k)
@@ -278,7 +271,8 @@ def process_time_chunk(time_tuple):
     out_dir = os.path.join(madis_data_dir_, 'LDAD', 'mesonet', 'csv')
     outshp = os.path.join(madis_data_dir_, 'LDAD', 'mesonet', 'shapes',
                           'integrated_mesonet_{}.shp'.format(start_time))
-    read_madis_hourly(mesonet_dir, start_time[:6], out_dir, shapefile=outshp, bounds=(-180., 25., -60., 85.))
+    read_madis_hourly(mesonet_dir, start_time[:6], out_dir, shapefile=outshp, bounds=(-180., 25., -60., 85.),
+                      only_write_bad=True)
 
 
 def madis_station_shapefile(mesonet_dir, meta_file, outfile):
@@ -331,24 +325,25 @@ if __name__ == "__main__":
     mesonet_dir = os.path.join(madis_data_dir_, 'LDAD', 'mesonet')
 
     # the FTP we're currently using has from 2001-07-01
-    times = generate_monthly_time_tuples(2008, 2009)
-    times = [t for t in times if int(t[0][:6]) == 200807]
+    times = generate_monthly_time_tuples(2005, 2013)
+    times = [t for t in times if int(t[0][:6]) > 200501]
+    times = [t for t in times if int(t[0][:6]) < 201312]
     # random.shuffle(times)
 
-    num_processes = 1
-    # num_processes = 12
+    # num_processes = 1
+    num_processes = 20
 
     dataset = 'INTEGRATED_MESONET'
 
     mesonet_dir = os.path.join(madis_data_dir_, 'LDAD', 'mesonet')
     # debug
-    for t in times:
-        process_time_chunk(t)
+    # for t in times:
+    #     process_time_chunk(t)
 
     print(f"Processing dataset: {dataset} with {num_processes} processes")
 
-    # with multiprocessing.Pool(processes=num_processes) as pool:
-    #     pool.map(process_time_chunk, times)
+    with multiprocessing.Pool(processes=num_processes) as pool:
+        pool.map(process_time_chunk, times)
 
     # sites = os.path.join(madis_data_dir_, 'mesonet_sites.shp')
     # madis_station_shapefile(madis_shapes, stn_meta, sites)
