@@ -121,71 +121,65 @@ def process_fid(fid, year, month, ds, extract_vars, out_data, overwrite):
         print(_file)
 
 
-def join_station_data(in_dir, dst_dir, overwrite=False):
+def join_station_data(in_dir, dst_dir, n_workers, overwrite=False):
     """"""
 
     dir_list = [f for f in os.listdir(in_dir)]
     station_names = set(f.split('_')[0] for f in dir_list)
 
-    for fid in station_names:
+    if n_workers == 1:
+        for fid in station_names:
+            process_station(fid, in_dir, dst_dir, overwrite)
+    else:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=n_workers) as executor:
+            futures = [executor.submit(process_station, fid, in_dir, dst_dir, overwrite) for fid in station_names]
+            concurrent.futures.wait(futures)
 
-        out_file = os.path.join(dst_dir, f'{fid}.csv')
-        if os.path.exists(out_file) and not overwrite:
-            print(os.path.basename(out_file), 'exists')
-            continue
 
-        _dir = os.path.join(in_dir, fid)
+def process_station(fid, in_dir, dst_dir, overwrite=False):
+    """"""
 
-        files_ = [os.path.join(_dir, f) for f in os.listdir(_dir) if f.endswith('.csv')]
-        adfs, vdfs = [], []
-        for f in files_:
-            df = pd.read_csv(os.path.join(in_dir, f), index_col=0, parse_dates=True)
-            year = int(f.split('_')[1])
-            if year <= 2013:
-                # print([(c, year, df[c].mean().item()) for c in AVHRR_VARS])
-                df.rename(columns=dict(zip(AVHRR_VARS, HARMONIZED_VARS)), inplace=True)
-                df[df[HARMONIZED_VARS] < 0] = 0
-                adfs.append(df)
-            else:
-                # print([(c, year, df[c].mean().item()) for c in VIIRS_VARS])
-                df.rename(columns=dict(zip(VIIRS_VARS, HARMONIZED_VARS)), inplace=True)
-                df[df[HARMONIZED_VARS] < 0] = 0
-                vdfs.append(df)
+    out_file = os.path.join(dst_dir, f'{fid}.csv')
+    if os.path.exists(out_file) and not overwrite:
+        print(os.path.basename(out_file), 'exists')
+        return
 
-        avhrr_df = pd.concat(adfs, axis=0, ignore_index=False)
-        avhrr_mean = avhrr_df.mean()
-        avhrr_std = avhrr_df.std()
+    _dir = os.path.join(in_dir, fid)
+    files_ = [os.path.join(_dir, f) for f in os.listdir(_dir) if f.endswith('.csv')]
+    adfs, vdfs = [], []
+    for f in files_:
+        df = pd.read_csv(os.path.join(in_dir, f), index_col=0, parse_dates=True)
+        year = int(f.split('_')[1])
+        if year <= 2013:
+            df.rename(columns=dict(zip(AVHRR_VARS, HARMONIZED_VARS)), inplace=True)
+            df[df[HARMONIZED_VARS] < 0] = 0
+            adfs.append(df)
+        else:
+            df.rename(columns=dict(zip(VIIRS_VARS, HARMONIZED_VARS)), inplace=True)
+            df[df[HARMONIZED_VARS] < 0] = 0
+            vdfs.append(df)
 
-        # Normalize VIIRS data
-        viirs_df = pd.concat(vdfs, axis=0, ignore_index=False)
-        viirs_mean = viirs_df.mean()
-        viirs_std = viirs_df.std()
-        normalized_viirs_df = (viirs_df - viirs_mean) * (avhrr_std / viirs_std) + avhrr_mean
+    avhrr_df = pd.concat(adfs, axis=0, ignore_index=False)
+    avhrr_mean = avhrr_df.mean()
+    avhrr_std = avhrr_df.std()
 
-        df = pd.concat([avhrr_df, normalized_viirs_df], axis=0, ignore_index=False)
-        df = df.sort_index()
-        df = df.resample('D').asfreq()
+    viirs_df = pd.concat(vdfs, axis=0, ignore_index=False)
+    viirs_mean = viirs_df.mean()
+    viirs_std = viirs_df.std()
+    normalized_viirs_df = (viirs_df - viirs_mean) * (avhrr_std / viirs_std) + avhrr_mean
 
-        # harmonize the two instruments
+    df = pd.concat([avhrr_df, normalized_viirs_df], axis=0, ignore_index=False)
+    df = df.sort_index()
+    df = df.resample('D').asfreq()
 
-        df['DOY'] = df.index.dayofyear
-        doy_medians = df.groupby('DOY').median()
-        for doy, doy_median in doy_medians.iterrows():
-            df.loc[df['DOY'] == doy] = df.loc[df['DOY'] == doy].fillna(doy_median)
+    df['DOY'] = df.index.dayofyear
+    doy_medians = df.groupby('DOY').median()
+    for doy, doy_median in doy_medians.iterrows():
+        df.loc[df['DOY'] == doy] = df.loc[df['DOY'] == doy].fillna(doy_median)
 
-        sns.set(style="darkgrid")
-        fig, axes = plt.subplots(nrows=len(HARMONIZED_VARS), ncols=1, figsize=(10, 12))
-        pdf = df.loc['2013-01-01': '2014-12-31'].copy()
-        for i, channel in enumerate(HARMONIZED_VARS):
-            sns.lineplot(x=pdf.index, y=pdf[channel].rolling(7).mean(), ax=axes[i])
-        axes[i].set_title(f'{channel} Time Series (2013-2014)')
-        axes[i].set_ylabel(channel)
-
-        plt.tight_layout()
-        plt.show()
-
-        df.drop('DOY', axis=1, inplace=True)
-        df.to_csv(out_file)
+    df.drop('DOY', axis=1, inplace=True)
+    df.to_csv(out_file)
+    print(os.path.basename(out_file))
 
 
 if __name__ == '__main__':
@@ -203,11 +197,11 @@ if __name__ == '__main__':
     csv_m_dir = os.path.join(d, 'dads', 'rs', 'cdr', 'csv')
     incomp = os.path.join(d, 'dads', 'rs', 'cdr', 'incomplete_files.json')
 
-    workers = 20
+    workers = 1
     # extract_surface_reflectance(sites, grid_dir, incomp, csv_m_dir, num_workers=workers,
     #                             overwrite=False, bounds=(-180., 25., -60., 85.))
 
     joined_dir = os.path.join(d, 'dads', 'rs', 'cdr', 'joined')
-    join_station_data(csv_m_dir, joined_dir, overwrite=False)
+    join_station_data(csv_m_dir, joined_dir, workers, overwrite=False)
 
 # ========================= EOF ====================================================================
