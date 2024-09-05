@@ -8,7 +8,7 @@ from tqdm import tqdm
 TERRAIN_FEATURES = ['slope', 'aspect', 'elevation', 'tpi_1250', 'tpi_250', 'tpi_150']
 
 
-def join_training(stations, ts_dir, landsat_dir, dem_dir, out_dir, scaling_json=None, var='rsds',
+def join_training(stations, ts_dir, landsat_dir, cdr_dir, dem_dir, out_dir, scaling_json=None, var='rsds',
                   bounds=None, shuffle=False, overwrite=False, hourly=False, sample_frac=1.0):
     """"""
 
@@ -25,8 +25,8 @@ def join_training(stations, ts_dir, landsat_dir, dem_dir, out_dir, scaling_json=
         stations = stations.sample(frac=sample_frac)
 
     ts, ct, scaling, first, shape = None, 0, {}, True, None
-    missing = {'sol_file': 0, 'station_file': 0, 'rs_file': 0, 'snotel': 0, 'rs_obs_time_misalign': 0,
-               'sol_fid': 0}
+    missing = {'sol_file': 0, 'station_file': 0, 'landsat_file': 0, 'snotel': 0, 'landsat_obs_time_misalign': 0,
+               'sol_fid': 0, 'cdr_file': 0, }
 
     scaling['stations'] = []
 
@@ -69,38 +69,55 @@ def join_training(stations, ts_dir, landsat_dir, dem_dir, out_dir, scaling_json=
                 missing['station_file'] += 1
                 continue
 
+            #  ========= Observed and Gridded Meteorology Record =========
             ts = pd.read_csv(sta_file, index_col='Unnamed: 0', parse_dates=True)
 
-            # training depends on having the first three columns like so
             feats = [c for c in ts.columns if c.endswith('_nl')]
             feats = [c for c in feats if var not in c]
 
+            # training depends on having the first three columns like so
             ts = ts[[f'{var}_obs', f'{var}_gm', f'{var}_nl'] + feats]
+
             try:
                 ts.loc[:, 'lat'], ts.loc[:, 'lon'] = row['latitude'], row['longitude']
             except ValueError:
                 continue
             ts = ts.astype(float)
 
+            # ========= Landsat Record =============
             # currently will find non-unique original FID file in case original FID is non-unique integer
-            rs_file = os.path.join(landsat_dir, '{}.csv'.format(fid))
-            if not os.path.exists(rs_file):
-                missing['rs_file'] += 1
+            landsat_file = os.path.join(landsat_dir, '{}.csv'.format(fid))
+            if not os.path.exists(landsat_file):
+                missing['landsat_file'] += 1
                 continue
-
-            rs = pd.read_csv(rs_file, index_col='Unnamed: 0', parse_dates=True)
+            landsat = pd.read_csv(landsat_file, index_col='Unnamed: 0', parse_dates=True)
             if hourly:
-                rs = rs.resample('h').ffill()
-            idx = [i for i in rs.index if i in ts.index]
+                landsat = landsat.resample('h').ffill()
+            idx = [i for i in landsat.index if i in ts.index]
             if not idx:
-                missing['rs_obs_time_misalign'] += 1
+                missing['landsat_obs_time_misalign'] += 1
                 continue
-            ts.loc[idx, rs.columns] = rs.loc[idx, rs.columns]
+            ts.loc[idx, landsat.columns] = landsat.loc[idx, landsat.columns]
 
+            # ========= NOAA Climate Data Record ===========
+            # currently will find non-unique original FID file in case original FID is non-unique integer
+            cdr_file = os.path.join(cdr_dir, '{}.csv'.format(fid))
+            if not os.path.exists(cdr_file):
+                missing['cdr_file'] += 1
+                continue
+            cdr = pd.read_csv(cdr_file, index_col='Unnamed: 0', parse_dates=True)
+            if hourly:
+                cdr = cdr.resample('h').ffill()
+            idx = [i for i in cdr.index if i in ts.index]
+            if not idx:
+                missing['cdr_obs_time_misalign'] += 1
+                continue
+            ts.loc[idx, cdr.columns] = cdr.loc[idx, cdr.columns]
+
+            # =========== Terrain-Adjusted Clear Sky Solar Radiation ================
             if fid not in sol_df.columns.to_list():
                 missing['sol_fid'] += 1
                 continue
-
             sol = sol_df[fid].to_dict()
             ts['doy'] = ts.index.dayofyear
             ts['rsun'] = ts['doy'].map(sol) * 0.0036
@@ -181,6 +198,7 @@ if __name__ == '__main__':
 
     fields = os.path.join(d, 'met', 'stations', '{}.csv'.format(glob_))
     landsat_ = os.path.join(d, 'rs', 'dads_stations', 'landsat', 'station_data')
+    cdr_ = os.path.join(d, 'dads', 'rs', 'cdr', 'csv')
     solrad = os.path.join(d, 'dem', 'rsun_tables')
 
     zoran = '/home/dgketchum/training'
@@ -200,7 +218,7 @@ if __name__ == '__main__':
 
     hourly = False
     overwrite_ = False
-    write_scaling = False
+    write_scaling = True
     remove_existing = False
 
     if hourly:
@@ -230,7 +248,7 @@ if __name__ == '__main__':
     print('========================== writing {} =========================='.format(target_var))
 
     # W. MT: (-117., 42.5, -110., 49.)
-    join_training(fields, sta, landsat_, solrad, out_csv, scaling_json=scaling_, var=target_var,
-                  bounds=(-125., 25., -96., 49.), shuffle=False, overwrite=overwrite_, hourly=hourly, sample_frac=1.0)
+    join_training(fields, sta, landsat_, cdr_, solrad, out_csv, scaling_json=scaling_, var=target_var,
+                  bounds=(-125., 25., -96., 49.), shuffle=True, overwrite=overwrite_, hourly=hourly, sample_frac=1.0)
 
 # ========================= EOF ==============================================================================
