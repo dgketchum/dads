@@ -137,11 +137,11 @@ if __name__ == '__main__':
     dem_d = os.path.join(root, 'dem')
     out_dem = os.path.join(out, 'dem')
 
-    calculate_terrain_irradiance(dem_d, mapset="dads_map", overwrite=False)
+    # calculate_terrain_irradiance(dem_d, mapset="dads_map", overwrite=False)
 
     stations_out = os.path.join(out, 'met', 'stations', 'dads_stations_res_elev_mgrs.csv')
     tiles = pd.read_csv(stations_out)['MGRS_TILE'].unique().tolist()
-    # export_rasters(dem_d, out_dem, mapset="dads_map", overwrite=False, mgrs_list=tiles)
+    export_rasters(dem_d, out_dem, mapset="dads_map", overwrite=False, mgrs_list=tiles)
 
     # remove_rasters(dem_d, resolution=30)
 
