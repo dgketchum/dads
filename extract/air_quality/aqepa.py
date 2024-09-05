@@ -117,7 +117,6 @@ def create_daily_idw_raster(csv_files_pattern):
 
 
 def join_aq_data(data_src, data_dst, out_csv):
-
     metadata = {}
     data_frames = {}
     dt = pd.date_range('2000-01-01', '2024-06-30', freq='D')
@@ -175,6 +174,7 @@ def join_aq_data(data_src, data_dst, out_csv):
     shp = out_csv.replace('.csv', '.shp')
     gdf.to_file(shp, driver='ESRI Shapefile', crs='EPSG:4326', engine='fiona')
 
+
 if __name__ == '__main__':
     root = '/media/research/IrrigationGIS/dads'
     if not os.path.exists(root):
@@ -185,24 +185,26 @@ if __name__ == '__main__':
     aq_data_dst = os.path.join(root, 'aq', 'joined_data')
     aq_meta = os.path.join(aq_d, 'aqs_meta.json')
     aq_csv = os.path.join(aq_d, 'aqs.csv')
+    missing_csv = os.path.join(aq_d, 'missing_aqs.csv')
 
     js = os.path.join(aq_d, 'aqs_key.json')
 
     fips = state_county_code()
     states = list(fips.keys())
+    missing = pd.read_csv(missing_csv)['STUSPS'].to_list()
     # states.reverse()
     for state in states:
 
-        if state not in TARGET_STATES:
+        if state not in missing:
             continue
 
         state_dct = fips[state]
         counties = {v['GEOID']: v['NAME'] for k, v in state_dct.items()}
 
-        # for geoid, name_ in counties.items():
-        #     st_code, co_code = geoid[:2], geoid[2:]
-        #     download_county_air_quality_data(js, st_code, co_code, 2000, 2024, data_dst=aq_data)
+        for geoid, name_ in counties.items():
+            st_code, co_code = geoid[:2], geoid[2:]
+            download_county_air_quality_data(js, st_code, co_code, 2000, 2024, data_dst=aq_data_src)
 
-    join_aq_data(aq_data_src, aq_data_dst, aq_csv)
+    # join_aq_data(aq_data_src, aq_data_dst, aq_csv)
 
 # ========================= EOF ====================================================================
