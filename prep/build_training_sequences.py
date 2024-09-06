@@ -9,7 +9,7 @@ TERRAIN_FEATURES = ['slope', 'aspect', 'elevation', 'tpi_1250', 'tpi_250', 'tpi_
 
 
 def join_training(stations, ts_dir, landsat_dir, cdr_dir, dem_dir, out_dir, scaling_json=None, var='rsds',
-                  bounds=None, shuffle=False, overwrite=False, hourly=False, sample_frac=1.0):
+                  bounds=None, shuffle=False, overwrite=False, sample_frac=1.0):
     """"""
 
     stations = pd.read_csv(stations)
@@ -91,8 +91,6 @@ def join_training(stations, ts_dir, landsat_dir, cdr_dir, dem_dir, out_dir, scal
                 missing['landsat_file'] += 1
                 continue
             landsat = pd.read_csv(landsat_file, index_col='Unnamed: 0', parse_dates=True)
-            if hourly:
-                landsat = landsat.resample('h').ffill()
             idx = [i for i in landsat.index if i in ts.index]
             if not idx:
                 missing['landsat_obs_time_misalign'] += 1
@@ -106,8 +104,6 @@ def join_training(stations, ts_dir, landsat_dir, cdr_dir, dem_dir, out_dir, scal
                 missing['cdr_file'] += 1
                 continue
             cdr = pd.read_csv(cdr_file, index_col='Unnamed: 0', parse_dates=True)
-            if hourly:
-                cdr = cdr.resample('h').ffill()
             idx = [i for i in cdr.index if i in ts.index]
             if not idx:
                 missing['cdr_obs_time_misalign'] += 1
@@ -156,12 +152,7 @@ def join_training(stations, ts_dir, landsat_dir, cdr_dir, dem_dir, out_dir, scal
 
             # mark consecutive days
             try:
-                if hourly:
-                    deltas = ts.index.to_series().diff().dt.seconds.fillna(3600)
-                    ts.loc[deltas != 3600, 'dt_diff'] = 2
-                    ts.loc[deltas == 3600, 'dt_diff'] = 1
-                else:
-                    ts['dt_diff'] = ts.index.to_series().diff().dt.days.fillna(1)
+                ts['dt_diff'] = ts.index.to_series().diff().dt.days.fillna(1)
             except ValueError:
                 continue
 
@@ -198,7 +189,7 @@ if __name__ == '__main__':
 
     fields = os.path.join(d, 'met', 'stations', '{}.csv'.format(glob_))
     landsat_ = os.path.join(d, 'rs', 'dads_stations', 'landsat', 'station_data')
-    cdr_ = os.path.join(d, 'dads', 'rs', 'cdr', 'csv')
+    cdr_ = os.path.join(d, 'rs', 'cdr', 'joined')
     solrad = os.path.join(d, 'dem', 'rsun_tables')
 
     zoran = '/home/dgketchum/training'
@@ -216,15 +207,11 @@ if __name__ == '__main__':
     param_dir = os.path.join(training, target_var)
     out_csv = os.path.join(param_dir, 'compiled_csv')
 
-    hourly = False
     overwrite_ = False
     write_scaling = True
     remove_existing = False
 
-    if hourly:
-        sta = os.path.join(d, 'met', 'joined', 'hourly')
-    else:
-        sta = os.path.join(d, 'met', 'joined', 'daily')
+    sta = os.path.join(d, 'met', 'joined', 'daily')
 
     if remove_existing:
         l = [os.path.join(out_csv, f) for f in os.listdir(out_csv)]
@@ -249,6 +236,6 @@ if __name__ == '__main__':
 
     # W. MT: (-117., 42.5, -110., 49.)
     join_training(fields, sta, landsat_, cdr_, solrad, out_csv, scaling_json=scaling_, var=target_var,
-                  bounds=(-125., 25., -96., 49.), shuffle=True, overwrite=overwrite_, hourly=hourly, sample_frac=1.0)
+                  bounds=(-180., 25., -60., 85.), shuffle=True, overwrite=overwrite_, sample_frac=1.0)
 
 # ========================= EOF ==============================================================================
