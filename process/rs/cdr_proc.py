@@ -131,7 +131,7 @@ def join_station_data(in_dir, dst_dir, n_workers, overwrite=False):
         for fid in station_names:
             process_station(fid, in_dir, dst_dir, overwrite)
     else:
-        with concurrent.futures.ThreadPoolExecutor(max_workers=n_workers) as executor:
+        with concurrent.futures.ProcessPoolExecutor(max_workers=n_workers) as executor:
             futures = [executor.submit(process_station, fid, in_dir, dst_dir, overwrite) for fid in station_names]
             concurrent.futures.wait(futures)
 
