@@ -192,6 +192,6 @@ if __name__ == '__main__':
     hourly_ = False
     nl = os.path.join(d, 'met', 'gridded', 'nldas2')
     join_daily_timeseries(fields, obs, nl, joined, gm, overwrite=False, shuffle=True,
-                          bounds=(-125., 25., -96., 49.), write_missing=missing_list, hourly=hourly_)
+                          bounds=(-180., 25., -60., 85.), write_missing=missing_list, hourly=hourly_)
 
 # ========================= EOF ====================================================================

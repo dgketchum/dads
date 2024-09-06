@@ -116,8 +116,8 @@ def proc_nldas(in_csv, lat, lon, elev, out_csv, hourly_=False):
 
         df['doy'] = [i.dayofyear for i in df.index]
 
-        # asce_params = df.parallel_apply(calc_asce_params, lat=lat, elev=elev, zw=10, axis=1)
-        asce_params = df.apply(calc_asce_params, lat=lat, elev=elev, zw=10, axis=1)
+        asce_params = df.parallel_apply(calc_asce_params, lat=lat, elev=elev, zw=10, axis=1)
+        # asce_params = df.apply(calc_asce_params, lat=lat, elev=elev, zw=10, axis=1)
         df[['mean_temp', 'vpd', 'rn', 'u2', 'eto']] = pd.DataFrame(asce_params.tolist(),
                                                                    index=df.index)
         df['year'] = [i.year for i in df.index]
@@ -168,13 +168,13 @@ if __name__ == '__main__':
         home = os.path.expanduser('~')
         d = os.path.join(home, 'data', 'IrrigationGIS')
 
-    # pandarallel.initialize(nb_workers=6)
+    pandarallel.initialize(nb_workers=4)
 
     sites = os.path.join(d, 'dads', 'met', 'stations', 'dads_stations_elev_mgrs.csv')
 
     grid_dir = os.path.join(d, 'dads', 'met', 'gridded')
 
-    extract_met_data(sites, grid_dir, overwrite=True, station_type='dads',  shuffle=True,
-                     bounds=(-125., 25., -96., 49.), gridmet=False, hourly=True)
+    extract_met_data(sites, grid_dir, overwrite=False, station_type='dads',  shuffle=True,
+                     bounds=(-125., 25., -66., 49.), gridmet=True, hourly=False)
 
 # ========================= EOF ====================================================================

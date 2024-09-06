@@ -170,6 +170,8 @@ def process_station(fid, in_dir, dst_dir, overwrite=False):
     viirs_df = pd.concat(vdfs, axis=0, ignore_index=False)
     viirs_mean = viirs_df.mean()
     viirs_std = viirs_df.std()
+
+    # TODO: experiment with quantile mapping for instrument harmony
     normalized_viirs_df = (viirs_df - viirs_mean) * (avhrr_std / viirs_std) + avhrr_mean
 
     df = pd.concat([avhrr_df, normalized_viirs_df], axis=0, ignore_index=False)

@@ -12,9 +12,11 @@ from tsl.datasets.prototypes.datetime_dataset import DatetimeDataset
 from tsl.datasets.prototypes.mixin import MissingValuesMixin
 from tsl.datasets.prototypes.mixin import TemporalFeaturesMixin
 from tsl.utils.parser_utils import ArgParser
+from tsl.datasets.prototypes import PandasDataset
+from tsl.ops.similarities import gaussian_kernel
 
 
-class Meteorology(DatetimeDataset, MissingValuesMixin, TemporalFeaturesMixin):
+class Meteorology(PandasDataset):
     similarity_options = {'distance'}
 
     def __init__(self,
@@ -46,7 +48,8 @@ class Meteorology(DatetimeDataset, MissingValuesMixin, TemporalFeaturesMixin):
                          default_splitting_method='val',
                          name=target_parameter)
 
-        self.set_eval_mask(validation_dct)
+        self.add_covariate('dist', distances, pattern='n n')
+        # self.set_eval_mask(validation_dct)
 
     def load_raw(self):
         """Simplistic input data of only target values"""
@@ -185,6 +188,13 @@ class Meteorology(DatetimeDataset, MissingValuesMixin, TemporalFeaturesMixin):
 
         np.save(out_file, dst)
         return dst
+
+    def compute_similarity(self, method: str, **kwargs):
+        if method == "distance":
+            finite_dist = self.dist.reshape(-1)
+            finite_dist = finite_dist[~np.isinf(finite_dist)]
+            sigma = finite_dist.std()
+            return gaussian_kernel(self.dist, sigma)
 
     @staticmethod
     def add_model_specific_args(parser):

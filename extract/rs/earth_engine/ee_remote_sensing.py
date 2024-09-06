@@ -146,6 +146,8 @@ def stack_bands(yr, roi):
 
     coords = ee.Image.pixelLonLat().rename(['lon', 'lat']).resample('bilinear').reproject(crs=proj['crs'], scale=30)
     ned = ee.Image('USGS/3DEP/10m')
+
+    # TODO: refactor functionality to get all terrain data from local DEM and derivative rasters
     terrain = ee.Terrain.products(ned).select(['elevation', 'slope', 'aspect']).reduceResolution(
         ee.Reducer.mean()).reproject(crs=proj['crs'], scale=30)
 
@@ -215,46 +217,6 @@ def extract_modis(glb, points_layer, years, check_dir=None):
                     task.start()
 
 
-def export_dem(csv, check_dir=None):
-    """"""
-    df = pd.read_csv(csv)
-    tiles = list(df['MGRS_TILE'])
-    ned = ee.Image('USGS/SRTMGL1_003').select(['elevation'])
-    elev = ee.Terrain.products(ned).select(['elevation'])
-    mgrs = ee.FeatureCollection('users/dgketchum/boundaries/MGRS_TILE')
-
-    for tile in tiles:
-
-        desc = 'dem_{}'.format(tile)
-
-        if check_dir:
-            outfile = os.path.join(check_dir, '{}.tif'.format(desc))
-            if os.path.exists(outfile):
-                print('{} exists'.format(outfile))
-                continue
-
-        clip = mgrs.filterMetadata('MGRS_TILE', 'equals', tile)
-        img = elev.clip(clip.first().geometry().buffer(1000))
-
-        task = ee.batch.Export.image.toCloudStorage(
-            image=img,
-            description=desc,
-            bucket='wudr',
-            fileNamePrefix=desc,
-            scale=250,
-            crs='EPSG:5071',
-            maxPixels=1e13)
-
-        try:
-            task.start()
-            print(desc)
-        except ee.ee_exception.EEException as e:
-            print('{}, waiting on '.format(e), desc, '......')
-            time.sleep(600)
-            task.start()
-            print(desc)
-
-
 def shapely_to_ee_polygon(shapely_geom):
     geojson = shapely_geom.__geo_interface__
     return ee.Geometry.Polygon(geojson)
@@ -286,10 +248,6 @@ if __name__ == '__main__':
     for buffer_ in [500]:
         file_ = '{}_{}'.format(stations, buffer_)
         request_band_extract(file_, pts, region=geo, years=years_, buffer=buffer_, check_dir=chk, tiles=mgrs_tiles)
-
-    # chk = '/media/nvm/IrrigationGIS/dads/dem/dem_250'
-    # mgrs = '/media/research/IrrigationGIS/dads/training/w17_tiles.csv'
-    # export_dem(mgrs, chk)
 
     # chk = os.path.join(d, 'dads', 'rs', 'dads_stations', 'modis')
     # extract_modis(stations, pts, years=years_, check_dir=chk)

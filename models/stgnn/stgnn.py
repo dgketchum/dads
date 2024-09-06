@@ -26,8 +26,7 @@ from tsl.predictors import Predictor
 from tsl.utils import TslExperiment, ArgParser, parser_utils
 from tsl.utils.parser_utils import str_to_bool
 from tsl.utils import TslExperiment, ArgParser, parser_utils
-
-
+from tsl.data.datamodule.splitters import FixedIndicesSplitter
 import lib
 from lib.datamodule import SGPDataModule
 from lib.nn.encoders import (SGPSpatialEncoder, GESNEncoder, SGPEncoder,
@@ -81,6 +80,11 @@ def configure_parser():
     return parser
 
 
+def get_splitter(dataset_name):
+
+    return FixedIndicesSplitter()
+
+
 def run_experiment(args):
     # Set configuration and seed
     args = copy.deepcopy(args)
@@ -93,7 +97,7 @@ def run_experiment(args):
 
     model_cls = SGPModel
     encoder_cls = SGPEncoder
-    dataset = Meteorology
+    dataset = get_dataset()
 
     tsl.logger.info(args)
 
@@ -134,10 +138,12 @@ def run_experiment(args):
     dm_conf = parser_utils.filter_args(args, SpatioTemporalDataModule,
                                        return_dict=True)
 
+    splitter = FixedIndicesSplitter()
+
     dm = SpatioTemporalDataModule(
         dataset=torch_dataset,
         scalers={'data': StandardScaler(axis=(0, 1))},
-        splitter=get_splitter(args.dataset_name),
+        splitter=splitter,
         pin_memory=False,
         **dm_conf
     )
@@ -289,6 +295,12 @@ if __name__ == '__main__':
     station_ = os.path.join(d, 'graphs', 'stgnn', 'stations.csv')
 
     experiment_parser = configure_parser()
+
+
+    def get_dataset():
+        dataset = Meteorology(station_, target_var, param_dir)
+        return dataset
+
 
     exp = TslExperiment(run_fn=run_experiment, parser=experiment_parser,
                         config_path=lib.config['config_dir'])
