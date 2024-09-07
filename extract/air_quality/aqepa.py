@@ -2,6 +2,7 @@ import json
 import os
 import glob
 import time
+from tqdm import tqdm
 
 import geopandas as gpd
 import requests
@@ -86,36 +87,6 @@ def download_county_air_quality_data(key_file, state_fips, county_fips, start_da
                 continue
 
 
-def create_daily_idw_raster(csv_files_pattern):
-    dfs = []
-    for file in glob.glob(csv_files_pattern):
-        df = pd.read_csv(file)
-        df['timestamp'] = pd.to_datetime(df['timestamp'])
-        dfs.append(df)
-
-    df = pd.concat(dfs)
-    ds = xr.Dataset.from_dataframe(df.set_index(['timestamp', 'latitude', 'longitude']))
-
-    grid_lon = np.arange(-130, -60, 0.05)
-    grid_lat = np.arange(25, 50, 0.05)
-
-    def compute_idw(data):
-        station_coords = data[['longitude', 'latitude']].values
-        tree = cKDTree(station_coords)
-        grid_coords = np.array(np.meshgrid(grid_lon, grid_lat)).T.reshape(-1, 2)
-        distances, indices = tree.query(grid_coords, k=5)
-        weights = 1.0 / distances ** 2
-        weights /= weights.sum(axis=1, keepdims=True)
-        aqi_values = data['aqi'].values[indices]
-        interpolated_aqi = np.sum(weights * aqi_values, axis=1)
-        return interpolated_aqi.reshape(len(grid_lat), len(grid_lon))
-
-    daily_idw = ds.groupby('timestamp.date').map(compute_idw)
-    daily_idw_da = xr.DataArray(daily_idw.values, coords=[daily_idw.index, grid_lat, grid_lon],
-                                dims=['time', 'lat', 'lon'])
-    daily_idw_da.to_netcdf('daily_aqi_idw.nc')
-
-
 def join_aq_data(data_src, data_dst, out_csv):
     metadata = {}
     data_frames = {}
@@ -123,7 +94,7 @@ def join_aq_data(data_src, data_dst, out_csv):
     blank = pd.DataFrame(columns=[v for k, v in AQS_PARAMETERS.items()], index=pd.DatetimeIndex(dt))
 
     files_ = [os.path.join(data_src, f) for f in os.listdir(data_src) if f.endswith('.csv')]
-    for filename in files_:
+    for filename in tqdm(files_, total=len(files_)):
 
         base = os.path.basename(filename)
 
@@ -132,8 +103,13 @@ def join_aq_data(data_src, data_dst, out_csv):
                                                                     parts[1][5:], parts[2], parts[3].split('.')[0])
 
         param = AQS_PARAMETERS[code]
-        df = pd.read_csv(filename, index_col='date', parse_dates=True)
-        df = df.groupby(df.index).agg('first')
+        try:
+            df = pd.read_csv(filename, index_col='date', parse_dates=True)
+            df = df.groupby(df.index).agg('first')
+        except Exception as e:
+            print(e, os.path.basename(filename))
+            continue
+
         key = f'{state_fips}{county_fips}{site_no}'
 
         if key not in data_frames.keys():
@@ -153,8 +129,6 @@ def join_aq_data(data_src, data_dst, out_csv):
             }
             for param_code, param_name in AQS_PARAMETERS.items():
                 metadata[key][param_name] = 0
-
-            print('read', filename)
 
     for key, df in data_frames.items():
         out_file = os.path.join(data_dst, f'{key}.csv')
@@ -203,8 +177,8 @@ if __name__ == '__main__':
 
         for geoid, name_ in counties.items():
             st_code, co_code = geoid[:2], geoid[2:]
-            download_county_air_quality_data(js, st_code, co_code, 2000, 2024, data_dst=aq_data_src)
+            # download_county_air_quality_data(js, st_code, co_code, 2000, 2024, data_dst=aq_data_src)
 
-    # join_aq_data(aq_data_src, aq_data_dst, aq_csv)
+    join_aq_data(aq_data_src, aq_data_dst, aq_csv)
 
 # ========================= EOF ====================================================================
