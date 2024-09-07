@@ -231,9 +231,14 @@ if __name__ == '__main__':
 
     _bucket = 'gs://wudr'
 
-    sites = os.path.join(d, 'dads', 'dem', 'w17_tiles.csv')
-    sites = pd.read_csv(sites)['MGRS_TILE']
+    w17 = os.path.join(d, 'dads', 'dem', 'w17_tiles.csv')
+    w17 = pd.read_csv(w17)['MGRS_TILE'].astype(str)
+    w17 = list(set(w17))
+
+    sites = os.path.join(d, 'dads', 'met', 'stations', 'dads_stations_res_elev_mgrs.csv')
+    sites = pd.read_csv(sites)['MGRS_TILE'].astype(str)
     mgrs_tiles = list(set(sites))
+    mgrs_tiles = [t for t in mgrs_tiles if t not in w17]
     mgrs_tiles.sort()
 
     stations = 'dads_stations_elev_mgrs'

@@ -49,7 +49,7 @@ def read_hourly_data(stations, madis_src, madis_dst, rsun_tables, shuffle=False,
 
         station_dir = os.path.join(madis_src, fid)
         files_ = [os.path.join(station_dir, f) for f in os.listdir(station_dir)]
-        years = [int(f.split('.')[0].split('_')[-1]) for f in files_]
+        years = [int(f.split('.')[0].split('_')[-1]) for f in files_ if '(copy)' not in f]
 
         rsun_file = os.path.join(rsun_tables, 'tile_{}.csv'.format(row['MGRS_TILE']))
         if not os.path.exists(rsun_file):
@@ -291,13 +291,13 @@ if __name__ == '__main__':
     # pandarallel.initialize(nb_workers=6)
 
     sites = os.path.join(d, 'dads', 'met', 'stations', 'dads_stations_elev_mgrs.csv')
-    madis_hourly = os.path.join(d, 'climate', 'madis', 'LDAD', 'mesonet', 'csv')
+    madis_hourly = os.path.join(d, 'climate', 'madis', 'LDAD_public', 'mesonet', 'csv')
     madis_daily_ = os.path.join(d, 'dads', 'met', 'obs', 'madis')
     madis_plot_dir = os.path.join(d, 'dads', 'met', 'obs', 'plots', 'madis_{}')
 
     solrad_out = os.path.join(d, 'dads', 'dem', 'rsun_tables')
 
-    read_hourly_data(sites, madis_hourly, madis_daily_, solrad_out, shuffle=True, bounds=(-125., 25., -96., 49.),
+    read_hourly_data(sites, madis_hourly, madis_daily_, solrad_out, shuffle=True, bounds=(-125., 25., -66., 49.),
                      overwrite=False, qaqc=True, plot=None)
 
 # ========================= EOF ====================================================================

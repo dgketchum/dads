@@ -80,7 +80,7 @@ if __name__ == '__main__':
     mgrs = os.path.join(dem_d, 'w17_tiles.csv')
 
     # this must be EPSG:5071 shapefile
-    shapefile_path_ = os.path.join(root, 'met', 'stations', 'dads_stations_elev_mgrs_5071.shp')
+    shapefile_path_ = os.path.join(root, 'met', 'stations', 'dads_stations_res_elev_mgrs_5071.shp')
     raster_dir_ = os.path.join(root, 'dem', 'rsun')
     solrad_out = os.path.join(root, 'dem', 'rsun_tables')
     extract_raster_values_by_tile(shapefile_path_, raster_dir_, solrad_out, shuffle=True, overwrite=False)
