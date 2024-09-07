@@ -25,15 +25,14 @@ def print_rmse(o, n, g):
     print('rmse_gridmet', rmse_gm)
 
 
-def apply_scaling_and_save(csv_dir, training_metadata, output_dir, train_frac=0.8, chunk_size=72,
-                           chunks_per_file=1000, target='rsds', hourly_dir=None, shuffle=False):
+def write_pth_training_data(csv_dir, training_metadata, output_dir, train_frac=0.8, chunk_size=72,
+                            chunks_per_file=1000, target='rsds', hourly_dir=None, shuffle=False):
 
-    metadata = {}
-    metadata['chunk_size'] = chunk_size
-    metadata['chunks_per_file'] = chunks_per_file
-    metadata['column_order'] = []
-    metadata['data_frequency'] = []
-    metadata['observation_count'] = 0
+    metadata = {'chunk_size': chunk_size,
+                'chunks_per_file': chunks_per_file,
+                'column_order': [],
+                'data_frequency': [],
+                'observation_count': 0}
 
     files_ = [f for f in os.listdir(csv_dir) if f.endswith('.csv')]
 
@@ -187,8 +186,8 @@ if __name__ == '__main__':
 
     print('========================== writing {} traing data =========================='.format(target_var))
 
-    metadata = None
-    # metadata = os.path.join(param_dir, 'training_metadata.json')
-    apply_scaling_and_save(out_csv, metadata, out_pth, target=target_var, hourly_dir=hourly_data,
-                           chunk_size=48, shuffle=True)
+    metadata_ = None
+    # metadata_ = os.path.join(param_dir, 'training_metadata.json')
+    write_pth_training_data(out_csv, metadata_, out_pth, target=target_var, hourly_dir=hourly_data,
+                            chunk_size=48, shuffle=True)
 # ========================= EOF ==============================================================================
