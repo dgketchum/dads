@@ -45,6 +45,9 @@ def download_county_air_quality_data(key_file, state_fips, county_fips, start_da
 
         for yr in years:
 
+            if state_fips == '20' and int(county_fips) < 173:
+                continue
+
             st_co = '{}{}'.format(state_fips, county_fips)
             if st_co in exists and not overwrite:
                 continue
@@ -56,6 +59,9 @@ def download_county_air_quality_data(key_file, state_fips, county_fips, start_da
             try:
                 resp = requests.get(url)
                 data_dict = json.loads(resp.content.decode('utf-8'))
+
+                if isinstance(data_dict, str):
+                    continue
 
                 if data_dict['Header'][0]['status'] == 'No data matched your selection':
                     continue
@@ -165,20 +171,17 @@ if __name__ == '__main__':
 
     fips = state_county_code()
     states = list(fips.keys())
-    missing = pd.read_csv(missing_csv)['STUSPS'].to_list()
-    # states.reverse()
-    for state in states:
+    missing = ['KS', 'ND', 'SD', 'OK', 'TN', 'NY', 'PA', 'SC', 'NJ']
 
-        if state not in missing:
-            continue
+    for state in missing:
 
         state_dct = fips[state]
         counties = {v['GEOID']: v['NAME'] for k, v in state_dct.items()}
 
         for geoid, name_ in counties.items():
             st_code, co_code = geoid[:2], geoid[2:]
-            # download_county_air_quality_data(js, st_code, co_code, 2000, 2024, data_dst=aq_data_src)
+            download_county_air_quality_data(js, st_code, co_code, 2000, 2024, data_dst=aq_data_src)
 
-    join_aq_data(aq_data_src, aq_data_dst, aq_csv)
+    # join_aq_data(aq_data_src, aq_data_dst, aq_csv)
 
 # ========================= EOF ====================================================================
