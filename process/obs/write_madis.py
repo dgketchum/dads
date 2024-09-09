@@ -222,18 +222,20 @@ if __name__ == "__main__":
     netcdf = os.path.join(mesonet_dir, 'netCDF')
     out_dir_ = os.path.join(mesonet_dir, 'csv')
     outshp = os.path.join(mesonet_dir, 'shapes')
-    progress_ = os.path.join(mesonet_dir, 'madis_progress.json')
+    # progress_ = os.path.join(mesonet_dir, 'madis_progress.json')
+    progress_ = None
 
     # num_processes = 1
-    num_processes = 20
+    num_processes = 10
 
-    times = generate_monthly_time_tuples(2001, 2024, check_dir=None)
-    # debug
-    # for t in times:
-    #     process_time_chunk(t)
-
+    times = generate_monthly_time_tuples(2019, 2020, check_dir=None)
     args_ = [(t, netcdf, out_dir_, outshp, progress_) for t in times]
-    with multiprocessing.Pool(processes=num_processes) as pool:
-        pool.map(process_time_chunk, args_)
+    # random.shuffle(args_)
+    # debug
+    for t in args_:
+        process_time_chunk(t)
+
+    # with multiprocessing.Pool(processes=num_processes) as pool:
+    #     pool.map(process_time_chunk, args_)
 
 # ========================= EOF ====================================================================
