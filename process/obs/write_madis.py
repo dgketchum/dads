@@ -145,10 +145,7 @@ def read_madis_hourly(data_directory, year_mo_str, output_directory, shapedir=No
         print('Wrote {} records from {}'.format(len(df), dt_str))
 
     for k, v in data.items():
-        d = os.path.join(output_directory, k)
-        if not os.path.exists(d):
-            os.makedirs(d)
-        f = os.path.join(d, '{}.csv'.format(k))
+        f = os.path.join(output_directory, '{}.csv'.format(k))
         df = pd.DataFrame.from_dict(v, orient='index')
         df.columns = required_vars[1:6]
         if os.path.exists(f):
@@ -157,6 +154,9 @@ def read_madis_hourly(data_directory, year_mo_str, output_directory, shapedir=No
             df.to_csv(f)
 
     if progress_json:
+        # re-open tracker may have updated during execution
+        with open(progress_json, 'r') as f:
+            progress = json.load(f)
         progress['complete'].append(year_mo_str)
         with open(progress_json, 'w') as fp:
             json.dump(progress, fp, indent=4)
@@ -180,38 +180,6 @@ def process_time_chunk(args):
                       shapedir=out_shp, bounds=(-180., 25., -60., 85.))
 
 
-def consolidate_station_data(directory, outdir, overwrite=False):
-    max_len = 0
-    files_ = os.listdir(directory)
-    random.shuffle(files_)
-    for station_id in files_:
-        output_filename = os.path.join(outdir, f'{station_id}.csv')
-        if os.path.exists(output_filename) and not overwrite:
-            continue
-        all_data = []
-        station_path = os.path.join(directory, station_id)
-        if os.path.isdir(station_path):
-            for filename in os.listdir(station_path):
-                if filename.endswith(".csv"):
-                    filepath = os.path.join(station_path, filename)
-                    df = pd.read_csv(filepath, index_col=0, parse_dates=True)
-                    if not df.index.inferred_type == 'datetime64':
-                        df.index = pd.to_datetime(df.index)
-                    all_data.append(df)
-
-        if len(all_data) < 1:
-            continue
-
-        combined_df = pd.concat(all_data, ignore_index=False, axis=0)
-        combined_df = combined_df.groupby(combined_df.index).agg('first')
-        combined_df = combined_df.sort_index()
-        combined_df.to_csv(output_filename)
-        shape = combined_df.shape[0]
-        if shape > max_len:
-            print(station_id, 'has greatest length', shape)
-            max_len = shape
-
-
 if __name__ == "__main__":
 
     d = '/media/research/IrrigationGIS'
@@ -222,20 +190,20 @@ if __name__ == "__main__":
     netcdf = os.path.join(mesonet_dir, 'netCDF')
     out_dir_ = os.path.join(mesonet_dir, 'csv')
     outshp = os.path.join(mesonet_dir, 'shapes')
-    # progress_ = os.path.join(mesonet_dir, 'madis_progress.json')
-    progress_ = None
+    progress_ = os.path.join(mesonet_dir, 'madis_progress.json')
+    # progress_ = None
 
     # num_processes = 1
     num_processes = 10
 
-    times = generate_monthly_time_tuples(2019, 2020, check_dir=None)
+    times = generate_monthly_time_tuples(2001, 2024, check_dir=None)
     args_ = [(t, netcdf, out_dir_, outshp, progress_) for t in times]
-    # random.shuffle(args_)
+    random.shuffle(args_)
     # debug
-    for t in args_:
-        process_time_chunk(t)
+    # for t in args_:
+    #     process_time_chunk(t)
 
-    # with multiprocessing.Pool(processes=num_processes) as pool:
-    #     pool.map(process_time_chunk, args_)
+    with multiprocessing.Pool(processes=num_processes) as pool:
+        pool.map(process_time_chunk, args_)
 
 # ========================= EOF ====================================================================
