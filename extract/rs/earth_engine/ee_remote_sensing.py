@@ -238,8 +238,9 @@ if __name__ == '__main__':
     sites = os.path.join(d, 'dads', 'met', 'stations', 'dads_stations_res_elev_mgrs.csv')
     sites = pd.read_csv(sites)['MGRS_TILE'].astype(str)
     mgrs_tiles = list(set(sites))
-    mgrs_tiles = [t for t in mgrs_tiles if t not in w17]
+    mgrs_tiles = [t for t in mgrs_tiles if t not in w17 and t != 'nan']
     mgrs_tiles.sort()
+    mgrs_tiles.reverse()
 
     stations = 'dads_stations_elev_mgrs'
     pts = 'projects/ee-dgketchum/assets/dads/{}'.format(stations)
