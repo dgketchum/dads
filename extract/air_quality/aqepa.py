@@ -45,7 +45,7 @@ def download_county_air_quality_data(key_file, state_fips, county_fips, start_da
 
         for yr in years:
 
-            if state_fips == '20' and int(county_fips) < 173:
+            if state_fips == '45' and int(county_fips) < 23:
                 continue
 
             st_co = '{}{}'.format(state_fips, county_fips)
@@ -57,7 +57,15 @@ def download_county_air_quality_data(key_file, state_fips, county_fips, start_da
                              c=start, d=end, e=state_fips, f=county_fips)
 
             try:
-                resp = requests.get(url)
+                try:
+                    resp = requests.get(url)
+                except TimeoutError:
+                    time.sleep(600)
+                    try:
+                        resp = requests.get(url)
+                    except Exception as e:
+                        continue
+
                 data_dict = json.loads(resp.content.decode('utf-8'))
 
                 if isinstance(data_dict, str):
@@ -94,38 +102,61 @@ def download_county_air_quality_data(key_file, state_fips, county_fips, start_da
 
 
 def join_aq_data(data_src, data_dst, out_csv):
+    """"""
+
     metadata = {}
-    data_frames = {}
+
     dt = pd.date_range('2000-01-01', '2024-06-30', freq='D')
     blank = pd.DataFrame(columns=[v for k, v in AQS_PARAMETERS.items()], index=pd.DatetimeIndex(dt))
 
-    files_ = [os.path.join(data_src, f) for f in os.listdir(data_src) if f.endswith('.csv')]
-    for filename in tqdm(files_, total=len(files_)):
+    files_ = [f for f in os.listdir(data_src) if f.endswith('.csv')]
 
-        base = os.path.basename(filename)
+    records = []
+    for f in files_:
+        parts = f.split('_')
+        state_fips, county_fips, site_no = parts[1][:2], parts[1][2:5], parts[1][5:]
+        site_ = f'{state_fips}{county_fips}{site_no}'
+        records.append(site_)
 
-        parts = base.split('_')
-        state_name, state_fips, county_fips, site_no, code, year = (parts[0], parts[1][:2], parts[1][2:5],
-                                                                    parts[1][5:], parts[2], parts[3].split('.')[0])
+    sites = sorted(list(set(records)))
 
-        param = AQS_PARAMETERS[code]
-        try:
-            df = pd.read_csv(filename, index_col='date', parse_dates=True)
-            df = df.groupby(df.index).agg('first')
-        except Exception as e:
-            print(e, os.path.basename(filename))
-            continue
+    for site in tqdm(sites, total=len(sites)):
 
-        key = f'{state_fips}{county_fips}{site_no}'
+        state_name = None
 
-        if key not in data_frames.keys():
-            data_frames[key] = blank.copy()
+        df = blank.copy()
 
-        idx = [i for i in df.index if i in data_frames[key].index]
-        data_frames[key].loc[idx, param] = df.loc[idx, param].astype(float)
+        filepaths = [os.path.join(data_src, f) for f in os.listdir(data_src) if site in f and f.endswith('.csv')]
 
-        if key not in metadata:
-            metadata[key] = {
+        state_fips, county_fips, site_no = site[:2], site[2:5], site[5:]
+
+        first = True
+        for file_ in filepaths:
+
+            splt = os.path.basename(file_).split('_')
+            state_name, code = splt[0], splt[2]
+            param = AQS_PARAMETERS[code]
+
+            if site in metadata.keys():
+                continue
+
+            try:
+                c = pd.read_csv(file_, index_col='date', parse_dates=True)
+                c = c.groupby(c.index).agg('first')
+            except Exception as e:
+                print(e, os.path.basename(file_))
+                continue
+
+            if first:
+                df['latitude'] = c.iloc[0]['latitude']
+                df['longitude'] = c.iloc[0]['longitude']
+                first = False
+
+            idx = [i for i in c.index if i in df.index]
+            df.loc[idx, param] = c.loc[idx, param].astype(float)
+
+        if site not in metadata:
+            metadata[site] = {
                 'state': state_name,
                 'st_fips': state_fips,
                 'co_fips': county_fips,
@@ -134,15 +165,13 @@ def join_aq_data(data_src, data_dst, out_csv):
                 'longitude': df['longitude'].iloc[0],
             }
             for param_code, param_name in AQS_PARAMETERS.items():
-                metadata[key][param_name] = 0
+                metadata[site][param_name] = 0
 
-    for key, df in data_frames.items():
-        out_file = os.path.join(data_dst, f'{key}.csv')
+        out_file = os.path.join(data_dst, f'{site}.csv')
         df.to_csv(out_file)
-        print('write', f'{key}.csv')
 
         for k, v in AQS_PARAMETERS.items():
-            metadata[key][v] = np.count_nonzero(~pd.isna(df[v]))
+            metadata[site][v] = np.count_nonzero(~pd.isna(df[v]))
 
     metadata_df = pd.DataFrame(metadata.values())
     metadata_df.to_csv(os.path.join(out_csv), index=False)
@@ -171,7 +200,7 @@ if __name__ == '__main__':
 
     fips = state_county_code()
     states = list(fips.keys())
-    missing = ['KS', 'ND', 'SD', 'OK', 'TN', 'NY', 'PA', 'SC', 'NJ']
+    missing = ['NE']
 
     for state in missing:
 
@@ -180,8 +209,8 @@ if __name__ == '__main__':
 
         for geoid, name_ in counties.items():
             st_code, co_code = geoid[:2], geoid[2:]
-            download_county_air_quality_data(js, st_code, co_code, 2000, 2024, data_dst=aq_data_src)
+            # download_county_air_quality_data(js, st_code, co_code, 2000, 2024, data_dst=aq_data_src)
 
-    # join_aq_data(aq_data_src, aq_data_dst, aq_csv)
+    join_aq_data(aq_data_src, aq_data_dst, aq_csv)
 
 # ========================= EOF ====================================================================

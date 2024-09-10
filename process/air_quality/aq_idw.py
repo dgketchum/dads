@@ -8,9 +8,13 @@ from scipy.spatial import cKDTree
 
 def csv_to_netcdf(in_dir, metadata, output_file):
     aqm = pd.read_csv(metadata)
-    aqm.index = aqm.apply(lambda r: f"{str(r['st_fips'])}"
+    aqm['st_fips'] = aqm['st_fips'].astype(int)
+    aqm['co_fips'] = aqm['co_fips'].astype(int)
+    aqm['site_no'] = aqm['site_no'].astype(int)
+    aqm.index = aqm.apply(lambda r: f"{str(r['st_fips']).rjust(2, '0')}"
                                     f"{str(r['co_fips']).rjust(3, '0')}"
                                     f"{str(r['site_no']).rjust(4, '0')}", axis=1)
+
     files_ = [os.path.join(in_dir, f) for f in os.listdir(in_dir) if f.endswith('.csv')]
 
     dfs, lats, lons, fids = [], [], [], []
@@ -46,18 +50,23 @@ def calculate_raster(data, parameter, resolution=0.05, lat=(42.0, 49.0), lon=(-1
 
     tree = cKDTree(obs_coords)
     distances, indices = tree.query(np.column_stack((grid_lon.ravel(), grid_lat.ravel())), k=len(obs_coords))
-    weights = 1.0 / distances ** 2
+    weights = 1.0 / distances ** 5
     weights /= weights.sum(axis=1, keepdims=True)
 
     idw_values = np.sum(weights * obs_values[indices], axis=1)
     idw_raster = idw_values.reshape(grid_lat.shape)
-    arr = xr.DataArray(idw_raster, coords=[('latitude', latitudes), ('longitude', longitudes)],
-                       name=parameter)
-
-    return arr
+    return idw_raster, latitudes, longitudes
 
 
-def write_rasters(nc_file, output):
+def interpolate_at_points(data, parameter, points, resolution=0.05, lat=(42.0, 49.0), lon=(-115, -103)):
+    idw_raster, latitudes, longitudes = calculate_raster(data, parameter, resolution, lat, lon)
+    lat_indices = ((points[:, 1] - lat[0]) / resolution).astype(int)
+    lon_indices = ((points[:, 0] - lon[0]) / resolution).astype(int)
+    interpolated_values = idw_raster[lat_indices, lon_indices]
+    return interpolated_values
+
+
+def write_rasters(nc_file, output, points):
     ds = xr.open_dataset(nc_file)
 
     for day in ds.date.values:
@@ -67,10 +76,14 @@ def write_rasters(nc_file, output):
             continue
 
         daily_data = ds.sel(date=day)
+        results = {}
         for parameter in ['pm2.5', 'pm10', 'no2', 'ozone', 'so2']:
-            idw_result = calculate_raster(daily_data, parameter)
-            out_file = os.path.join(output, f'idw_{parameter}_{dt_str}.tif')
-            idw_result.rio.to_raster(out_file)
+            interpolated_values = interpolate_at_points(daily_data, parameter, points)
+            results[parameter] = interpolated_values
+
+        df = pd.DataFrame(results)
+        df['date'] = dt_str
+        df.to_csv(output_csv, mode='a', header=not os.path.exists(output_csv), index=False)
 
 
 if __name__ == '__main__':
@@ -81,11 +94,12 @@ if __name__ == '__main__':
     aq_d = os.path.join(root, 'aq')
     aq_csv_data = os.path.join(root, 'aq', 'joined_data')
     aq_summary = os.path.join(aq_d, 'aqs.csv')
-    aq_nc = os.path.join(aq_d, 'netcdf', 'aqs_mt.nc')
-    aq_tif = os.path.join(aq_d, 'tif')
+    aq_nc = os.path.join(aq_d, 'netcdf', 'aqs.nc')
+    aq_output = os.path.join(aq_d, 'dads_stations')
 
-    # csv_to_netcdf(aq_csv_data, aq_summary, aq_nc)
+    csv_to_netcdf(aq_csv_data, aq_summary, aq_nc)
 
-    write_rasters(aq_nc, aq_tif)
+    sites = os.path.join(root, 'met', 'stations', 'dads_stations_res_elev_mgrs.csv')
+    # write_rasters(aq_nc, aq_output, sites)
 
 # ========================= EOF ====================================================================
