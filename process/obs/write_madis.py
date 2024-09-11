@@ -1,7 +1,6 @@
 import glob
 import gzip
 import json
-import multiprocessing
 import os
 import random
 import time
@@ -14,8 +13,6 @@ import xarray as xr
 
 warnings.filterwarnings("ignore", category=xr.SerializationWarning)
 
-BASE_URL = "https://madis-data.ncep.noaa.gov/madisResearch/data"
-
 SUBHOUR_RESAMPLE_MAP = {'relHumidity': 'mean',
                         'precipAccum': 'sum',
                         'solarRadiation': 'mean',
@@ -24,21 +21,62 @@ SUBHOUR_RESAMPLE_MAP = {'relHumidity': 'mean',
                         'longitude': 'mean',
                         'latitude': 'mean'}
 
+params = ['relHumidity', 'precipAccum', 'solarRadiation', 'temperature', 'windSpeed']
+COLS = ['datetime'] + params
 
-def generate_monthly_time_tuples(start_year, end_year, check_dir=None):
+
+def generate_monthly_time_tuples(start_year, end_year, check_dir=None, write_progress=None):
     idxs = []
     if check_dir:
-        idx = []
+        file_sizes, dct = {}, {}
         for f in os.listdir(check_dir):
-            station_path = os.path.join(check_dir, f)
-            df = pd.read_csv(station_path, index_col=0, parse_dates=True)
+            if f.endswith('.csv'):
+                station_path = os.path.join(check_dir, f)
+                file_sizes[station_path] = os.path.getsize(station_path)
+
+        sorted_files = sorted(file_sizes.items(), key=lambda x: x[1], reverse=False)
+
+        for i, (station_path, sz) in enumerate(sorted_files, start=1):
+
+            if sz == 0:
+                os.remove(station_path)
+                continue
+
+            df = pd.read_csv(station_path)
+            df_cols = df.columns.to_list()
+            if len(df_cols) == len(COLS) and all([c in df_cols for c in COLS]):
+                print(os.path.basename(station_path), i, 'already conforms')
+                continue
+
+            extra = [c for c in df.columns if c in ['Unnamed: 0.2', 'Unnamed: 0.1']]
+            if any(extra):
+                nan_idx = df[df[params].isnull().any(axis=1)].index.tolist()
+                if nan_idx:
+                    bad = df.loc[nan_idx]
+                    print(bad.iloc[0][extra])
+                    print(bad.iloc[-1][extra])
+                    print(os.path.basename(station_path), i, 'being reformatted')
+
+                df.drop(columns=extra, inplace=True)
+                df.dropna(subset=params, inplace=True)
+
+            df = df.rename(columns={'Unnamed: 0': 'datetime'})
+            df['datetime'] = pd.to_datetime(df['datetime'], format='mixed')
+            df.to_csv(station_path, index=False)
+
             try:
                 dts = list(set((i.year, i.month) for i in df.index))
             except Exception:
                 continue
-            idx.extend(dts)
 
-        idxs = list(set(idx))
+            idxs.extend(dts)
+
+        idxs = sorted(list(set(idxs)))
+
+        if write_progress:
+            dct['complete'] = [str(f'{y}{m}') for y, m in idxs]
+            with open(write_progress, 'w') as fp:
+                json.dump(dct, fp, indent=4)
 
     time_tuples = []
     for year in range(start_year, end_year + 1):
@@ -142,12 +180,11 @@ def read_madis_hourly(data_directory, year_mo_str, output_directory, shapedir=No
         else:
             first = False
 
-        print('Wrote {} records from {}'.format(len(df), dt_str))
-
     for k, v in data.items():
         f = os.path.join(output_directory, '{}.csv'.format(k))
         df = pd.DataFrame.from_dict(v, orient='index')
-        df.columns = required_vars[1:6]
+        df['datetime'] = pd.to_datetime(df.index)
+        df.columns = ['datetime'] + params
         if os.path.exists(f):
             df.to_csv(f, mode='a', header=False)
         else:
@@ -193,17 +230,18 @@ if __name__ == "__main__":
     progress_ = os.path.join(mesonet_dir, 'madis_progress.json')
     # progress_ = None
 
-    # num_processes = 1
-    num_processes = 10
+    num_processes = 1
+    # num_processes = 10
 
-    times = generate_monthly_time_tuples(2001, 2024, check_dir=None)
+    times = generate_monthly_time_tuples(2001, 2024, check_dir=out_dir_, write_progress=True)
     args_ = [(t, netcdf, out_dir_, outshp, progress_) for t in times]
     random.shuffle(args_)
+
     # debug
     # for t in args_:
     #     process_time_chunk(t)
 
-    with multiprocessing.Pool(processes=num_processes) as pool:
-        pool.map(process_time_chunk, args_)
+    # with multiprocessing.Pool(processes=num_processes) as pool:
+    #     pool.map(process_time_chunk, args_)
 
 # ========================= EOF ====================================================================
