@@ -7,6 +7,7 @@ import time
 import warnings
 from datetime import datetime, timedelta
 
+from tqdm import tqdm
 import geopandas as gpd
 import pandas as pd
 import xarray as xr
@@ -120,7 +121,7 @@ def read_madis_hourly(data_directory, year_mo_str, output_directory, shapedir=No
     data, sites = {}, pd.DataFrame().to_dict()
 
     start = time.perf_counter()
-    for filename in file_list:
+    for filename in tqdm(file_list, total=len(file_list)):
 
         dt_str = os.path.basename(filename).split('.')[0].replace('_', '')
         temp_nc_file = None
@@ -130,16 +131,11 @@ def read_madis_hourly(data_directory, year_mo_str, output_directory, shapedir=No
             with gzip.open(filename) as fp:
                 ds = xr.open_dataset(fp, engine='scipy')
         except Exception as e:  # Catch any exceptions during xarray open
-            if first:
-                print(f"Error opening {filename} with xarray: {e}")
             try:
                 temp_nc_file = filename.replace('.gz', '.nc')
                 with gzip.open(filename, 'rb') as f_in, open(temp_nc_file, 'wb') as f_out:
                     f_out.write(f_in.read())
-
                 ds = xr.open_dataset(temp_nc_file, engine='netcdf4')
-                if first:
-                    print(f"Successfully read {filename} after writing to temporary .nc file")
             except Exception as e2:
                 print(f"Error writing to temporary .nc file or reading with netCDF4 for {filename}: {e2}")
             finally:
@@ -183,8 +179,9 @@ def read_madis_hourly(data_directory, year_mo_str, output_directory, shapedir=No
     for k, v in data.items():
         f = os.path.join(output_directory, '{}.csv'.format(k))
         df = pd.DataFrame.from_dict(v, orient='index')
+        df.columns = params
         df['datetime'] = pd.to_datetime(df.index)
-        df.columns = ['datetime'] + params
+        df = df[['datetime'] + params]
         if os.path.exists(f):
             df.to_csv(f, mode='a', header=False)
         else:
@@ -207,7 +204,6 @@ def write_locations(loc, shp_dir, dt_):
     gdf = gpd.GeoDataFrame(df, geometry=gpd.points_from_xy(df.longitude, df.latitude), crs='EPSG:4326')
     shp = os.path.join(shp_dir, f'integrated_mesonet_{dt_}.shp')
     gdf.to_file(shp)
-    print('Wrote {}'.format(os.path.basename(shp)))
 
 
 def process_time_chunk(args):
@@ -233,13 +229,14 @@ if __name__ == "__main__":
     num_processes = 1
     # num_processes = 10
 
-    times = generate_monthly_time_tuples(2001, 2024, check_dir=out_dir_, write_progress=True)
+    # times = generate_monthly_time_tuples(2001, 2024, check_dir=out_dir_, write_progress=True)
+    times = generate_monthly_time_tuples(2001, 2024)
     args_ = [(t, netcdf, out_dir_, outshp, progress_) for t in times]
     random.shuffle(args_)
 
     # debug
-    # for t in args_:
-    #     process_time_chunk(t)
+    for t in args_:
+        process_time_chunk(t)
 
     # with multiprocessing.Pool(processes=num_processes) as pool:
     #     pool.map(process_time_chunk, args_)
