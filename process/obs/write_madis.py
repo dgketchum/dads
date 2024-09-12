@@ -1,3 +1,5 @@
+import shutil
+import multiprocessing
 import glob
 import gzip
 import json
@@ -24,6 +26,23 @@ SUBHOUR_RESAMPLE_MAP = {'relHumidity': 'mean',
 
 params = ['relHumidity', 'precipAccum', 'solarRadiation', 'temperature', 'windSpeed']
 COLS = ['datetime'] + params
+
+
+def transfer_list(data_directory, dst, progress_json):
+    if progress_json:
+        with open(progress_json, 'r') as f:
+            progress = json.load(f)
+
+    files_ = os.listdir(data_directory)
+    yrmo = [str(f[:6]) for f in files_]
+    file_list = [os.path.join(data_directory, f) for f, ym in zip(files_, yrmo) if ym not in progress['complete']]
+    dst_list = [os.path.join(dst, f) for f, ym in zip(files_, yrmo) if ym not in progress['complete']]
+
+    for i, (file, dest_file) in enumerate(zip(file_list, dst_list)):
+        if os.path.exists(dest_file):
+            continue
+        shutil.copy(file, dest_file)
+        print(dest_file)
 
 
 def generate_monthly_time_tuples(start_year, end_year, check_dir=None, write_progress=None):
@@ -121,7 +140,7 @@ def read_madis_hourly(data_directory, year_mo_str, output_directory, shapedir=No
     data, sites = {}, pd.DataFrame().to_dict()
 
     start = time.perf_counter()
-    for filename in tqdm(file_list, total=len(file_list)):
+    for filename in file_list:
 
         dt_str = os.path.basename(filename).split('.')[0].replace('_', '')
         temp_nc_file = None
@@ -220,25 +239,35 @@ if __name__ == "__main__":
         d = '/home/dgketchum/data/IrrigationGIS'
 
     mesonet_dir = os.path.join(d, 'climate', 'madis', 'LDAD', 'mesonet')
-    netcdf = os.path.join(mesonet_dir, 'netCDF')
-    out_dir_ = os.path.join(mesonet_dir, 'csv')
     outshp = os.path.join(mesonet_dir, 'shapes')
     progress_ = os.path.join(mesonet_dir, 'madis_progress.json')
     # progress_ = None
 
-    num_processes = 1
-    # num_processes = 10
+    if os.path.exists('/data/ssd1/madis'):
+        netcdf = os.path.join('/data/ssd1/madis', 'netCDF')
+        out_dir_ = os.path.join('/data/ssd1/madis', 'csv')
+        print('operating on zoran data')
+    else:
+        netcdf = os.path.join(mesonet_dir, 'netCDF')
+        out_dir_ = os.path.join(mesonet_dir, 'csv')
+        print('operating on network drive data')
+
+    # num_processes = 1
+    num_processes = 20
 
     # times = generate_monthly_time_tuples(2001, 2024, check_dir=out_dir_, write_progress=True)
-    times = generate_monthly_time_tuples(2001, 2024)
+    times = generate_monthly_time_tuples(2001, 2011)
     args_ = [(t, netcdf, out_dir_, outshp, progress_) for t in times]
     random.shuffle(args_)
 
-    # debug
-    for t in args_:
-        process_time_chunk(t)
+    trans = [(t, netcdf, out_dir_, outshp, progress_) for t in times]
+    transfer_list(netcdf, '/data/ssd1/madis/netCDF', progress_)
 
-    # with multiprocessing.Pool(processes=num_processes) as pool:
-    #     pool.map(process_time_chunk, args_)
+    # debug
+    # for t in args_[:10]:
+    #     process_time_chunk(t)
+
+    with multiprocessing.Pool(processes=num_processes) as pool:
+        pool.map(process_time_chunk, args_)
 
 # ========================= EOF ====================================================================
