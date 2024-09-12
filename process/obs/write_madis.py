@@ -28,15 +28,24 @@ params = ['relHumidity', 'precipAccum', 'solarRadiation', 'temperature', 'windSp
 COLS = ['datetime'] + params
 
 
-def transfer_list(data_directory, dst, progress_json):
+def transfer_list(data_directory, dst, progress_json=None, yrmo_str=None):
     if progress_json:
         with open(progress_json, 'r') as f:
             progress = json.load(f)
+            yrmo_str = progress['complete']
 
-    files_ = os.listdir(data_directory)
-    yrmo = [str(f[:6]) for f in files_]
-    file_list = [os.path.join(data_directory, f) for f, ym in zip(files_, yrmo) if ym not in progress['complete']]
-    dst_list = [os.path.join(dst, f) for f, ym in zip(files_, yrmo) if ym not in progress['complete']]
+        files_ = os.listdir(data_directory)
+        yrmo = [str(f[:6]) for f in files_]
+        file_list = [os.path.join(data_directory, f) for f, ym in zip(files_, yrmo) if ym not in yrmo_str]
+        dst_list = [os.path.join(dst, f) for f, ym in zip(files_, yrmo) if ym not in yrmo_str]
+        print(len(file_list), 'files')
+
+    else:
+        files_ = os.listdir(data_directory)
+        yrmo = [str(f[:6]) for f in files_]
+        file_list = [os.path.join(data_directory, f) for f, ym in zip(files_, yrmo) if ym in yrmo_str]
+        dst_list = [os.path.join(dst, f) for f, ym in zip(files_, yrmo) if ym in yrmo_str]
+        print(len(file_list), 'files')
 
     for i, (file, dest_file) in enumerate(zip(file_list, dst_list)):
         if os.path.exists(dest_file):
@@ -140,7 +149,7 @@ def read_madis_hourly(data_directory, year_mo_str, output_directory, shapedir=No
     data, sites = {}, pd.DataFrame().to_dict()
 
     start = time.perf_counter()
-    for filename in file_list:
+    for j, filename in enumerate(file_list):
 
         dt_str = os.path.basename(filename).split('.')[0].replace('_', '')
         temp_nc_file = None
@@ -149,7 +158,7 @@ def read_madis_hourly(data_directory, year_mo_str, output_directory, shapedir=No
         try:
             with gzip.open(filename) as fp:
                 ds = xr.open_dataset(fp, engine='scipy')
-        except Exception as e:  # Catch any exceptions during xarray open
+        except Exception as e:
             try:
                 temp_nc_file = filename.replace('.gz', '.nc')
                 with gzip.open(filename, 'rb') as f_in, open(temp_nc_file, 'wb') as f_out:
@@ -196,16 +205,22 @@ def read_madis_hourly(data_directory, year_mo_str, output_directory, shapedir=No
         else:
             first = False
 
+        if j > 3:
+            break
+
+
     for k, v in data.items():
-        f = os.path.join(output_directory, '{}_1.csv'.format(k))
+
+        out_dir = os.path.join(output_directory, k)
+        if not os.path.exists(out_dir):
+            os.mkdir(out_dir)
+
+        out_file = os.path.join(out_dir, '{}_{}.csv'.format(k, year_mo_str))
         df = pd.DataFrame.from_dict(v, orient='index')
         df.columns = params
-        df['datetime'] = pd.to_datetime(df.index)
+        df['datetime'] = df.index
         df = df[['datetime'] + params]
-        if os.path.exists(f):
-            df.to_csv(f, mode='a', header=False)
-        else:
-            df.to_csv(f)
+        df.to_csv(out_file, index=False)
 
     if progress_json:
         # re-open tracker may have updated during execution
@@ -248,29 +263,32 @@ if __name__ == "__main__":
     # progress_ = None
 
     if os.path.exists('/data/ssd1/madis'):
-        netcdf = os.path.join('/data/ssd1/madis', 'netCDF')
-        out_dir_ = os.path.join('/data/ssd1/madis', 'csv')
+        netcdf_src = os.path.join(mesonet_dir, 'netCDF')
+        netcdf_dst = os.path.join('/data/ssd1/madis', 'netCDF')
+        out_dir_ = os.path.join('/data/ssd1/madis', 'yrmo_csv')
         print('operating on zoran data')
     else:
-        netcdf = os.path.join(mesonet_dir, 'netCDF')
-        out_dir_ = os.path.join(mesonet_dir, 'csv')
+        netcdf_src = os.path.join(mesonet_dir, 'netCDF')
+        netcdf_dst = os.path.join(mesonet_dir, 'netCDF')
+        out_dir_ = os.path.join(mesonet_dir, 'yrmo_csv')
         print('operating on network drive data')
+
+    dt = pd.date_range('2001-01-01', '2010-12-31', freq='m')
+    dts = [d.strftime('%Y%m') for d in dt]
+    transfer_list(netcdf_src, netcdf_dst, progress_json=None, yrmo_str=dts)
+
+    # times = generate_monthly_time_tuples(2001, 2024, check_dir=out_dir_, write_progress=True)
+    times = generate_monthly_time_tuples(2001, 2010)
+    args_ = [(t, netcdf_dst, out_dir_, outshp, progress_) for t in times]
+    # random.shuffle(args_)
+    # args_.reverse()
+
+    # debug
+    # for t in args_[:1]:
+    #     process_time_chunk(t)
 
     # num_processes = 1
     num_processes = 20
-
-    # times = generate_monthly_time_tuples(2001, 2024, check_dir=out_dir_, write_progress=True)
-    times = generate_monthly_time_tuples(2001, 2024)
-    args_ = [(t, netcdf, out_dir_, outshp, progress_) for t in times]
-    random.shuffle(args_)
-
-    # trans = [(t, netcdf, out_dir_, outshp, progress_) for t in times]
-    # transfer_list(netcdf, '/data/ssd1/madis/netCDF', progress_)
-
-    # debug
-    # for t in args_[:10]:
-    #     process_time_chunk(t)
-
     with multiprocessing.Pool(processes=num_processes) as pool:
         pool.map(process_time_chunk, args_)
 
