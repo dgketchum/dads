@@ -157,6 +157,7 @@ def read_madis_hourly(data_directory, year_mo_str, output_directory, shapedir=No
                 ds = xr.open_dataset(temp_nc_file, engine='netcdf4')
             except Exception as e2:
                 print(f"Error writing to temporary .nc file or reading with netCDF4 for {filename}: {e2}")
+                continue
             finally:
                 if temp_nc_file and os.path.exists(temp_nc_file):
                     os.remove(temp_nc_file)
@@ -196,7 +197,7 @@ def read_madis_hourly(data_directory, year_mo_str, output_directory, shapedir=No
             first = False
 
     for k, v in data.items():
-        f = os.path.join(output_directory, '{}.csv'.format(k))
+        f = os.path.join(output_directory, '{}_1.csv'.format(k))
         df = pd.DataFrame.from_dict(v, orient='index')
         df.columns = params
         df['datetime'] = pd.to_datetime(df.index)
@@ -219,10 +220,13 @@ def read_madis_hourly(data_directory, year_mo_str, output_directory, shapedir=No
 
 
 def write_locations(loc, shp_dir, dt_):
-    df = pd.DataFrame.from_dict(loc, orient='index')
-    gdf = gpd.GeoDataFrame(df, geometry=gpd.points_from_xy(df.longitude, df.latitude), crs='EPSG:4326')
-    shp = os.path.join(shp_dir, f'integrated_mesonet_{dt_}.shp')
-    gdf.to_file(shp)
+    try:
+        df = pd.DataFrame.from_dict(loc, orient='index')
+        gdf = gpd.GeoDataFrame(df, geometry=gpd.points_from_xy(df.longitude, df.latitude), crs='EPSG:4326')
+        shp = os.path.join(shp_dir, f'integrated_mesonet_{dt_}.shp')
+        gdf.to_file(shp)
+    except:
+        pass
 
 
 def process_time_chunk(args):
@@ -256,12 +260,12 @@ if __name__ == "__main__":
     num_processes = 20
 
     # times = generate_monthly_time_tuples(2001, 2024, check_dir=out_dir_, write_progress=True)
-    times = generate_monthly_time_tuples(2001, 2011)
+    times = generate_monthly_time_tuples(2001, 2024)
     args_ = [(t, netcdf, out_dir_, outshp, progress_) for t in times]
     random.shuffle(args_)
 
-    trans = [(t, netcdf, out_dir_, outshp, progress_) for t in times]
-    transfer_list(netcdf, '/data/ssd1/madis/netCDF', progress_)
+    # trans = [(t, netcdf, out_dir_, outshp, progress_) for t in times]
+    # transfer_list(netcdf, '/data/ssd1/madis/netCDF', progress_)
 
     # debug
     # for t in args_[:10]:
