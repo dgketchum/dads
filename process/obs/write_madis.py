@@ -1,15 +1,13 @@
-import shutil
-import multiprocessing
 import glob
 import gzip
 import json
+import multiprocessing
 import os
-import random
+import shutil
 import time
 import warnings
 from datetime import datetime, timedelta
 
-from tqdm import tqdm
 import geopandas as gpd
 import pandas as pd
 import xarray as xr
@@ -47,72 +45,36 @@ def transfer_list(data_directory, dst, progress_json=None, yrmo_str=None):
         dst_list = [os.path.join(dst, f) for f, ym in zip(files_, yrmo) if ym in yrmo_str]
         print(len(file_list), 'files')
 
-    for i, (file, dest_file) in enumerate(zip(file_list, dst_list)):
+    for i, (source_file, dest_file) in enumerate(zip(file_list, dst_list)):
         if os.path.exists(dest_file):
             continue
-        shutil.copy(file, dest_file)
-        print(dest_file)
+        try:
+            shutil.copy(source_file, dest_file)
+            if dest_file.endswith('01_0000.gz'):
+                print(dest_file)
+        except Exception as e:
+            print(e, os.path.basename(source_file))
+            continue
 
 
-def generate_monthly_time_tuples(start_year, end_year, check_dir=None, write_progress=None):
+def generate_monthly_time_tuples(start_year, end_year, check_dir=None):
     idxs = []
     if check_dir:
-        file_sizes, dct = {}, {}
-        for f in os.listdir(check_dir):
-            if f.endswith('.csv'):
-                station_path = os.path.join(check_dir, f)
-                file_sizes[station_path] = os.path.getsize(station_path)
+        file_list, dct = [], {}
+        for root, dirs, files in os.walk(check_dir):
+            for file in files:
+                file_list.append(os.path.join(root, file))
 
-        sorted_files = sorted(file_sizes.items(), key=lambda x: x[1], reverse=False)
-
-        for i, (station_path, sz) in enumerate(sorted_files, start=1):
-
-            if sz == 0:
-                os.remove(station_path)
-                continue
-
-            df = pd.read_csv(station_path)
-            df_cols = df.columns.to_list()
-            if len(df_cols) == len(COLS) and all([c in df_cols for c in COLS]):
-                print(os.path.basename(station_path), i, 'already conforms')
-                continue
-
-            extra = [c for c in df.columns if c in ['Unnamed: 0.2', 'Unnamed: 0.1']]
-            if any(extra):
-                nan_idx = df[df[params].isnull().any(axis=1)].index.tolist()
-                if nan_idx:
-                    bad = df.loc[nan_idx]
-                    print(bad.iloc[0][extra])
-                    print(bad.iloc[-1][extra])
-                    print(os.path.basename(station_path), i, 'being reformatted')
-
-                df.drop(columns=extra, inplace=True)
-                df.dropna(subset=params, inplace=True)
-
-            df = df.rename(columns={'Unnamed: 0': 'datetime'})
-            df['datetime'] = pd.to_datetime(df['datetime'], format='mixed')
-            df.to_csv(station_path, index=False)
-
-            try:
-                dts = list(set((i.year, i.month) for i in df.index))
-            except Exception:
-                continue
-
-            idxs.extend(dts)
-
-        idxs = sorted(list(set(idxs)))
-
-        if write_progress:
-            dct['complete'] = [str(f'{y}{m}') for y, m in idxs]
-            with open(write_progress, 'w') as fp:
-                json.dump(dct, fp, indent=4)
+        yrmos = [f.split('.')[0][-6:] for f in file_list]
+        idxs = sorted(list(set(yrmos)))
 
     time_tuples = []
     for year in range(start_year, end_year + 1):
         for month in range(1, 13):
+            mstr = str(month).rjust(2, '0')
 
-            if check_dir and (year, month) in idxs:
-                print('{}/{} exists'.format(month, year))
+            if check_dir and f'{year}{mstr}' in idxs:
+                print('{}/{} exists'.format(mstr, year))
 
             start_day = 1
             end_day = ((datetime(year, month + 1, 1) - timedelta(days=1)).day if month < 12 else 31)
@@ -125,17 +87,8 @@ def generate_monthly_time_tuples(start_year, end_year, check_dir=None, write_pro
     return time_tuples
 
 
-def read_madis_hourly(data_directory, year_mo_str, output_directory, shapedir=None, bounds=(-125., 25., -66., 49.),
-                      progress_json=None):
+def read_madis_hourly(data_directory, year_mo_str, output_directory, shapedir=None, bounds=(-125., 25., -66., 49.)):
     """"""
-
-    if progress_json:
-        with open(progress_json, 'r') as f:
-            progress = json.load(f)
-
-        if year_mo_str in progress['complete']:
-            print(year_mo_str, 'exists in progress file, skipping')
-            return
 
     file_pattern = os.path.join(data_directory, f"*{year_mo_str}*.gz")
     file_list = sorted(glob.glob(file_pattern))
@@ -205,10 +158,6 @@ def read_madis_hourly(data_directory, year_mo_str, output_directory, shapedir=No
         else:
             first = False
 
-        if j > 3:
-            break
-
-
     for k, v in data.items():
 
         out_dir = os.path.join(output_directory, k)
@@ -221,14 +170,6 @@ def read_madis_hourly(data_directory, year_mo_str, output_directory, shapedir=No
         df['datetime'] = df.index
         df = df[['datetime'] + params]
         df.to_csv(out_file, index=False)
-
-    if progress_json:
-        # re-open tracker may have updated during execution
-        with open(progress_json, 'r') as f:
-            progress = json.load(f)
-        progress['complete'].append(year_mo_str)
-        with open(progress_json, 'w') as fp:
-            json.dump(progress, fp, indent=4)
 
     end = time.perf_counter()
     print(f"Processing {len(file_list)} files took {end - start:0.4f} seconds")
@@ -245,9 +186,9 @@ def write_locations(loc, shp_dir, dt_):
 
 
 def process_time_chunk(args):
-    time_tuple, meso_dir, out_dir, out_shp, prog_ = args
+    time_tuple, meso_dir, out_dir, out_shp = args
     start_time, end_time = time_tuple
-    read_madis_hourly(meso_dir, start_time[:6], out_dir, progress_json=prog_,
+    read_madis_hourly(meso_dir, start_time[:6], out_dir,
                       shapedir=out_shp, bounds=(-180., 25., -60., 85.))
 
 
@@ -259,8 +200,6 @@ if __name__ == "__main__":
 
     mesonet_dir = os.path.join(d, 'climate', 'madis', 'LDAD', 'mesonet')
     outshp = os.path.join(mesonet_dir, 'shapes')
-    progress_ = os.path.join(mesonet_dir, 'madis_progress.json')
-    # progress_ = None
 
     if os.path.exists('/data/ssd1/madis'):
         netcdf_src = os.path.join(mesonet_dir, 'netCDF')
@@ -273,13 +212,12 @@ if __name__ == "__main__":
         out_dir_ = os.path.join(mesonet_dir, 'yrmo_csv')
         print('operating on network drive data')
 
-    dt = pd.date_range('2001-01-01', '2010-12-31', freq='m')
-    dts = [d.strftime('%Y%m') for d in dt]
-    transfer_list(netcdf_src, netcdf_dst, progress_json=None, yrmo_str=dts)
+    # dt = pd.date_range('2001-01-01', '2010-12-31', freq='MS')
+    # dts = [d.strftime('%Y%m') for d in dt]
+    # transfer_list(netcdf_src, netcdf_dst, progress_json=None, yrmo_str=dts)
 
-    # times = generate_monthly_time_tuples(2001, 2024, check_dir=out_dir_, write_progress=True)
-    times = generate_monthly_time_tuples(2001, 2010)
-    args_ = [(t, netcdf_dst, out_dir_, outshp, progress_) for t in times]
+    times = generate_monthly_time_tuples(2001, 2010, check_dir=out_dir_)
+    args_ = [(t, netcdf_dst, out_dir_, outshp) for t in times]
     # random.shuffle(args_)
     # args_.reverse()
 
