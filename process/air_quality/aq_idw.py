@@ -15,7 +15,7 @@ def csv_to_netcdf(in_dir, metadata, output_file):
                                     f"{str(r['co_fips']).rjust(3, '0')}"
                                     f"{str(r['site_no']).rjust(4, '0')}", axis=1)
 
-    aqm = aqm[aqm['state'] == 'MT']
+    # aqm = aqm[aqm['state'] == 'MT']
 
     files_ = [os.path.join(in_dir, f) for f in os.listdir(in_dir) if f.endswith('.csv')]
 
@@ -121,13 +121,13 @@ if __name__ == '__main__':
     aq_d = os.path.join(root, 'aq')
     aq_csv_data = os.path.join(root, 'aq', 'joined_data')
     aq_summary = os.path.join(aq_d, 'aqs.csv')
-    aq_nc = os.path.join(aq_d, 'netCDF', 'aqs_mt.nc')
+    aq_nc = os.path.join(aq_d, 'netCDF', 'aqs.nc')
     aq_output = os.path.join(aq_d, 'dads_stations', 'aq_dads_test.csv')
     aq_tif = os.path.join(aq_d, 'tif')
 
-    # csv_to_netcdf(aq_csv_data, aq_summary, aq_nc)
+    csv_to_netcdf(aq_csv_data, aq_summary, aq_nc)
 
     sites = os.path.join(root, 'met', 'stations', 'dads_stations_res_elev_mgrs.csv')
-    interpolate_station_aq(aq_nc, aq_output, sites, raster_dst=None)
+    # interpolate_station_aq(aq_nc, aq_output, sites, raster_dst=None)
 
 # ========================= EOF ====================================================================

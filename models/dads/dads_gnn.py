@@ -5,6 +5,7 @@ import torch.nn.functional as F
 from torch_geometric.nn import GCNConv
 import pytorch_lightning as pl
 
+
 class MeteorologicalInterpolator(pl.LightningModule):
     def __init__(self, pretrained_lstm_path, output_dim, edge_emb_dim=6, hidden_dim=64,
                  num_gnn_layers=5, dropout=0.2, learning_rate=1e-3, freeze_lstm=True):
