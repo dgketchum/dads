@@ -75,6 +75,7 @@ def generate_monthly_time_tuples(start_year, end_year, check_dir=None):
 
             if check_dir and f'{year}{mstr}' in idxs:
                 print('{}/{} exists'.format(mstr, year))
+                continue
 
             start_day = 1
             end_day = ((datetime(year, month + 1, 1) - timedelta(days=1)).day if month < 12 else 31)
@@ -212,11 +213,12 @@ if __name__ == "__main__":
         out_dir_ = os.path.join(mesonet_dir, 'yrmo_csv')
         print('operating on network drive data')
 
-    # dt = pd.date_range('2001-01-01', '2010-12-31', freq='MS')
-    # dts = [d.strftime('%Y%m') for d in dt]
-    # transfer_list(netcdf_src, netcdf_dst, progress_json=None, yrmo_str=dts)
+    dt = pd.date_range('2011-01-01', '2019-12-31', freq='MS')
+    dts = [d.strftime('%Y%m') for d in dt]
+    transfer_list(netcdf_src, netcdf_dst, progress_json=None, yrmo_str=dts)
 
-    times = generate_monthly_time_tuples(2001, 2010, check_dir=out_dir_)
+    times = generate_monthly_time_tuples(2011, 2019, check_dir=out_dir_)
+    [print(t) for t in times]
     args_ = [(t, netcdf_dst, out_dir_, outshp) for t in times]
     # random.shuffle(args_)
     # args_.reverse()
