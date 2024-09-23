@@ -78,8 +78,10 @@ def write_pth_training_data(csv_dir, training_metadata, output_dir, train_frac=0
         data_tensor_daily = torch.tensor(df.values, dtype=torch.float32)
 
         station_chunk_ct, station_chunks = 0, []
-        for i in range(len(df.index) - chunk_size + 1):
-            end_timestamp = df.index[i + chunk_size - 1]
+        iters = int(np.floor(len(df.index) / chunk_size))
+        for i in range(1, iters + 1):
+
+            end_timestamp = df.index[i * chunk_size - 1]
 
             end_index_daily = df.index.get_loc(end_timestamp)
 
