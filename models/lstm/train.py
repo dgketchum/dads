@@ -3,7 +3,7 @@ import json
 import resource
 from datetime import datetime
 
-from models.scalers import RobustScaler
+from models.scalers import RobustScaler, MinMaxScaler
 
 import pytorch_lightning as pl
 import torch
@@ -44,11 +44,9 @@ class PTHLSTMDataset(Dataset):
 
         self.data = torch.cat(all_data, dim=0)
 
-        self.scaler = RobustScaler()
-        self.scale_data()
-
-    def scale_data(self):
-        self.data = self.scaler(self.data)
+        self.scaler = MinMaxScaler()
+        self.scaler.fit(self.data)
+        self.data = self.scaler.transform(self.data)
 
     def __len__(self):
         return len(self.data)
@@ -110,6 +108,7 @@ def train_model(dirpath, pth, metadata, batch_size=1, learning_rate=0.01, n_work
                                   shuffle=True,
                                   num_workers=n_workers,
                                   collate_fn=lambda batch: [x for x in batch if x is not None])
+
 
     vdir = os.path.join(pth, 'val')
     v_files = [os.path.join(vdir, f) for f in os.listdir(vdir)]

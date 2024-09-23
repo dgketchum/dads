@@ -111,12 +111,9 @@ class Scaler:
         raise NotImplementedError()
 
     def transform(self, x: TensArray):
-        """Apply transformation :math:`f(x) = (x - \mu) / \sigma`."""
         return (x - self.bias) / self.scale + 5e-8
 
     def inverse_transform(self, x: TensArray):
-        """Apply inverse transformation
-        :math:`f(x) = (x \cdot \sigma) + \mu`."""
         return x * (self.scale + 5e-8) + self.bias
 
     def fit_transform(self, x: TensArray, *args, **kwargs):
@@ -141,19 +138,6 @@ class StandardScaler(Scaler):
 
     @fit_wrapper
     def fit(self, x: TensArray, mask=None, keepdims=True):
-        """Fit scaler's parameters `bias` :math:`\mu` and `scale`
-        :math:`\sigma` as the mean and the standard deviation of :obj:`x`,
-        respectively.
-
-        Args:
-            x: array-like input
-            mask (optional): boolean mask to denote elements of :obj:`x` on
-                which to fit the parameters.
-                (default: :obj:`None`)
-            keepdims (bool): whether to keep the same dimensions as :obj:`x` in
-                the parameters.
-                (default: :obj:`True`)
-        """
         if mask is not None:
             x = np.where(mask, x, np.nan)
             self.bias = np.nanmean(x.astype(np.float32), axis=self.axis,
@@ -186,23 +170,12 @@ class MinMaxScaler(Scaler):
 
     @fit_wrapper
     def fit(self, x: TensArray, mask=None, keepdims=True):
-        """Fit scaler's parameters `bias` :math:`\mu` and `scale`
-        :math:`\sigma` as the mean and the standard deviation of :obj:`x`.
 
-        Args:
-            x: array-like input
-            mask (optional): boolean mask to denote elements of :obj:`x` on
-                which to fit the parameters.
-                (default: :obj:`None`)
-            keepdims (bool): whether to keep the same dimensions as :obj:`x` in
-                the parameters.
-                (default: :obj:`True`)
-        """
         out_min, out_max = self.out_range
         if out_min >= out_max:
             raise ValueError(
                 "Output range minimum must be smaller than maximum. Got {}."
-                    .format(self.out_range))
+                .format(self.out_range))
 
         if mask is not None:
             x = np.where(mask, x, np.nan)
@@ -221,18 +194,6 @@ class MinMaxScaler(Scaler):
 
 
 class RobustScaler(Scaler):
-    """Removes the median and scales the data according to the quantile range.
-
-    Default range is the Interquartile Range (IQR), i.e., the range between the
-    1st quartile (25th quantile) and the 3rd quartile (75th quantile).
-
-    Args:
-        axis (int): dimensions of input to fit parameters on.
-            (default: 0)
-        quantile_range (tuple): quantile range :math:`(q_{\min}, q_{\max})`, with
-            :math:`0.0 < q_{\min} < q_{\max} < 100.0`, used to calculate :obj:`scale`.
-            (default: :obj:`(25.0, 75.0)`)
-    """
 
     def __init__(self, axis: Union[int, Tuple] = 0,
                  quantile_range: Tuple[float, float] = (25.0, 75.0),
@@ -244,19 +205,6 @@ class RobustScaler(Scaler):
 
     @fit_wrapper
     def fit(self, x: TensArray, mask=None, keepdims=True):
-        """Fit scaler's parameters `bias` :math:`\mu` and `scale`
-        :math:`\sigma` as the median and difference between quantiles of
-        :obj:`x`, respectively.
-
-        Args:
-            x: array-like input
-            mask (optional): boolean mask to denote elements of :obj:`x` on
-                which to fit the parameters.
-                (default: :obj:`None`)
-            keepdims (bool): whether to keep the same dimensions as :obj:`x` in
-                the parameters.
-                (default: :obj:`True`)
-        """
         q_min, q_max = self.quantile_range
         if not 0 <= q_min <= q_max <= 100:
             raise ValueError("Invalid quantile range: {}"
