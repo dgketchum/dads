@@ -26,8 +26,7 @@ def print_rmse(o, n, g):
 
 
 def write_pth_training_data(csv_dir, training_metadata, output_dir, train_frac=0.8, chunk_size=72,
-                            chunks_per_file=1000, target='rsds', hourly_dir=None, shuffle=False):
-
+                            chunks_per_file=1000, shuffle=False):
     metadata = {'chunk_size': chunk_size,
                 'chunks_per_file': chunks_per_file,
                 'column_order': [],
@@ -60,19 +59,7 @@ def write_pth_training_data(csv_dir, training_metadata, output_dir, train_frac=0
             df = pd.read_csv(filepath, index_col=0, parse_dates=True)
             yr_dt_encoding = datetime_encoded(df, ['year'])
             df = pd.concat([df, yr_dt_encoding], ignore_index=False, axis=1)
-
-            if hourly_dir:
-                hr_filepath = os.path.join(hourly_dir, '{}.csv'.format(station))
-                dfhr = pd.read_csv(hr_filepath, index_col=0, parse_dates=True)
-                dfhr.index = [datetime(i.year, i.month, i.day, i.hour) for i in dfhr.index]
-
-                start_date = max(df.index.min(), dfhr.index.min())
-                end_date = min(df.index.max(), dfhr.index.max())
-                df = df.loc[start_date:end_date]
-                dfhr = dfhr.loc[start_date:end_date]
-
-                day_dt_encoding = datetime_encoded(dfhr, ['day'])
-                dfhr = pd.concat([dfhr, day_dt_encoding], ignore_index=False, axis=1)
+            df['dt_diff'] = df.index.to_series().diff().dt.days.fillna(1)
 
         except FileNotFoundError:
             continue
@@ -81,49 +68,30 @@ def write_pth_training_data(csv_dir, training_metadata, output_dir, train_frac=0
         if df.empty:
             continue
 
-        if fate == 'val':
-            obs.extend(df[f'{target}_obs'].to_list())
-            gm.extend(df[f'{target}_gm'].to_list())
-            nl.extend(df[f'{target}_nl'].to_list())
+        df = df[[c for c in df.columns if '_obs' in c] + yr_dt_encoding.columns.to_list() + ['dt_diff']]
 
         day_diff = df['dt_diff'].astype(int).to_list()
-        df.drop(columns=['dt_diff', 'doy'], inplace=True)
-        dfhr.drop(columns=['doy', 'hour'], inplace=True)
-
+        df.drop(columns=['dt_diff'], inplace=True)
         metadata['column_order'] = df.columns.to_list()
-        metadata['column_order'].extend(dfhr.columns.to_list())
-
         [metadata['data_frequency'].append('lf') for _ in df.columns]
-        [metadata['data_frequency'].append('hf') for _ in dfhr.columns]
 
         data_tensor_daily = torch.tensor(df.values, dtype=torch.float32)
-        data_tensor_hourly = torch.tensor(dfhr.values, dtype=torch.float32)
-
-        matching_timestamps = df.index.intersection(dfhr.index)
 
         station_chunk_ct, station_chunks = 0, []
-        for i in range(len(matching_timestamps) - chunk_size + 1):
-            end_timestamp = matching_timestamps[i + chunk_size - 1]
+        for i in range(len(df.index) - chunk_size + 1):
+            end_timestamp = df.index[i + chunk_size - 1]
 
             end_index_daily = df.index.get_loc(end_timestamp)
-            end_index_hourly = dfhr.index.get_loc(end_timestamp)
 
             chunk_daily_start = max(0, end_index_daily - chunk_size + 1)
             chunk_daily = data_tensor_daily[chunk_daily_start: end_index_daily + 1]
-
-            chunk_hourly_start = max(0, end_index_hourly - chunk_size + 1)
-            chunk_hourly = data_tensor_hourly[chunk_hourly_start: end_index_hourly + 1]
 
             check_consecutive = np.array(day_diff[i + chunk_size - 1])
             sequence_check = np.all(check_consecutive == 1)
             if not sequence_check:
                 continue
 
-            if len(chunk_hourly) < chunk_size or len(chunk_daily) < chunk_size:
-                continue
-
-            combined_chunk = torch.cat([chunk_daily, chunk_hourly], dim=1)
-            station_chunks.append(combined_chunk)
+            station_chunks.append(chunk_daily)
             station_chunk_ct += 1
 
         if len(station_chunks) > 0:
@@ -139,9 +107,8 @@ def write_pth_training_data(csv_dir, training_metadata, output_dir, train_frac=0
         with open(training_metadata, 'w') as fp:
             json.dump(metadata, fp, indent=4)
 
-    print('\n{} sites\n{}; {} observations, {} held out for validation'.format(write_files, target_var,
-                                                                               metadata['observation_count'],
-                                                                               len(obs)))
+    print('\n{} sites\n{} observations, {} held out for validation'.format(write_files, metadata['observation_count'],
+                                                                           len(obs)))
 
     if len(obs) > 0:
         print_rmse(obs, nl, gm)
@@ -167,11 +134,8 @@ if __name__ == '__main__':
 
     param_dir = os.path.join(training, 'autoencoder')
 
-    out_csv = os.path.join(param_dir, 'compiled_csv')
+    sta = os.path.join(d, 'met', 'joined', 'daily')
     out_pth = os.path.join(param_dir, 'pth')
-
-    # hourly_data = None
-    hourly_data = os.path.join(d, 'met', 'gridded', 'nldas2_hourly')
 
     if not os.path.exists(out_pth):
         os.mkdir(out_pth)
@@ -184,7 +148,7 @@ if __name__ == '__main__':
 
     print('========================== writing autoencoder traing data ==========================')
 
-    metadata_ = None
-    # metadata_ = os.path.join(param_dir, 'training_metadata.json')
-    write_pth_training_data(out_csv, metadata_, out_pth, hourly_dir=hourly_data, chunk_size=48, shuffle=True)
+    # metadata_ = None
+    metadata_ = os.path.join(param_dir, 'training_metadata.json')
+    write_pth_training_data(sta, metadata_, out_pth, chunk_size=72, shuffle=True)
 # ========================= EOF ==============================================================================

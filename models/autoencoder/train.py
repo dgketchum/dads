@@ -1,66 +1,177 @@
+import json
 import os
+import shutil
+import resource
 
-import random
-
-import torch
-from torch.utils.data import Dataset, DataLoader
 import pandas as pd
-import numpy as np
-from sklearn.preprocessing import RobustScaler
+import pytorch_lightning as pl
+import torch
+from datetime import datetime
+from pytorch_lightning.callbacks import ModelCheckpoint, EarlyStopping
+from torch.utils.data import Dataset, DataLoader
+from torch.utils.data._utils.collate import default_collate
+
+from models.scalers import MinMaxScaler
+from models.autoencoder.weather_encoder import WeatherAutoencoder
+
+device_name = None
+if torch.cuda.is_available():
+    device_name = torch.cuda.get_device_name(0)
+    print(f'Using GPU: {device_name}')
+else:
+    print('CUDA is not available. PyTorch will use the CPU.')
+
+torch.set_float32_matmul_precision('medium')
+torch.cuda.get_device_name(torch.cuda.current_device())
+
+rlimit = resource.getrlimit(resource.RLIMIT_NOFILE)
+resource.setrlimit(resource.RLIMIT_NOFILE, (4096, rlimit[1]))
 
 
 class WeatherDataset(Dataset):
-    def __init__(self, data_path, scaler, chunk_size=72 * 24):
-        self.df = pd.read_csv(data_path)
-        self.data = torch.tensor(self.df.values, dtype=torch.float32)
-        self.data[:, :4], _ = robust_scale(self.data[:, :4].numpy(), scaler)
+    def __init__(self, file_paths, expected_width, chunk_size, transform=None):
         self.chunk_size = chunk_size
+        self.transform = transform
+
+        all_data = []
+        for file_path in file_paths:
+            data = torch.load(file_path, weights_only=True)
+            if data.shape[2] != expected_width:
+                print(f"Skipping {file_path},shape mismatch. Expected {expected_width} columns, got {data.shape[2]}")
+                continue
+            all_data.append(data)
+
+        self.data = torch.cat(all_data, dim=0)
+
+        self.scaler = MinMaxScaler()
+        self.scaler.fit(self.data)
+        self.data = self.scaler.transform(self.data)
 
     def __len__(self):
-        return (len(self.data) - self.chunk_size) // 24 + 1
+        return len(self.data)
 
     def __getitem__(self, idx):
-        start_idx = idx * 24
-        end_idx = start_idx + self.chunk_size
-        return self.data[start_idx:end_idx, :]
+        chunk = self.data[idx]
+
+        valid_rows = ~torch.isnan(chunk).any(dim=1)
+        chunk = chunk[valid_rows]
+
+        if len(chunk) < self.chunk_size:
+            padding = torch.zeros((self.chunk_size - len(chunk), chunk.shape[1]))
+            chunk = torch.cat([chunk, padding], dim=0)
+
+        return chunk
 
 
-def sample_for_normalization(data_paths, sample_size=10000):
-    """Samples data from multiple CSV files to gather normalization statistics."""
-    all_data = []
-    for path in data_paths:
-        df = pd.read_csv(path)
-        sample = df.sample(n=min(sample_size, len(df)), replace=False)
-        all_data.append(sample)
-
-    combined_data = pd.concat(all_data)
-    return combined_data.iloc[:, :4].values  # Only consider the first 4 meteorological columns
+def custom_collate(batch):
+    batch = list(filter(lambda x: x is not None, batch))
+    if not batch:
+        return None
+    return default_collate(batch)
 
 
-def robust_scale(data, scaler=None):
-    """Scales data using RobustScaler, optionally fitting a new scaler."""
-    if scaler is None:
-        scaler = RobustScaler()
-        scaler.fit(data)
-    return scaler.transform(data), scaler
+def train_model(dirpath, pth, metadata, target='vpd', batch_size=1, learning_rate=0.01, n_workers=1, logging_csv=None):
+    """"""
 
+    with open(metadata, 'r') as f:
+        meta = json.load(f)
 
-def train_autoencoder(model, dataloader, optimizer, criterion, num_epochs, chunk_size=72 * 24):
-    for epoch in range(num_epochs):
-        for batch_data in dataloader:
-            seq_len = batch_data.size(1)
-            start_idx = random.randint(0, seq_len - chunk_size)
-            chunk = batch_data[:, start_idx:start_idx + chunk_size, :]
+    data_frequency = meta['data_frequency']
+    # idxs: obs, gm, start_daily: end_daily, start_hourly:
+    tensor_width = data_frequency.count('lf')
+    print('tensor cols: {}'.format(tensor_width))
+    chunk_size = meta['chunk_size']
+    target_col = meta['column_order'].index([c for c in meta['column_order'] if target in c][0])
 
-            optimizer.zero_grad()
-            output, _ = model(chunk)
-            loss = criterion(output, chunk)
-            loss.backward()
-            optimizer.step()
+    model = WeatherAutoencoder(input_size=7, sequence_len=72, embedding_size=16, d_model=16, nhead=4, num_layers=2,
+                               learning_rate=0.01)
 
-        print(f'Epoch [{epoch + 1}/{num_epochs}], Loss: {loss.item():.4f}')
+    tdir = os.path.join(pth, 'train')
+    t_files = [os.path.join(tdir, f) for f in os.listdir(tdir)]
+    train_dataset = WeatherDataset(file_paths=t_files,
+                                   expected_width=tensor_width,
+                                   chunk_size=chunk_size)
+
+    train_dataloader = DataLoader(train_dataset,
+                                  batch_size=batch_size,
+                                  shuffle=True,
+                                  num_workers=n_workers,
+                                  collate_fn=lambda batch: [x for x in batch if x is not None])
+
+    # batch = next(iter(train_dataloader))[0].reshape(1, chunk_size, tensor_width)
+    # y, _ = model(batch)
+
+    vdir = os.path.join(pth, 'val')
+    v_files = [os.path.join(vdir, f) for f in os.listdir(vdir)]
+    val_dataset = WeatherDataset(file_paths=v_files,
+                                 expected_width=tensor_width,
+                                 chunk_size=chunk_size)
+
+    val_dataloader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=n_workers,
+                                collate_fn=custom_collate)
+
+    print(f"Number of training samples: {len(train_dataset)}")
+    print(f"Number of validation samples: {len(val_dataset)}")
+
+    checkpoint_callback = ModelCheckpoint(
+        monitor="val_loss",
+        filename="best_model",
+        dirpath=dirpath,
+        save_top_k=1,
+        mode="min"
+    )
+
+    early_stop_callback = EarlyStopping(
+        monitor="val_loss",
+        min_delta=0.00,
+        patience=100,
+        verbose=False,
+        mode="min",
+        check_finite=True,
+    )
+
+    trainer = pl.Trainer(max_epochs=1000, callbacks=[checkpoint_callback, early_stop_callback],
+                         accelerator='gpu', devices=1)
+    trainer.fit(model, train_dataloader, val_dataloader)
 
 
 if __name__ == '__main__':
-    pass
+
+    d = '/media/research/IrrigationGIS/dads'
+    if not os.path.exists(d):
+        d = '/home/dgketchum/data/IrrigationGIS/dads'
+
+    if device_name == 'NVIDIA GeForce RTX 2080':
+        workers = 6
+    elif device_name == 'NVIDIA RTX A6000':
+        workers = 6
+    else:
+        raise NotImplementedError('Specify the machine this is running on')
+
+    zoran = '/home/dgketchum/training'
+    nvm = '/media/nvm/training'
+    if os.path.exists(zoran):
+        print('modeling with data from zoran')
+        training = zoran
+    elif os.path.exists(nvm):
+        print('modeling with data from NVM drive')
+        training = nvm
+    else:
+        print('modeling with data from UM drive')
+        training = os.path.join(d, 'training')
+
+    print('========================== training autoencoder ==========================')
+
+    param_dir = os.path.join(training, 'autoencoder')
+    pth_ = os.path.join(param_dir, 'pth')
+    metadata_ = os.path.join(param_dir, 'training_metadata.json')
+
+    now = datetime.now().strftime('%m%d%H%M')
+    chk = os.path.join(param_dir, 'checkpoints', now)
+    if os.path.isdir(chk):
+        shutil.rmtree(chk)
+    os.mkdir(chk)
+    logger_csv = os.path.join(chk, 'training_{}.csv'.format(now))
+
+    train_model(chk, pth_, metadata_, batch_size=8, learning_rate=0.001, n_workers=workers, logging_csv=None)
 # ========================= EOF ====================================================================
