@@ -60,8 +60,6 @@ class LSTMPredictor(pl.LightningModule):
         self.learning_rate = learning_rate
 
         self.log_csv = log_csv
-        self.checkpoint_callback = None
-        self.best_model_path = None
 
     def forward(self, x_lf, x_hf):
         x_lf = x_lf.squeeze()
@@ -82,9 +80,6 @@ class LSTMPredictor(pl.LightningModule):
         out = self.fc1(combined)
         out = self.output_layers(out).squeeze()
         return out
-
-    def on_fit_start(self):
-        self.checkpoint_callback = self.trainer.checkpoint_callback
 
     def training_step(self, batch, batch_idx):
         y, gm, lf, hf = stack_batch(batch)
