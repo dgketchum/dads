@@ -213,11 +213,11 @@ if __name__ == "__main__":
         out_dir_ = os.path.join(mesonet_dir, 'yrmo_csv')
         print('operating on network drive data')
 
-    dt = pd.date_range('2011-01-01', '2019-12-31', freq='MS')
+    dt = pd.date_range('2020-01-01', '2024-12-31', freq='MS')
     dts = [d.strftime('%Y%m') for d in dt]
     transfer_list(netcdf_src, netcdf_dst, progress_json=None, yrmo_str=dts)
 
-    times = generate_monthly_time_tuples(2011, 2019, check_dir=out_dir_)
+    times = generate_monthly_time_tuples(2020, 2024, check_dir=out_dir_)
     [print(t) for t in times]
     args_ = [(t, netcdf_dst, out_dir_, outshp) for t in times]
     # random.shuffle(args_)
