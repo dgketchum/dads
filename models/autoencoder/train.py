@@ -84,7 +84,7 @@ def train_model(dirpath, pth, metadata, target='vpd', batch_size=1, learning_rat
     target_col = meta['column_order'].index([c for c in meta['column_order'] if target in c][0])
 
     model = WeatherAutoencoder(input_size=7, sequence_len=72, embedding_size=16, d_model=16, nhead=4, num_layers=2,
-                               learning_rate=0.01)
+                               learning_rate=learning_rate, log_csv=logging_csv)
 
     tdir = os.path.join(pth, 'train')
     t_files = [os.path.join(tdir, f) for f in os.listdir(tdir)]
@@ -173,5 +173,5 @@ if __name__ == '__main__':
     os.mkdir(chk)
     logger_csv = os.path.join(chk, 'training_{}.csv'.format(now))
 
-    train_model(chk, pth_, metadata_, batch_size=8, learning_rate=0.001, n_workers=workers, logging_csv=None)
+    train_model(chk, pth_, metadata_, batch_size=64, learning_rate=0.01, n_workers=workers, logging_csv=None)
 # ========================= EOF ====================================================================

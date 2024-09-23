@@ -9,7 +9,7 @@ from torch.optim.lr_scheduler import ReduceLROnPlateau
 
 class WeatherAutoencoder(pl.LightningModule):
     def __init__(self, input_size=7, sequence_len=72, embedding_size=16, d_model=16, nhead=4, num_layers=2,
-                 learning_rate=0.01):
+                 learning_rate=0.01, log_csv=None):
         super().__init__()
 
         self.encoder = nn.TransformerEncoder(nn.TransformerEncoderLayer(d_model, nhead), num_layers)
@@ -24,6 +24,8 @@ class WeatherAutoencoder(pl.LightningModule):
 
         self.criterion = nn.L1Loss()
         self.learning_rate = learning_rate
+
+        self.log_csv = log_csv
 
     def forward(self, x, mask=None):
         x = self.input_projection(x)
