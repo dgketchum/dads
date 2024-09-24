@@ -81,10 +81,7 @@ def train_model(dirpath, pth, metadata, target='vpd', batch_size=1, learning_rat
     tensor_width = data_frequency.count('lf')
     print('tensor cols: {}'.format(tensor_width))
     chunk_size = meta['chunk_size']
-    target_col = meta['column_order'].index([c for c in meta['column_order'] if target in c][0])
-
-    model = WeatherAutoencoder(input_size=7, sequence_len=72, embedding_size=16, d_model=16, nhead=4, num_layers=2,
-                               learning_rate=learning_rate, log_csv=logging_csv)
+    cols = meta['column_order']
 
     tdir = os.path.join(pth, 'train')
     t_files = [os.path.join(tdir, f) for f in os.listdir(tdir)]
@@ -109,6 +106,10 @@ def train_model(dirpath, pth, metadata, target='vpd', batch_size=1, learning_rat
 
     val_dataloader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=n_workers,
                                 collate_fn=custom_collate)
+
+    model = WeatherAutoencoder(input_size=7, sequence_len=72, embedding_size=16, d_model=16, nhead=4, num_layers=2,
+                               learning_rate=learning_rate, log_csv=logging_csv, scaler=val_dataset.scaler,
+                               feature_strings=cols)
 
     print(f"Number of training samples: {len(train_dataset)}")
     print(f"Number of validation samples: {len(val_dataset)}")
@@ -173,5 +174,5 @@ if __name__ == '__main__':
     os.mkdir(chk)
     logger_csv = os.path.join(chk, 'training_{}.csv'.format(now))
 
-    train_model(chk, pth_, metadata_, batch_size=64, learning_rate=0.01, n_workers=workers, logging_csv=None)
+    train_model(chk, pth_, metadata_, batch_size=64, learning_rate=0.005, n_workers=workers, logging_csv=logger_csv)
 # ========================= EOF ====================================================================

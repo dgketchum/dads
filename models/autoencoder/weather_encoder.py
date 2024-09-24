@@ -1,6 +1,7 @@
 import csv
 
 import torch
+import numpy as np
 import pytorch_lightning as pl
 from sklearn.metrics import r2_score, root_mean_squared_error
 from torch import nn as nn, optim as optim
@@ -9,7 +10,7 @@ from torch.optim.lr_scheduler import ReduceLROnPlateau
 
 class WeatherAutoencoder(pl.LightningModule):
     def __init__(self, input_size=7, sequence_len=72, embedding_size=16, d_model=16, nhead=4, num_layers=2,
-                 learning_rate=0.01, log_csv=None):
+                 learning_rate=0.01, log_csv=None, scaler=None, feature_strings=None):
         super().__init__()
 
         self.encoder = nn.TransformerEncoder(nn.TransformerEncoderLayer(d_model, nhead), num_layers)
@@ -26,6 +27,12 @@ class WeatherAutoencoder(pl.LightningModule):
         self.learning_rate = learning_rate
 
         self.log_csv = log_csv
+        self.scaler = scaler
+        self.feature_strings = feature_strings
+
+        # hack to get model output to on_validation_epoch_end hook
+        self.y_last = []
+        self.y_hat_last = []
 
     def forward(self, x, mask=None):
         x = self.input_projection(x)
@@ -43,13 +50,81 @@ class WeatherAutoencoder(pl.LightningModule):
         self.log('train_loss', loss)
         return loss
 
+    def on_validation_epoch_end(self):
+
+        if self.log_csv:
+
+            if self.current_epoch == 0:
+                train_loss = np.nan
+
+                val_cols = []
+                for p in self.feature_strings:
+                    if p in ['year_sin', 'year_cos']:
+                        continue
+                    val_cols.append(f'{p}_r2')
+                    val_cols.append(f'{p}_rmse')
+
+                headers = ['epoch', 'train_loss', 'val_loss', 'lr', 'lr_ratio'] + val_cols
+
+                with open(self.log_csv, 'w', newline='\n') as f:
+                    f.seek(0)
+                    writer = csv.writer(f)
+                    writer.writerow(headers)
+
+            else:
+                train_loss = self.trainer.callback_metrics['train_loss'].item()
+
+            val_loss = self.trainer.callback_metrics['val_loss'].item()
+
+            current_lr = self.trainer.optimizers[0].param_groups[0]['lr']
+            lr_ratio = current_lr / self.learning_rate
+
+            log_data = [self.current_epoch,
+                        round(train_loss, 4),
+                        round(val_loss, 4),
+                        round(current_lr, 4),
+                        round(lr_ratio, 4)]
+
+            y = torch.cat(self.y_last)
+            y = y.cpu()
+            y = self.scaler.inverse_transform(y)
+
+            y_hat = torch.cat(self.y_hat_last)
+            y_hat = y_hat.cpu()
+            y_hat = self.scaler.inverse_transform(y_hat)
+
+            for i, col in enumerate(self.feature_strings):
+
+                if col in ['year_sin', 'year_cos']:
+                    continue
+
+                r2_obs = r2_score(y[:, i], y_hat[:, i])
+                rmse_obs = root_mean_squared_error(y[:, i], y_hat[:, i])
+                log_data.extend([round(r2_obs, 4), round(rmse_obs, 4)])
+
+            with open(self.log_csv, 'a', newline='') as f:
+                writer = csv.writer(f)
+                writer.writerow(log_data)
+
+        self.y_hat_last = []
+        self.y_last = []
+
     def validation_step(self, batch, batch_idx):
-        x = batch
-        y_hat, _ = self(x)
-        y_hat = y_hat.flatten().unsqueeze(1)
-        y = x.flatten().unsqueeze(1)
-        loss_obs = self.criterion(y_hat, y)
+        y = batch
+        y_hat, _ = self(y)
+
+        self.y_last.append(y)
+        self.y_hat_last.append(y_hat)
+
+        yh_flat = y_hat.flatten().unsqueeze(1)
+        y_flat = y.flatten().unsqueeze(1)
+        loss_obs = self.criterion(yh_flat, y_flat)
         self.log('val_loss', loss_obs, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
+
+        current_lr = self.trainer.optimizers[0].param_groups[0]['lr']
+        self.log('lr', current_lr, on_step=False, on_epoch=True, prog_bar=True)
+        lr_ratio = current_lr / self.learning_rate
+        self.log('lr_ratio', lr_ratio, on_step=False, on_epoch=True, prog_bar=True)
 
         return loss_obs
 
