@@ -88,10 +88,12 @@ class WeatherAutoencoder(pl.LightningModule):
             y = torch.cat(self.y_last)
             y = y.cpu()
             y = self.scaler.inverse_transform(y)
+            y = y.view(-1, len(self.feature_strings))
 
             y_hat = torch.cat(self.y_hat_last)
             y_hat = y_hat.cpu()
             y_hat = self.scaler.inverse_transform(y_hat)
+            y_hat = y_hat.view(-1, len(self.feature_strings))
 
             for i, col in enumerate(self.feature_strings):
 
