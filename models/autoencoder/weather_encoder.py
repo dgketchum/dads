@@ -32,8 +32,10 @@ class WeatherAutoencoder(pl.LightningModule):
 
         self.data_columns = []
         self.column_order = []
+
         for k, v in kwargs.items():
             self.__setattr__(k, v)
+
         self.data_width = len(self.data_columns)
         self.tensor_width = len(self.column_order)
 
@@ -41,6 +43,11 @@ class WeatherAutoencoder(pl.LightningModule):
         self.y_last = []
         self.y_hat_last = []
         self.mask = []
+
+    def init_bias(self):
+        for module in [self.input_projection, self.output_projection, self.embedding_layer]:
+            if module.bias is not None:
+                nn.init.uniform_(module.bias, -0.1, 0.1)
 
     def forward(self, x, mask):
         x = self.input_projection(x)
@@ -51,10 +58,18 @@ class WeatherAutoencoder(pl.LightningModule):
 
     def training_step(self, batch, batch_idx):
         x, mask = stack_batch(batch)
+
+        x_mean = x[~mask].mean(dim=0)
+        x[mask] = x_mean
+
         y_hat, _ = self(x, mask)
         y_hat = y_hat.flatten().unsqueeze(1)
         y = x.flatten().unsqueeze(1)
         loss = self.criterion(y_hat, y)
+
+        if not np.isfinite(loss.item()):
+            a = 1
+
         self.log('train_loss', loss)
         return loss
 
@@ -111,9 +126,13 @@ class WeatherAutoencoder(pl.LightningModule):
                 obs = y[mask].reshape(-1, self.tensor_width)[:, i]
                 pred = y_hat[mask].reshape(-1, self.tensor_width)[:, i]
 
-                r2_obs = r2_score(obs, pred)
-                rmse_obs = root_mean_squared_error(obs, pred)
-                log_data.extend([round(r2_obs, 4), round(rmse_obs, 4)])
+                try:
+                    r2_obs = r2_score(obs, pred)
+                    rmse_obs = root_mean_squared_error(obs, pred)
+                    log_data.extend([round(r2_obs, 4), round(rmse_obs, 4)])
+                except ValueError:
+
+                    log_data.extend([round(np.nan, 4), round(np.nan, 4)])
 
             with open(self.log_csv, 'a', newline='') as f:
                 writer = csv.writer(f)
@@ -121,10 +140,30 @@ class WeatherAutoencoder(pl.LightningModule):
 
         self.y_hat_last = []
         self.y_last = []
+        self.mask = []
 
     def validation_step(self, batch, batch_idx):
         y, mask = batch
-        y_hat, _ = self(y, mask)
+
+        y_arr = y.cpu().numpy()
+        y_nanct = np.count_nonzero(np.isnan(y_arr))
+
+        if y_nanct > 0:
+            nan_handle = True
+            y_mod = y.clone()
+            y_mod = torch.nan_to_num(y_mod, nan=0.0)
+            y_hat, _ = self(y_mod, mask)
+
+        else:
+            nan_handle = False
+            y_hat, _ = self(y, mask)
+
+        yh_arr = y_hat.cpu().numpy()
+        yh_nanct = np.count_nonzero(np.isnan(yh_arr))
+
+        if yh_nanct > 0:
+            y_hat_mean = y_hat[~torch.isnan(y_hat)].mean(dim=0)
+            y_hat[mask] = y_hat_mean
 
         self.y_last.append(y)
         self.y_hat_last.append(y_hat)
@@ -133,6 +172,7 @@ class WeatherAutoencoder(pl.LightningModule):
         yh_flat = y_hat.flatten().unsqueeze(1)
         y_flat = y.flatten().unsqueeze(1)
         loss_obs = self.criterion(yh_flat, y_flat)
+
         self.log('val_loss', loss_obs, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
 
         current_lr = self.trainer.optimizers[0].param_groups[0]['lr']
@@ -153,10 +193,14 @@ class WeatherAutoencoder(pl.LightningModule):
             }
         }
 
+    def on_before_optimizer_step(self, optimizer):
+        torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=1.0)
+
 
 def stack_batch(batch):
-    y = torch.stack(batch, dim=0)
-    return y
+    x = torch.stack([item[0] for item in batch])
+    mask = torch.stack([item[1] for item in batch])
+    return x, mask
 
 
 if __name__ == '__main__':

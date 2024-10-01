@@ -11,7 +11,7 @@ from pytorch_lightning.callbacks import ModelCheckpoint, EarlyStopping
 from torch.utils.data import Dataset, DataLoader
 from torch.utils.data._utils.collate import default_collate
 
-from models.scalers import MinMaxScaler
+from models.scalers import MinMaxScaler, StandardScaler
 from models.autoencoder.weather_encoder import WeatherAutoencoder
 
 device_name = None
@@ -44,7 +44,7 @@ class WeatherDataset(Dataset):
 
         self.data = torch.cat(all_data, dim=0)
 
-        self.scaler = MinMaxScaler()
+        self.scaler = StandardScaler()
         self.scaler.fit(self.get_valid_data_for_scaling())
 
     def scale_chunk(self, chunk):
@@ -70,6 +70,7 @@ class WeatherDataset(Dataset):
         chunk[:, :self.data_width] = self.scale_chunk(chunk[:, :self.data_width])
 
         # pytorch has counterintuitive mask logic (opposite)
+        # i.e., False where there is valid data
         mask = torch.isnan(chunk[:, 0])
 
         return chunk, mask
@@ -82,7 +83,7 @@ def custom_collate(batch):
     return default_collate(batch)
 
 
-def train_model(dirpath, pth, metadata, batch_size=1, learning_rate=0.01,
+def train_model(dirpath, pth, metadata, batch_size=64, learning_rate=0.01,
                 n_workers=1, logging_csv=None):
     """"""
 
@@ -102,7 +103,7 @@ def train_model(dirpath, pth, metadata, batch_size=1, learning_rate=0.01,
 
     train_dataloader = DataLoader(train_dataset,
                                   batch_size=batch_size,
-                                  shuffle=False,
+                                  shuffle=True,
                                   num_workers=n_workers,
                                   collate_fn=lambda batch: [x for x in batch if x is not None])
 
@@ -113,26 +114,22 @@ def train_model(dirpath, pth, metadata, batch_size=1, learning_rate=0.01,
                                  data_width=data_width,
                                  chunk_size=chunk_size)
 
-    val_dataloader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=n_workers,
+    val_dataloader = DataLoader(val_dataset,
+                                batch_size=batch_size,
+                                shuffle=True,
+                                num_workers=n_workers,
                                 collate_fn=custom_collate)
 
     model = WeatherAutoencoder(input_size=tensor_width,
                                sequence_len=chunk_size,
                                embedding_size=4,
                                d_model=4,
-                               nhead=1,
+                               nhead=2,
                                num_layers=2,
                                learning_rate=learning_rate,
                                log_csv=logging_csv,
                                scaler=val_dataset.scaler,
                                **meta)
-
-    batch = next(iter(train_dataloader))[0]
-    x = batch[0].reshape(chunk_size, tensor_width)
-    mask = batch[1]
-    # x, mask = x.cpu().numpy(), mask.cpu().numpy()
-    x, mask = x.unsqueeze(0), mask.unsqueeze(0)
-    y, _ = model(x, mask)
 
     print(f"Number of training samples: {len(train_dataset)}")
     print(f"Number of validation samples: {len(val_dataset)}")
@@ -166,7 +163,7 @@ if __name__ == '__main__':
         d = '/home/dgketchum/data/IrrigationGIS/dads'
 
     if device_name == 'NVIDIA GeForce RTX 2080':
-        workers = 6
+        workers = 0
     elif device_name == 'NVIDIA RTX A6000':
         workers = 6
     else:
@@ -197,5 +194,5 @@ if __name__ == '__main__':
     os.mkdir(chk)
     logger_csv = os.path.join(chk, 'training_{}.csv'.format(now))
 
-    train_model(chk, pth_, metadata_, batch_size=32, learning_rate=0.001, n_workers=workers, logging_csv=logger_csv)
+    train_model(chk, pth_, metadata_, batch_size=64, learning_rate=0.001, n_workers=workers, logging_csv=logger_csv)
 # ========================= EOF ====================================================================
