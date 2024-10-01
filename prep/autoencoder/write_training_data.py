@@ -133,7 +133,7 @@ def write_pth_training_data(csv_dir, training_metadata, output_dir, train_frac=0
             nanct = np.count_nonzero(np.isnan(arr))
             nan_frac = nanct / arr.size
 
-            if nan_frac > 0.7:
+            if nan_frac > 0.0:
                 continue
 
             station_chunks.append(chunk_daily)
