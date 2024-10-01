@@ -3,6 +3,7 @@ import csv
 import torch
 import numpy as np
 import pytorch_lightning as pl
+from distributed.dashboard.components.shared import profile_interval
 from sklearn.metrics import r2_score, root_mean_squared_error
 from torch import nn as nn, optim as optim
 from torch.optim.lr_scheduler import ReduceLROnPlateau
@@ -10,7 +11,7 @@ from torch.optim.lr_scheduler import ReduceLROnPlateau
 
 class WeatherAutoencoder(pl.LightningModule):
     def __init__(self, input_size=7, sequence_len=72, embedding_size=16, d_model=16, nhead=4, num_layers=2,
-                 learning_rate=0.01, log_csv=None, scaler=None, feature_strings=None):
+                 learning_rate=0.01, log_csv=None, scaler=None, **kwargs):
         super().__init__()
 
         self.encoder = nn.TransformerEncoder(nn.TransformerEncoderLayer(d_model, nhead), num_layers)
@@ -28,22 +29,29 @@ class WeatherAutoencoder(pl.LightningModule):
 
         self.log_csv = log_csv
         self.scaler = scaler
-        self.feature_strings = feature_strings
+
+        self.data_columns = []
+        self.column_order = []
+        for k, v in kwargs.items():
+            self.__setattr__(k, v)
+        self.data_width = len(self.data_columns)
+        self.tensor_width = len(self.column_order)
 
         # hack to get model output to on_validation_epoch_end hook
         self.y_last = []
         self.y_hat_last = []
+        self.mask = []
 
-    def forward(self, x, mask=None):
+    def forward(self, x, mask):
         x = self.input_projection(x)
-        encoded = self.encoder(x, src_key_padding_mask=mask)
+        encoded = self.encoder(x, src_key_padding_mask=mask.T)
         embedding = self.embedding_layer(encoded[:, 0]).view(-1, self.sequence_len, self.embedding_size)
-        decoded = self.decoder(embedding, encoded, tgt_key_padding_mask=mask)
+        decoded = self.decoder(embedding, encoded, tgt_key_padding_mask=mask.T)
         return self.output_projection(decoded), embedding
 
     def training_step(self, batch, batch_idx):
-        x = stack_batch(batch)
-        y_hat, _ = self(x)
+        x, mask = stack_batch(batch)
+        y_hat, _ = self(x, mask)
         y_hat = y_hat.flatten().unsqueeze(1)
         y = x.flatten().unsqueeze(1)
         loss = self.criterion(y_hat, y)
@@ -58,9 +66,7 @@ class WeatherAutoencoder(pl.LightningModule):
                 train_loss = np.nan
 
                 val_cols = []
-                for p in self.feature_strings:
-                    if p in ['year_sin', 'year_cos']:
-                        continue
+                for p in self.data_columns:
                     val_cols.append(f'{p}_r2')
                     val_cols.append(f'{p}_rmse')
 
@@ -87,21 +93,26 @@ class WeatherAutoencoder(pl.LightningModule):
 
             y = torch.cat(self.y_last)
             y = y.cpu()
-            y = self.scaler.inverse_transform(y)
-            y = y.view(-1, len(self.feature_strings))
+            y[:, :, :self.data_width] = self.scaler.inverse_transform(y[:, :, :self.data_width])
+            y = y.view(-1, self.tensor_width)
 
             y_hat = torch.cat(self.y_hat_last)
             y_hat = y_hat.cpu()
-            y_hat = self.scaler.inverse_transform(y_hat)
-            y_hat = y_hat.view(-1, len(self.feature_strings))
+            y_hat[:, :, :self.data_width] = self.scaler.inverse_transform(y_hat[:, :, :self.data_width])
+            y_hat = y_hat.view(-1, self.tensor_width)
 
-            for i, col in enumerate(self.feature_strings):
+            mask = torch.cat(self.mask)
+            mask = mask.reshape((mask.shape[0] * mask.shape[1]))
+            mask = mask.unsqueeze(1).repeat_interleave(y.size(1), dim=1)
+            mask = mask.cpu()
 
-                if col in ['year_sin', 'year_cos']:
-                    continue
+            for i, col in enumerate(self.data_columns):
 
-                r2_obs = r2_score(y[:, i], y_hat[:, i])
-                rmse_obs = root_mean_squared_error(y[:, i], y_hat[:, i])
+                obs = y[mask].reshape(-1, self.tensor_width)[:, i]
+                pred = y_hat[mask].reshape(-1, self.tensor_width)[:, i]
+
+                r2_obs = r2_score(obs, pred)
+                rmse_obs = root_mean_squared_error(obs, pred)
                 log_data.extend([round(r2_obs, 4), round(rmse_obs, 4)])
 
             with open(self.log_csv, 'a', newline='') as f:
@@ -112,11 +123,12 @@ class WeatherAutoencoder(pl.LightningModule):
         self.y_last = []
 
     def validation_step(self, batch, batch_idx):
-        y = batch
-        y_hat, _ = self(y)
+        y, mask = batch
+        y_hat, _ = self(y, mask)
 
         self.y_last.append(y)
         self.y_hat_last.append(y_hat)
+        self.mask.append(mask)
 
         yh_flat = y_hat.flatten().unsqueeze(1)
         y_flat = y.flatten().unsqueeze(1)
