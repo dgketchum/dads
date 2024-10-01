@@ -29,9 +29,10 @@ resource.setrlimit(resource.RLIMIT_NOFILE, (4096, rlimit[1]))
 
 
 class WeatherDataset(Dataset):
-    def __init__(self, file_paths, expected_width, chunk_size, transform=None):
+    def __init__(self, file_paths, expected_width, data_width, chunk_size, transform=None):
         self.chunk_size = chunk_size
         self.transform = transform
+        self.data_width = data_width
 
         all_data = []
         for file_path in file_paths:
@@ -44,23 +45,34 @@ class WeatherDataset(Dataset):
         self.data = torch.cat(all_data, dim=0)
 
         self.scaler = MinMaxScaler()
-        self.scaler.fit(self.data)
-        self.data = self.scaler.transform(self.data)
+        self.scaler.fit(self.get_valid_data_for_scaling())
+
+    def scale_chunk(self, chunk):
+        chunk_np = chunk.numpy()
+        reshaped_chunk = chunk_np.reshape(-1, chunk_np.shape[-1])
+        scaled_chunk = self.scaler.transform(reshaped_chunk)
+        return torch.from_numpy(scaled_chunk.reshape(chunk_np.shape))
+
+    def get_valid_data_for_scaling(self):
+        valid_data = []
+        for chunk in self.data:
+            chunk_without_pe = chunk[:, :self.data_width]
+            valid_rows = chunk_without_pe[~torch.isnan(chunk_without_pe).any(dim=1)]
+            valid_data.append(valid_rows)
+        return torch.cat(valid_data, dim=0).numpy()
 
     def __len__(self):
         return len(self.data)
 
     def __getitem__(self, idx):
+
         chunk = self.data[idx]
+        chunk[:, :self.data_width] = self.scale_chunk(chunk[:, :self.data_width])
 
-        valid_rows = ~torch.isnan(chunk).any(dim=1)
-        chunk = chunk[valid_rows]
+        # pytorch has counterintuitive mask logic (opposite)
+        mask = torch.isnan(chunk[:, 0])
 
-        if len(chunk) < self.chunk_size:
-            padding = torch.zeros((self.chunk_size - len(chunk), chunk.shape[1]))
-            chunk = torch.cat([chunk, padding], dim=0)
-
-        return chunk
+        return chunk, mask
 
 
 def custom_collate(batch):
@@ -70,46 +82,57 @@ def custom_collate(batch):
     return default_collate(batch)
 
 
-def train_model(dirpath, pth, metadata, target='vpd', batch_size=1, learning_rate=0.01, n_workers=1, logging_csv=None):
+def train_model(dirpath, pth, metadata, batch_size=1, learning_rate=0.01,
+                n_workers=1, logging_csv=None):
     """"""
 
     with open(metadata, 'r') as f:
         meta = json.load(f)
 
-    data_frequency = meta['data_frequency']
-    # idxs: obs, gm, start_daily: end_daily, start_hourly:
-    tensor_width = data_frequency.count('lf')
-    print('tensor cols: {}'.format(tensor_width))
     chunk_size = meta['chunk_size']
-    cols = meta['column_order']
+    tensor_width = len(meta['column_order'])
+    data_width = len(meta['data_columns'])
 
     tdir = os.path.join(pth, 'train')
     t_files = [os.path.join(tdir, f) for f in os.listdir(tdir)]
     train_dataset = WeatherDataset(file_paths=t_files,
                                    expected_width=tensor_width,
+                                   data_width=data_width,
                                    chunk_size=chunk_size)
 
     train_dataloader = DataLoader(train_dataset,
                                   batch_size=batch_size,
-                                  shuffle=True,
+                                  shuffle=False,
                                   num_workers=n_workers,
                                   collate_fn=lambda batch: [x for x in batch if x is not None])
-
-    # batch = next(iter(train_dataloader))[0].reshape(1, chunk_size, tensor_width)
-    # y, _ = model(batch)
 
     vdir = os.path.join(pth, 'val')
     v_files = [os.path.join(vdir, f) for f in os.listdir(vdir)]
     val_dataset = WeatherDataset(file_paths=v_files,
                                  expected_width=tensor_width,
+                                 data_width=data_width,
                                  chunk_size=chunk_size)
 
     val_dataloader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=n_workers,
                                 collate_fn=custom_collate)
 
-    model = WeatherAutoencoder(input_size=7, sequence_len=72, embedding_size=16, d_model=16, nhead=4, num_layers=2,
-                               learning_rate=learning_rate, log_csv=logging_csv, scaler=val_dataset.scaler,
-                               feature_strings=cols)
+    model = WeatherAutoencoder(input_size=tensor_width,
+                               sequence_len=chunk_size,
+                               embedding_size=4,
+                               d_model=4,
+                               nhead=1,
+                               num_layers=2,
+                               learning_rate=learning_rate,
+                               log_csv=logging_csv,
+                               scaler=val_dataset.scaler,
+                               **meta)
+
+    batch = next(iter(train_dataloader))[0]
+    x = batch[0].reshape(chunk_size, tensor_width)
+    mask = batch[1]
+    # x, mask = x.cpu().numpy(), mask.cpu().numpy()
+    x, mask = x.unsqueeze(0), mask.unsqueeze(0)
+    y, _ = model(x, mask)
 
     print(f"Number of training samples: {len(train_dataset)}")
     print(f"Number of validation samples: {len(val_dataset)}")
@@ -174,5 +197,5 @@ if __name__ == '__main__':
     os.mkdir(chk)
     logger_csv = os.path.join(chk, 'training_{}.csv'.format(now))
 
-    train_model(chk, pth_, metadata_, batch_size=64, learning_rate=0.005, n_workers=workers, logging_csv=logger_csv)
+    train_model(chk, pth_, metadata_, batch_size=32, learning_rate=0.001, n_workers=workers, logging_csv=logger_csv)
 # ========================= EOF ====================================================================
