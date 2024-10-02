@@ -24,7 +24,7 @@ NLDAS_COL_DROP = ['doy', 'year', 'date_str']
 
 
 def join_daily_timeseries(stations, sta_dir, nldas_dir, dst_dir, gridmet_dir=None, overwrite=False, bounds=None,
-                          shuffle=False, write_missing=None, hourly=False):
+                          shuffle=False, write_missing=None, hourly=False, clip_to_obs=True):
     """"""
     stations = pd.read_csv(stations, index_col='index')
     stations.index = stations['fid'].astype(str)
@@ -67,7 +67,10 @@ def join_daily_timeseries(stations, sta_dir, nldas_dir, dst_dir, gridmet_dir=Non
         if hourly:
             out = os.path.join(dst_dir, 'hourly', '{}.csv'.format(f))
         else:
-            out = os.path.join(dst_dir, 'daily', '{}.csv'.format(f))
+            if clip_to_obs:
+                out = os.path.join(dst_dir, 'daily', '{}.csv'.format(f))
+            else:
+                out = os.path.join(dst_dir, 'daily_untrunc', '{}.csv'.format(f))
 
         if os.path.exists(out) and not overwrite:
             print('{} in {} exists, skipping'.format(os.path.basename(out), row['source']))
@@ -150,12 +153,16 @@ def join_daily_timeseries(stations, sta_dir, nldas_dir, dst_dir, gridmet_dir=Non
 
         sdf['FID'] = f
         sdf = sdf[all_cols].copy()
-        sdf.dropna(subset=['rsds_obs', 'mean_temp_obs', 'vpd_obs',
-                           'rn_obs', 'u2_obs'], inplace=True, axis=0)
+
+        if clip_to_obs:
+            sdf.dropna(subset=['rsds_obs', 'mean_temp_obs', 'vpd_obs',
+                               'rn_obs', 'u2_obs'], inplace=True, axis=0)
+
         if sdf.empty:
             empty, eidx = add_empty_entry(empty, eidx, f, row, 'col all nan', sta_file)
             print('obs file has all nan in a column: {}'.format(os.path.basename(sta_file)))
             continue
+
         else:
             sdf = sdf[sorted(sdf.columns)]
             sdf.to_csv(out)
@@ -189,9 +196,10 @@ if __name__ == '__main__':
     joined = os.path.join(d, 'met', 'joined')
     missing_list = os.path.join(d, 'met', 'joined', 'missing_data.csv')
 
+    clip_to_obs = False
     hourly_ = False
     nl = os.path.join(d, 'met', 'gridded', 'nldas2')
-    join_daily_timeseries(fields, obs, nl, joined, gm, overwrite=False, shuffle=True,
+    join_daily_timeseries(fields, obs, nl, joined, gm, overwrite=False, shuffle=True, clip_to_obs=clip_to_obs,
                           bounds=(-180., 25., -60., 85.), write_missing=missing_list, hourly=hourly_)
 
 # ========================= EOF ====================================================================

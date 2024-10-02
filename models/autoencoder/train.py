@@ -70,7 +70,7 @@ class WeatherDataset(Dataset):
 
         # pytorch has counterintuitive mask logic (opposite)
         # i.e., False where there is valid data
-        mask = torch.isnan(chunk[:, 0])
+        mask = ~torch.isnan(chunk[:, 0])
 
         return chunk, mask
 
@@ -115,20 +115,29 @@ def train_model(dirpath, pth, metadata, batch_size=64, learning_rate=0.01,
 
     val_dataloader = DataLoader(val_dataset,
                                 batch_size=batch_size,
-                                shuffle=True,
+                                shuffle=False,
                                 num_workers=n_workers,
-                                collate_fn=custom_collate)
+                                collate_fn=lambda batch: [x for x in batch if x is not None])
 
-    model = WeatherAutoencoder(input_size=tensor_width,
-                               sequence_len=chunk_size,
-                               embedding_size=4,
-                               d_model=4,
-                               nhead=2,
-                               num_layers=2,
+    model = WeatherAutoencoder(input_dim=tensor_width,
+                               latent_size=16,
                                learning_rate=learning_rate,
                                log_csv=logging_csv,
                                scaler=val_dataset.scaler,
                                **meta)
+
+    # train = True
+    # if train:
+    #     batch = next(iter(train_dataloader))[0]
+    # else:
+    #     batch = next(iter(val_dataloader))[0]
+    #
+    # x = batch[0].reshape(chunk_size, tensor_width)
+    # mask = batch[1]
+    # x, mask = x.unsqueeze(0), mask.unsqueeze(0)
+    # x = torch.nan_to_num(x)
+    # y = model(x)
+    # x, mask = x.cpu().numpy(), mask.cpu().numpy()
 
     print(f"Number of training samples: {len(train_dataset)}")
     print(f"Number of validation samples: {len(val_dataset)}")
@@ -162,7 +171,7 @@ if __name__ == '__main__':
         d = '/home/dgketchum/data/IrrigationGIS/dads'
 
     if device_name == 'NVIDIA GeForce RTX 2080':
-        workers = 0
+        workers = 6
     elif device_name == 'NVIDIA RTX A6000':
         workers = 6
     else:
@@ -193,5 +202,5 @@ if __name__ == '__main__':
     os.mkdir(chk)
     logger_csv = os.path.join(chk, 'training_{}.csv'.format(now))
 
-    train_model(chk, pth_, metadata_, batch_size=64, learning_rate=0.001, n_workers=workers, logging_csv=logger_csv)
+    train_model(chk, pth_, metadata_, batch_size=128, learning_rate=0.0001, n_workers=workers, logging_csv=logger_csv)
 # ========================= EOF ====================================================================

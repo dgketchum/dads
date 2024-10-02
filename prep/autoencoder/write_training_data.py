@@ -34,7 +34,6 @@ def print_rmse(o, n, g):
 
 
 def positional_encoding(seq_len, d_model):
-
     pe = torch.zeros(seq_len, d_model)
     position = torch.arange(0, seq_len, dtype=torch.float).unsqueeze(1)
     div_term = torch.exp(torch.arange(0, d_model, 2).float() * (-np.log(10000.0) / d_model))
@@ -51,6 +50,8 @@ def write_pth_training_data(csv_dir, training_metadata, output_dir, train_frac=0
                 'chunks_per_file': chunks_per_file,
                 'column_order': [],
                 'data_columns': [],
+                'obs_columns': [],
+                'reanalysis_columns': [],
                 'encoding_columns': [],
                 'data_frequency': [],
                 'observation_count': 0}
@@ -95,24 +96,41 @@ def write_pth_training_data(csv_dir, training_metadata, output_dir, train_frac=0
         if df.empty:
             continue
 
-        df_res = df[[f'{p}_obs' for p in RESIDUAL_FEATURES]].values - df[[f'{p}_nl' for p in RESIDUAL_FEATURES]].values
-        df_res = pd.DataFrame(data=df_res, index=df.index, columns=RESIDUAL_FEATURES)
-        df_res = pd.concat([df_res, df[['dt_diff']]], ignore_index=False, axis=1)
+        day_diff = df['dt_diff'].astype(int).to_list()
+        df.drop(columns=['dt_diff'], inplace=True)
 
-        day_diff = df_res['dt_diff'].astype(int).to_list()
-        df_res.drop(columns=['dt_diff'], inplace=True)
+        metadata['obs_columns'] = [f'{p}_obs' for p in RESIDUAL_FEATURES]
+        metadata['reanalysis_columns'] = [f'{p}_nl' for p in RESIDUAL_FEATURES]
 
-        [metadata['data_frequency'].append('lf') for _ in df_res.columns]
+        df = df[metadata['obs_columns'] + metadata['reanalysis_columns']]
 
-        data_tensor_daily = torch.tensor(df_res.values, dtype=torch.float32)
+        [metadata['data_frequency'].append('lf') for _ in df.columns]
+
+        # first valid reanalysis
+        idx_reanalysis = find_first_valid_row(df.values, 5, 9)
+        # first valid obs
+        idx_obs = find_first_valid_row(df.values, 0, 5)
+        try:
+            idx = max(idx_obs, idx_reanalysis)
+        except TypeError:
+            continue
+
+        yr = df.index[idx].year
+        df = df.loc[f'{yr}-01-01':].copy()
+
+        data_tensor_daily = torch.tensor(df.values, dtype=torch.float32)
+        data_tensor_daily = data_tensor_daily[idx:]
+
+        if data_tensor_daily.shape[0] < chunk_size:
+            continue
 
         station_chunk_ct, station_chunks = 0, []
-        iters = int(np.floor(len(df_res.index) / chunk_size))
+        iters = int(np.floor(data_tensor_daily.shape[0] / chunk_size))
         for i in range(1, iters + 1):
 
-            end_timestamp = df_res.index[i * chunk_size - 1]
+            end_timestamp = df.index[i * chunk_size - 1]
 
-            end_index_daily = df_res.index.get_loc(end_timestamp)
+            end_index_daily = df.index.get_loc(end_timestamp)
 
             chunk_daily_start = max(0, end_index_daily - chunk_size + 1)
             chunk_daily = data_tensor_daily[chunk_daily_start: end_index_daily + 1]
@@ -131,10 +149,10 @@ def write_pth_training_data(csv_dir, training_metadata, output_dir, train_frac=0
 
             arr = chunk_daily.numpy()[:, :len(RESIDUAL_FEATURES)]
             nanct = np.count_nonzero(np.isnan(arr))
-            nan_frac = nanct / arr.size
+            nan_frac = nanct / (arr.size + 1e-6)
 
-            if nan_frac > 0.0 and fate == 'val':
-                continue
+            # if nan_frac > 0.0 and fate == 'val':
+            #     continue
 
             if nan_frac > 0.5:
                 continue
@@ -152,8 +170,8 @@ def write_pth_training_data(csv_dir, training_metadata, output_dir, train_frac=0
             metadata['observation_count'] += chunk_size * len(station_chunks)
 
             if training_metadata and first:
-                metadata['column_order'] = df_res.columns.to_list() + pe_strings
-                metadata['data_columns'] = df_res.columns.to_list()
+                metadata['column_order'] = df.columns.to_list() + pe_strings
+                metadata['data_columns'] = df.columns.to_list()
                 metadata['encoding_columns'] = pe_strings
 
                 with open(training_metadata, 'w') as fp:
@@ -167,6 +185,13 @@ def write_pth_training_data(csv_dir, training_metadata, output_dir, train_frac=0
         print_rmse(obs, nl, gm)
 
 
+def find_first_valid_row(tensor, i, j):
+    for row_idx in range(tensor.shape[0]):
+        if np.all(np.isfinite(tensor[row_idx, i:j + 1])):
+            return row_idx
+    return None
+
+
 if __name__ == '__main__':
 
     d = '/media/research/IrrigationGIS/dads'
@@ -176,18 +201,18 @@ if __name__ == '__main__':
     zoran = '/home/dgketchum/training'
     nvm = '/media/nvm/training'
     if os.path.exists(zoran):
-        print('reading from zoran')
+        print('writing to zoran')
         training = zoran
     elif os.path.exists(nvm):
-        print('reading from local NVM drive')
+        print('writing to local NVM drive')
         training = nvm
     else:
-        print('reading from UM drive')
+        print('writing to UM drive')
         training = os.path.join(d, 'training')
 
     param_dir = os.path.join(training, 'autoencoder')
 
-    sta = os.path.join(d, 'met', 'joined', 'daily')
+    sta = os.path.join(d, 'met', 'joined', 'daily_untrunc')
     out_pth = os.path.join(param_dir, 'pth')
 
     if not os.path.exists(out_pth):

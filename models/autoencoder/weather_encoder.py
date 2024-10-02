@@ -41,27 +41,14 @@ class FCDecoder(nn.Module):
 
 
 class WeatherAutoencoder(pl.LightningModule):
-    def __init__(self, input_dim, nhead, dim_feedforward, num_encoder_layers, latent_dim, num_decoder_layers,
-                 learning_rate=0.01, dropout=0.1, log_csv=None, scaler=None, **kwargs):
+    def __init__(self, input_dim, learning_rate, latent_size=2, hidden_size=400,
+                 dropout=0.1, log_csv=None, scaler=None, **kwargs):
 
-        super().__init__()
-
-        self.encoder = torch.nn.TransformerEncoder(
-            torch.nn.TransformerEncoderLayer(d_model=input_dim,
-                                             nhead=nhead,
-                                             dim_feedforward=dim_feedforward,
-                                             dropout=dropout),
-            num_layers=num_encoder_layers)
-
-        self.decoder = torch.nn.TransformerDecoder(
-            torch.nn.TransformerDecoderLayer(d_model=input_dim,
-                                             nhead=nhead,
-                                             dim_feedforward=dim_feedforward,
-                                             dropout=dropout),
-            num_layers=num_decoder_layers)
-
-        self.linear_encode = torch.nn.Linear(input_dim, latent_dim)
-        self.linear_decode = torch.nn.Linear(latent_dim, input_dim)
+        super(WeatherAutoencoder, self).__init__()
+        self.latent_size = latent_size
+        self.encoder = FCEncoder(input_dim, hidden_size, latent_size, dropout)
+        self.decoder = FCDecoder(input_dim, hidden_size, latent_size, sigmoid=False)
+        self.input_dim = input_dim
 
         self.criterion = nn.L1Loss()
         self.learning_rate = learning_rate
@@ -83,31 +70,63 @@ class WeatherAutoencoder(pl.LightningModule):
         self.y_hat_last = []
         self.mask = []
 
-    def init_bias(self):
-        for module in [self.input_projection, self.output_projection, self.embedding_layer]:
-            if module.bias is not None:
-                nn.init.uniform_(module.bias, -0.1, 0.1)
+    @staticmethod
+    def reparameterization(mu, logvar):
+        std = torch.exp(0.5 * logvar)
+        eps = torch.rand_like(std)
+        return mu + eps * std
 
-    def forward(self, x, mask):
-        encoder_out = self.encoder(x, src_key_padding_mask=mask.T)
-        latent = self.linear_encode(encoder_out)
-        decoder_input = self.linear_decode(latent)
-        decoder_out = self.decoder(decoder_input, encoder_out, tgt_key_padding_mask=mask.T)
-        return decoder_out, latent
+    def forward(self, x):
+        mu, logvar = self.encoder(x.float().view(-1, self.input_dim))
+        z = self.reparameterization(mu, logvar)
+        x_hat = self.decoder(z)
+        return x_hat, mu, logvar, z
+
+    # def init_bias(self):
+    #     for module in [self.input_projection, self.output_projection, self.embedding_layer]:
+    #         if module.bias is not None:
+    #             nn.init.uniform_(module.bias, -0.1, 0.1)
 
     def training_step(self, batch, batch_idx):
         x, mask = stack_batch(batch)
+        x = torch.nan_to_num(x)
 
-        x_mean = x[~mask].mean(dim=0)
+        x_mean = x[mask].mean(dim=0)
         x[mask] = x_mean
 
-        y_hat, _ = self(x, mask)
+        y_hat, mu, logvar, z = self(x)
         y_hat = y_hat.flatten().unsqueeze(1)
         y = x.flatten().unsqueeze(1)
         loss = self.criterion(y_hat, y)
 
         self.log('train_loss', loss)
         return loss
+
+    def validation_step(self, batch, batch_idx):
+        y, mask = stack_batch(batch)
+        y = torch.nan_to_num(y)
+
+        y_hat, mu, logvar, z = self(y)
+
+        self.y_last.append(y)
+        self.y_hat_last.append(y_hat.view(-1, self.tensor_width))
+        self.mask.append(mask)
+
+        y_flat = y[:, :, :self.data_width].flatten()
+        yh_flat = y_hat[:, :self.data_width].flatten()
+        loss_mask = mask.unsqueeze(2).repeat_interleave(y.size(2), dim=2)
+        loss_mask = loss_mask[:, :, :self.data_width].flatten()
+
+        loss_obs = self.criterion(y_flat[loss_mask], yh_flat[loss_mask])
+
+        self.log('val_loss', loss_obs, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
+
+        current_lr = self.trainer.optimizers[0].param_groups[0]['lr']
+        self.log('lr', current_lr, on_step=False, on_epoch=True, prog_bar=True)
+        lr_ratio = current_lr / self.learning_rate
+        self.log('lr_ratio', lr_ratio, on_step=False, on_epoch=True, prog_bar=True)
+
+        return loss_obs
 
     def on_validation_epoch_end(self):
 
@@ -142,25 +161,24 @@ class WeatherAutoencoder(pl.LightningModule):
                         round(current_lr, 4),
                         round(lr_ratio, 4)]
 
-            y = torch.cat(self.y_last)
+            y = torch.cat(self.y_last, dim=0)
             y = y.cpu()
             y[:, :, :self.data_width] = self.scaler.inverse_transform(y[:, :, :self.data_width])
             y = y.view(-1, self.tensor_width)
 
-            y_hat = torch.cat(self.y_hat_last)
+            y_hat = torch.cat(self.y_hat_last, dim=0)
             y_hat = y_hat.cpu()
-            y_hat[:, :, :self.data_width] = self.scaler.inverse_transform(y_hat[:, :, :self.data_width])
+            y_hat[:, :self.data_width] = self.scaler.inverse_transform(y_hat[:, :self.data_width])
             y_hat = y_hat.view(-1, self.tensor_width)
 
-            mask = torch.cat(self.mask)
-            mask = mask.reshape((mask.shape[0] * mask.shape[1]))
-            mask = mask.unsqueeze(1).repeat_interleave(y.size(1), dim=1)
+            mask = torch.cat(self.mask, dim=0)
+            mask = mask.view(-1)
             mask = mask.cpu()
 
             for i, col in enumerate(self.data_columns):
 
-                obs = y[mask].reshape(-1, self.tensor_width)[:, i]
-                pred = y_hat[mask].reshape(-1, self.tensor_width)[:, i]
+                obs = y[mask][:, i]
+                pred = y_hat[mask][:, i]
 
                 try:
                     r2_obs = r2_score(obs, pred)
@@ -177,28 +195,6 @@ class WeatherAutoencoder(pl.LightningModule):
         self.y_hat_last = []
         self.y_last = []
         self.mask = []
-
-    def validation_step(self, batch, batch_idx):
-        y, mask = stack_batch(batch)
-
-        y_hat, _ = self(y, mask)
-
-        self.y_last.append(y)
-        self.y_hat_last.append(y_hat)
-        self.mask.append(mask)
-
-        yh_flat = y_hat.flatten().unsqueeze(1)
-        y_flat = y.flatten().unsqueeze(1)
-        loss_obs = self.criterion(yh_flat, y_flat)
-
-        self.log('val_loss', loss_obs, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
-
-        current_lr = self.trainer.optimizers[0].param_groups[0]['lr']
-        self.log('lr', current_lr, on_step=False, on_epoch=True, prog_bar=True)
-        lr_ratio = current_lr / self.learning_rate
-        self.log('lr_ratio', lr_ratio, on_step=False, on_epoch=True, prog_bar=True)
-
-        return loss_obs
 
     def configure_optimizers(self):
         optimizer = optim.Adam(self.parameters(), lr=self.learning_rate)
