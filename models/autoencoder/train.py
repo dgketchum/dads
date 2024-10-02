@@ -3,7 +3,6 @@ import os
 import shutil
 import resource
 
-import pandas as pd
 import pytorch_lightning as pl
 import torch
 from datetime import datetime
@@ -11,7 +10,7 @@ from pytorch_lightning.callbacks import ModelCheckpoint, EarlyStopping
 from torch.utils.data import Dataset, DataLoader
 from torch.utils.data._utils.collate import default_collate
 
-from models.scalers import MinMaxScaler, StandardScaler
+from models.scalers import MinMaxScaler
 from models.autoencoder.weather_encoder import WeatherAutoencoder
 
 device_name = None
@@ -44,7 +43,7 @@ class WeatherDataset(Dataset):
 
         self.data = torch.cat(all_data, dim=0)
 
-        self.scaler = StandardScaler()
+        self.scaler = MinMaxScaler()
         self.scaler.fit(self.get_valid_data_for_scaling())
 
     def scale_chunk(self, chunk):

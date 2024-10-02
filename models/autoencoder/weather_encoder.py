@@ -67,9 +67,6 @@ class WeatherAutoencoder(pl.LightningModule):
         y = x.flatten().unsqueeze(1)
         loss = self.criterion(y_hat, y)
 
-        if not np.isfinite(loss.item()):
-            a = 1
-
         self.log('train_loss', loss)
         return loss
 
@@ -145,25 +142,7 @@ class WeatherAutoencoder(pl.LightningModule):
     def validation_step(self, batch, batch_idx):
         y, mask = batch
 
-        y_arr = y.cpu().numpy()
-        y_nanct = np.count_nonzero(np.isnan(y_arr))
-
-        if y_nanct > 0:
-            nan_handle = True
-            y_mod = y.clone()
-            y_mod = torch.nan_to_num(y_mod, nan=0.0)
-            y_hat, _ = self(y_mod, mask)
-
-        else:
-            nan_handle = False
-            y_hat, _ = self(y, mask)
-
-        yh_arr = y_hat.cpu().numpy()
-        yh_nanct = np.count_nonzero(np.isnan(yh_arr))
-
-        if yh_nanct > 0:
-            y_hat_mean = y_hat[~torch.isnan(y_hat)].mean(dim=0)
-            y_hat[mask] = y_hat_mean
+        y_hat, _ = self(y, mask)
 
         self.y_last.append(y)
         self.y_hat_last.append(y_hat)
@@ -193,8 +172,8 @@ class WeatherAutoencoder(pl.LightningModule):
             }
         }
 
-    def on_before_optimizer_step(self, optimizer):
-        torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=1.0)
+    # def on_before_optimizer_step(self, optimizer):
+    #     torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=1.0)
 
 
 def stack_batch(batch):
