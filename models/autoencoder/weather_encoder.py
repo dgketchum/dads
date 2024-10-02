@@ -3,26 +3,65 @@ import csv
 import torch
 import numpy as np
 import pytorch_lightning as pl
-from distributed.dashboard.components.shared import profile_interval
 from sklearn.metrics import r2_score, root_mean_squared_error
-from torch import nn as nn, optim as optim
+from torch import optim
+from torch import nn
+from torch.nn import functional as F
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 
 
+class FCEncoder(nn.Module):
+    def __init__(self, input_dim, hidden_size, latent_size, dropout):
+        super(FCEncoder, self).__init__()
+        self.fc1 = nn.Linear(input_dim, hidden_size)
+        self.fc_mu = nn.Linear(hidden_size, latent_size)
+        self.fc_logvar = nn.Linear(hidden_size, latent_size)
+        self.dropout = nn.Dropout(dropout)
+
+    def forward(self, x):
+        h1 = F.relu(self.fc1(self.dropout(x)))
+        mu = self.fc_mu(h1)
+        logvar = self.fc_logvar(h1)
+        return mu, logvar
+
+
+class FCDecoder(nn.Module):
+    def __init__(self, input_dim, hidden_size, latent_size, sigmoid=True):
+        super(FCDecoder, self).__init__()
+        self.fc1 = nn.Linear(latent_size, hidden_size)
+        self.fc2 = nn.Linear(hidden_size, input_dim)
+        self.sigmoid = sigmoid
+
+    def forward(self, z):
+        h1 = F.relu(self.fc1(z))
+        x_hat = self.fc2(h1)
+        if self.sigmoid:
+            x_hat = torch.sigmoid(x_hat)
+        return x_hat
+
+
 class WeatherAutoencoder(pl.LightningModule):
-    def __init__(self, input_size=7, sequence_len=72, embedding_size=16, d_model=16, nhead=4, num_layers=2,
-                 learning_rate=0.01, log_csv=None, scaler=None, **kwargs):
+    def __init__(self, input_dim, nhead, dim_feedforward, num_encoder_layers, latent_dim, num_decoder_layers,
+                 learning_rate=0.01, dropout=0.1, log_csv=None, scaler=None, **kwargs):
+
         super().__init__()
 
-        self.encoder = nn.TransformerEncoder(nn.TransformerEncoderLayer(d_model, nhead), num_layers)
-        self.decoder = nn.TransformerDecoder(nn.TransformerDecoderLayer(embedding_size, nhead), num_layers)
+        self.encoder = torch.nn.TransformerEncoder(
+            torch.nn.TransformerEncoderLayer(d_model=input_dim,
+                                             nhead=nhead,
+                                             dim_feedforward=dim_feedforward,
+                                             dropout=dropout),
+            num_layers=num_encoder_layers)
 
-        self.input_projection = nn.Linear(input_size, d_model)
-        self.output_projection = nn.Linear(d_model, input_size)
-        self.embedding_layer = nn.Linear(d_model, sequence_len * embedding_size)
+        self.decoder = torch.nn.TransformerDecoder(
+            torch.nn.TransformerDecoderLayer(d_model=input_dim,
+                                             nhead=nhead,
+                                             dim_feedforward=dim_feedforward,
+                                             dropout=dropout),
+            num_layers=num_decoder_layers)
 
-        self.sequence_len = sequence_len
-        self.embedding_size = embedding_size
+        self.linear_encode = torch.nn.Linear(input_dim, latent_dim)
+        self.linear_decode = torch.nn.Linear(latent_dim, input_dim)
 
         self.criterion = nn.L1Loss()
         self.learning_rate = learning_rate
@@ -50,11 +89,11 @@ class WeatherAutoencoder(pl.LightningModule):
                 nn.init.uniform_(module.bias, -0.1, 0.1)
 
     def forward(self, x, mask):
-        x = self.input_projection(x)
-        encoded = self.encoder(x, src_key_padding_mask=mask.T)
-        embedding = self.embedding_layer(encoded[:, 0]).view(-1, self.sequence_len, self.embedding_size)
-        decoded = self.decoder(embedding, encoded, tgt_key_padding_mask=mask.T)
-        return self.output_projection(decoded), embedding
+        encoder_out = self.encoder(x, src_key_padding_mask=mask.T)
+        latent = self.linear_encode(encoder_out)
+        decoder_input = self.linear_decode(latent)
+        decoder_out = self.decoder(decoder_input, encoder_out, tgt_key_padding_mask=mask.T)
+        return decoder_out, latent
 
     def training_step(self, batch, batch_idx):
         x, mask = stack_batch(batch)
@@ -140,7 +179,7 @@ class WeatherAutoencoder(pl.LightningModule):
         self.mask = []
 
     def validation_step(self, batch, batch_idx):
-        y, mask = batch
+        y, mask = stack_batch(batch)
 
         y_hat, _ = self(y, mask)
 
