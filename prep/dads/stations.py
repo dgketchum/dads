@@ -5,7 +5,7 @@ import pandas as pd
 import geopandas as gpd
 from shapely.geometry import Point
 
-from models.stgnn import SIMILARITY_COLS
+from models.dads import SIMILARITY_COLS
 
 def get_stations(stations, csv_dir, out_csv, bounds=None, validation_frac=0.2, validation_stations=None):
     stations = pd.read_csv(stations)
