@@ -82,10 +82,10 @@ class WeatherAutoencoder(pl.LightningModule):
         x_hat = self.decoder(z)
         return x_hat, mu, logvar, z
 
-    # def init_bias(self):
-    #     for module in [self.input_projection, self.output_projection, self.embedding_layer]:
-    #         if module.bias is not None:
-    #             nn.init.uniform_(module.bias, -0.1, 0.1)
+    def init_bias(self):
+        for module in [self.input_projection, self.output_projection, self.embedding_layer]:
+            if module.bias is not None:
+                nn.init.uniform_(module.bias, -0.1, 0.1)
 
     def training_step(self, batch, batch_idx):
         x, mask = stack_batch(batch)
@@ -207,8 +207,8 @@ class WeatherAutoencoder(pl.LightningModule):
             }
         }
 
-    # def on_before_optimizer_step(self, optimizer):
-    #     torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=1.0)
+    def on_before_optimizer_step(self, optimizer):
+        torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=1.0)
 
 
 def stack_batch(batch):
