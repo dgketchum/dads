@@ -7,7 +7,7 @@ import numpy as np
 from shapely.geometry import LineString, Point
 from sklearn.metrics.pairwise import cosine_similarity
 from sklearn.preprocessing import MinMaxScaler
-# import torch
+import torch
 import networkx as nx
 
 
@@ -183,9 +183,7 @@ if __name__ == '__main__':
         d = '/home/dgketchum/data/IrrigationGIS/dads'
         clim = '/home/dgketchum/data/IrrigationGIS/climate'
 
-    # stations_ = os.path.join(d, 'met', 'stations', 'openet_gridwxcomp_input.shp')
     stations_ = os.path.join(clim, 'madis', 'mesonet_sites.shp')
-    # output_dir_ = os.path.join(d, 'graphs', 'gwx')
     output_dir_ = os.path.join(d, 'graphs', 'mesonet')
     meteorology_dir_ = os.path.join(d, 'met', 'tables', 'obs_grid')
 

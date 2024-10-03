@@ -26,10 +26,11 @@ class FCEncoder(nn.Module):
 
 
 class FCDecoder(nn.Module):
-    def __init__(self, input_dim, hidden_size, latent_size, sigmoid=True):
+    def __init__(self, input_dim, hidden_size, latent_size, dropout, sigmoid=True):
         super(FCDecoder, self).__init__()
         self.fc1 = nn.Linear(latent_size, hidden_size)
         self.fc2 = nn.Linear(hidden_size, input_dim)
+        self.dropout = nn.Dropout(dropout)
         self.sigmoid = sigmoid
 
     def forward(self, z):
@@ -41,13 +42,13 @@ class FCDecoder(nn.Module):
 
 
 class WeatherAutoencoder(pl.LightningModule):
-    def __init__(self, input_dim, learning_rate, latent_size=2, hidden_size=400,
+    def __init__(self, input_dim=14, learning_rate=0.0001, latent_size=2, hidden_size=400,
                  dropout=0.1, log_csv=None, scaler=None, **kwargs):
 
         super(WeatherAutoencoder, self).__init__()
         self.latent_size = latent_size
         self.encoder = FCEncoder(input_dim, hidden_size, latent_size, dropout)
-        self.decoder = FCDecoder(input_dim, hidden_size, latent_size, sigmoid=False)
+        self.decoder = FCDecoder(input_dim, hidden_size, latent_size, dropout, sigmoid=False)
         self.input_dim = input_dim
 
         self.criterion = nn.L1Loss()
@@ -197,7 +198,7 @@ class WeatherAutoencoder(pl.LightningModule):
         self.mask = []
 
     def configure_optimizers(self):
-        optimizer = optim.Adam(self.parameters(), lr=self.learning_rate)
+        optimizer = optim.Adam(self.parameters(), lr=self.learning_rate, weight_decay=1e-5)
         scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=5)
         return {
             'optimizer': optimizer,

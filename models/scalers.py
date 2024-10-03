@@ -1,5 +1,4 @@
 from copy import deepcopy
-from typing import Tuple, List, Union
 
 import numpy as np
 import torch
@@ -132,7 +131,7 @@ class StandardScaler(Scaler):
             (default: 0)
     """
 
-    def __init__(self, axis: Union[int, Tuple] = 0):
+    def __init__(self, axis=0):
         super(StandardScaler, self).__init__()
         self.axis = axis
 
@@ -162,8 +161,8 @@ class MinMaxScaler(Scaler):
             (default: :obj:`(0, 1)`)
     """
 
-    def __init__(self, axis: Union[int, Tuple] = 0,
-                 out_range: Tuple[float, float] = (0., 1.)):
+    def __init__(self, axis=0,
+                 out_range=(0., 1.)):
         super(MinMaxScaler, self).__init__()
         self.axis = axis
         self.out_range = out_range
@@ -195,8 +194,8 @@ class MinMaxScaler(Scaler):
 
 class RobustScaler(Scaler):
 
-    def __init__(self, axis: Union[int, Tuple] = 0,
-                 quantile_range: Tuple[float, float] = (25.0, 75.0),
+    def __init__(self, axis=0,
+                 quantile_range=(25.0, 75.0),
                  unit_variance: bool = False):
         super(RobustScaler, self).__init__()
         self.axis = axis
@@ -324,8 +323,7 @@ class ScalerModule(Module):
         return torch.cat(out, dim=dim)
 
     @classmethod
-    def cat(cls, scalers: Union[List, Tuple], dim: int = -1,
-            sizes: Union[List, Tuple] = None):
+    def cat(cls, scalers, dim=-1, sizes=None):
         assert isinstance(scalers, (tuple, list)), \
             "`scalers` must be a tuple or list"
         # if all scalers are None, return None

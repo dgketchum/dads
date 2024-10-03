@@ -2,6 +2,7 @@ import json
 import os
 import shutil
 import resource
+import pickle
 
 import pytorch_lightning as pl
 import torch
@@ -60,6 +61,15 @@ class WeatherDataset(Dataset):
             valid_data.append(valid_rows)
         return torch.cat(valid_data, dim=0).numpy()
 
+    def save_scaler(self, scaler_path):
+
+        bias_ = self.scaler.bias.flatten().tolist()
+        scale_ = self.scaler.scale.flatten().tolist()
+        dct = {'bias': bias_, 'scale': scale_}
+        with open(scaler_path, 'w') as fp:
+            json.dump(dct, fp, indent=4)
+        print(f"Scaler saved to {scaler_path}")
+
     def __len__(self):
         return len(self.data)
 
@@ -100,6 +110,8 @@ def train_model(dirpath, pth, metadata, batch_size=64, learning_rate=0.01,
                                    data_width=data_width,
                                    chunk_size=chunk_size)
 
+    train_dataset.save_scaler(os.path.join(dirpath, 'scaler.json'))
+
     train_dataloader = DataLoader(train_dataset,
                                   batch_size=batch_size,
                                   shuffle=True,
@@ -125,19 +137,6 @@ def train_model(dirpath, pth, metadata, batch_size=64, learning_rate=0.01,
                                log_csv=logging_csv,
                                scaler=val_dataset.scaler,
                                **meta)
-
-    # train = True
-    # if train:
-    #     batch = next(iter(train_dataloader))[0]
-    # else:
-    #     batch = next(iter(val_dataloader))[0]
-    #
-    # x = batch[0].reshape(chunk_size, tensor_width)
-    # mask = batch[1]
-    # x, mask = x.unsqueeze(0), mask.unsqueeze(0)
-    # x = torch.nan_to_num(x)
-    # y = model(x)
-    # x, mask = x.cpu().numpy(), mask.cpu().numpy()
 
     print(f"Number of training samples: {len(train_dataset)}")
     print(f"Number of validation samples: {len(val_dataset)}")

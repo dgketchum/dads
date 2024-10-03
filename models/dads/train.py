@@ -3,16 +3,14 @@ import json
 import resource
 from datetime import datetime
 
-from models.scalers import RobustScaler
-
 import pytorch_lightning as pl
 import torch
 from pytorch_lightning.callbacks import ModelCheckpoint, EarlyStopping
-
 from torch.utils.data import DataLoader, Dataset
-from torch.utils.data._utils.collate import default_collate
 
-from models.dads.dads_gnn import LSTMPredictor
+from models.lstm.train import PTHLSTMDataset
+
+from models.dads.dads_gnn import DadsMetGNN
 
 device_name = None
 if torch.cuda.is_available():
@@ -28,101 +26,55 @@ rlimit = resource.getrlimit(resource.RLIMIT_NOFILE)
 resource.setrlimit(resource.RLIMIT_NOFILE, (4096, rlimit[1]))
 
 
-class PTHLSTMDataset(Dataset):
-    def __init__(self, file_paths, col_index, expected_width, chunk_size, transform=None):
-        self.chunk_size = chunk_size
-        self.transform = transform
-        self.col_index = col_index
+class WeatherGNNDataset(Dataset):
+    def __init__(self, lstm_dataset, embedding_dict, edge_index):
+        """
+        Dataset for the WeatherGNN model.
 
-        all_data = []
-        for file_path in file_paths:
-            data = torch.load(file_path, weights_only=True)
-            if data.shape[2] != expected_width:
-                print(f"Skipping {file_path},shape mismatch. Expected {expected_width} columns, got {data.shape[2]}")
-                continue
-            all_data.append(data)
-
-        self.data = torch.cat(all_data, dim=0)
-
-        self.scaler = RobustScaler()
-        self.scale_data()
-
-    def scale_data(self):
-        self.data = self.scaler(self.data)
+        Args:
+            lstm_dataset (LSTMDataset): An instance of your LSTMDataset class.
+            embedding_dict (dict): Dictionary mapping station names to their embeddings.
+            edge_index (torch.Tensor): Tensor of shape [2, num_edges] representing the
+                                       connections between stations.
+        """
+        self.lstm_dataset = lstm_dataset
+        self.embedding_dict = embedding_dict
+        self.edge_index = edge_index
 
     def __len__(self):
-        return len(self.data)
+        return len(self.lstm_dataset)
 
     def __getitem__(self, idx):
-        chunk = self.data[idx]
+        # Get y, gm, lf, hf, and station_name from the LSTMDataset
+        y, gm, lf, hf, station_name = self.lstm_dataset[idx]
 
-        valid_rows = ~torch.isnan(chunk).any(dim=1)
-        chunk = chunk[valid_rows]
+        # Get the embedding for the station
+        embedding = self.embedding_dict[station_name]
 
-        if len(chunk) < self.chunk_size:
-            return None
+        # You might need to add additional processing or scaling here
+        # ...
 
-        y, gm, lf, hf = (chunk[:, self.col_index[0]],
-                         chunk[:, self.col_index[1]],
-                         chunk[:, self.col_index[2]: self.col_index[3]],
-                         chunk[:, self.col_index[3]:])
-
-        return y, gm, lf, hf
+        return y, gm, lf, hf, embedding
 
 
-def custom_collate(batch):
-    batch = list(filter(lambda x: x is not None, batch))
-    if not batch:
-        return None
-    return default_collate(batch)
-
-
-def train_model(dirpath, pth, metadata, batch_size=1, learning_rate=0.01, n_workers=1, logging_csv=None):
+def train_model(dirpath, lstm_path, embeddings, metadata, batch_size=1, learning_rate=0.01,
+                n_workers=1, logging_csv=None):
     """"""
 
     with open(metadata, 'r') as f:
         meta = json.load(f)
 
-    data_frequency = meta['data_frequency']
-    # idxs: obs, gm, start_daily: end_daily, start_hourly:
-    hf_idx = data_frequency.index('hf')
-    idxs = (0, 1, 2, hf_idx)
-    hf_bands = data_frequency.count('hf')
-    lf_bands = data_frequency.count('lf') - 2
-    tensor_width = data_frequency.count('lf') + data_frequency.count('hf')
-    print('tensor cols: {}'.format(tensor_width))
-    chunk_size = meta['chunk_size']
+    model = DadsMetGNN(lstm_path, output_dim=1, edge_emb_dim=6, hidden_dim=64,
+                       num_gnn_layers=5, dropout=0.2, learning_rate=1e-3, freeze_lstm=True)
 
-    model = LSTMPredictor(num_bands_lf=lf_bands,
-                          num_bands_hf=hf_bands,
-                          learning_rate=learning_rate,
-                          log_csv=logging_csv)
-
-    tdir = os.path.join(pth, 'train')
-    t_files = [os.path.join(tdir, f) for f in os.listdir(tdir)]
-    train_dataset = PTHLSTMDataset(file_paths=t_files,
-                                   col_index=idxs,
-                                   expected_width=tensor_width,
-                                   chunk_size=chunk_size)
-
+    train_dataset = WeatherGNNDataset(lstm_path, embeddings, edge_index)
     train_dataloader = DataLoader(train_dataset,
                                   batch_size=batch_size,
                                   shuffle=True,
-                                  num_workers=n_workers,
-                                  collate_fn=lambda batch: [x for x in batch if x is not None])
+                                  num_workers=n_workers)
 
-    vdir = os.path.join(pth, 'val')
-    v_files = [os.path.join(vdir, f) for f in os.listdir(vdir)]
-    val_dataset = PTHLSTMDataset(file_paths=v_files,
-                                 col_index=idxs,
-                                 expected_width=tensor_width,
-                                 chunk_size=chunk_size)
-
-    val_dataloader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=n_workers,
-                                collate_fn=custom_collate)
-
-    print(f"Number of training samples: {len(train_dataset)}")
-    print(f"Number of validation samples: {len(val_dataset)}")
+    val_dataset = WeatherGNNDataset(lstm_path, embeddings, edge_index)
+    val_dataloader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=n_workers)
 
     checkpoint_callback = ModelCheckpoint(
         monitor="val_loss",

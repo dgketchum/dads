@@ -9,8 +9,6 @@ import numpy as np
 import pandas as pd
 from sklearn.metrics import r2_score, root_mean_squared_error
 
-from models.dt_encoder import datetime_encoded
-
 TERRAIN_FEATURES = ['slope', 'aspect', 'elevation', 'tpi_1250', 'tpi_250', 'tpi_150']
 RESIDUAL_FEATURES = [
     'mean_temp',
