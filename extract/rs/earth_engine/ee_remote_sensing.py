@@ -145,17 +145,8 @@ def stack_bands(yr, roi):
     input_bands = input_bands.addBands(integrated_composite_bands)
 
     coords = ee.Image.pixelLonLat().rename(['lon', 'lat']).resample('bilinear').reproject(crs=proj['crs'], scale=30)
-    ned = ee.Image('USGS/3DEP/10m')
 
-    # TODO: refactor functionality to get all terrain data from local DEM and derivative rasters
-    terrain = ee.Terrain.products(ned).select(['elevation', 'slope', 'aspect']).reduceResolution(
-        ee.Reducer.mean()).reproject(crs=proj['crs'], scale=30)
-
-    elev = terrain.select(['elevation'])
-    tpi_1250 = elev.subtract(elev.focal_mean(1250, 'circle', 'meters')).add(0.5).rename('tpi_1250')
-    tpi_250 = elev.subtract(elev.focal_mean(250, 'circle', 'meters')).add(0.5).rename('tpi_250')
-    tpi_150 = elev.subtract(elev.focal_mean(150, 'circle', 'meters')).add(0.5).rename('tpi_150')
-    input_bands = input_bands.addBands([coords, terrain, tpi_1250, tpi_250, tpi_150])
+    input_bands = input_bands.addBands([coords])
 
     nlcd = ee.Image('USGS/NLCD/NLCD2011').select('landcover').reproject(crs=proj['crs'], scale=30).rename('nlcd')
 
