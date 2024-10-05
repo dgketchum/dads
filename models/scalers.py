@@ -8,7 +8,6 @@ from torch.nn import Module
 from torch_geometric.data.storage import recursive_apply
 from torch_geometric.typing import OptTensor
 
-from models.typing import TensArray
 
 __all__ = [
     'Scaler',
@@ -105,17 +104,17 @@ class Scaler:
         return scaler
 
     @fit_wrapper
-    def fit(self, x: TensArray, *args, **kwargs):
+    def fit(self, x, *args, **kwargs):
         """Fit scaler's parameters using input :obj:`x`."""
         raise NotImplementedError()
 
-    def transform(self, x: TensArray):
+    def transform(self, x):
         return (x - self.bias) / self.scale + 5e-8
 
-    def inverse_transform(self, x: TensArray):
+    def inverse_transform(self, x):
         return x * (self.scale + 5e-8) + self.bias
 
-    def fit_transform(self, x: TensArray, *args, **kwargs):
+    def fit_transform(self, x, *args, **kwargs):
         """Fit scaler's parameters using input :obj:`x` and then transform
         :obj:`x`."""
         self.fit(x, *args, **kwargs)
@@ -136,7 +135,7 @@ class StandardScaler(Scaler):
         self.axis = axis
 
     @fit_wrapper
-    def fit(self, x: TensArray, mask=None, keepdims=True):
+    def fit(self, x, mask=None, keepdims=True):
         if mask is not None:
             x = np.where(mask, x, np.nan)
             self.bias = np.nanmean(x.astype(np.float32), axis=self.axis,
@@ -168,7 +167,7 @@ class MinMaxScaler(Scaler):
         self.out_range = out_range
 
     @fit_wrapper
-    def fit(self, x: TensArray, mask=None, keepdims=True):
+    def fit(self, x, mask=None, keepdims=True):
 
         out_min, out_max = self.out_range
         if out_min >= out_max:
@@ -203,7 +202,7 @@ class RobustScaler(Scaler):
         self.unit_variance = unit_variance
 
     @fit_wrapper
-    def fit(self, x: TensArray, mask=None, keepdims=True):
+    def fit(self, x, mask=None, keepdims=True):
         q_min, q_max = self.quantile_range
         if not 0 <= q_min <= q_max <= 100:
             raise ValueError("Invalid quantile range: {}"
