@@ -7,9 +7,9 @@ import torch
 import numpy as np
 import pandas as pd
 from sklearn.metrics import r2_score, root_mean_squared_error
+import geopandas as gpd
 
 from prep.lstm.dt_encoder import datetime_encoded
-import geopandas as gpd
 
 TERRAIN_FEATURES = ['slope', 'aspect', 'elevation', 'tpi_1250', 'tpi_250', 'tpi_150']
 

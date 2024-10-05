@@ -51,6 +51,15 @@ class PTHLSTMDataset(Dataset):
     def __len__(self):
         return len(self.data)
 
+    def save_scaler(self, scaler_path):
+
+        bias_ = self.scaler.bias.flatten().tolist()
+        scale_ = self.scaler.scale.flatten().tolist()
+        dct = {'bias': bias_, 'scale': scale_}
+        with open(scaler_path, 'w') as fp:
+            json.dump(dct, fp, indent=4)
+        print(f"Scaler saved to {scaler_path}")
+
     def __getitem__(self, idx):
         chunk = self.data[idx]
 
@@ -98,6 +107,8 @@ def train_model(dirpath, pth, metadata, batch_size=1, learning_rate=0.01, n_work
                                    col_index=idxs,
                                    expected_width=tensor_width,
                                    chunk_size=chunk_size)
+
+    train_dataset.save_scaler(os.path.join(dirpath, 'scaler.json'))
 
     train_dataloader = DataLoader(train_dataset,
                                   batch_size=batch_size,
