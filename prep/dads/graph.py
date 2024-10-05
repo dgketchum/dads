@@ -54,7 +54,7 @@ class Graph:
         k_indices = np.vectorize(train_index_map.get)(k_indices.ravel()).reshape(k_indices.shape)
 
         row_indices = np.repeat(np.arange(len(val_gdf)), self.k_nearest)
-        spatial_edges = np.column_stack([row_indices, k_indices.ravel()])
+        spatial_edges = np.column_stack([row_indices, k_indices.T.ravel()])
 
         val_index_map = {i: j for i, j in enumerate(val_gdf.index)}
         spatial_edges[:, 0] = np.vectorize(val_index_map.get)(spatial_edges[:, 0])
@@ -112,7 +112,7 @@ if __name__ == '__main__':
         d = '/home/dgketchum/data/IrrigationGIS/dads'
         clim = '/home/dgketchum/data/IrrigationGIS/climate'
 
-    stations_ = '/media/nvm/training/dads/graph/stations_test.shp'
+    stations_ = '/media/nvm/training/dads/graph/stations.shp'
     output_dir_ = '/media/nvm/training/dads/graph'
 
     node_prep = Graph(stations_, output_dir_, k_nearest=5)
