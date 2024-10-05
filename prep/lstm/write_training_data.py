@@ -8,6 +8,8 @@ import numpy as np
 import pandas as pd
 from sklearn.metrics import r2_score, root_mean_squared_error
 
+from prep.lstm.dt_encoder import datetime_encoded
+
 TERRAIN_FEATURES = ['slope', 'aspect', 'elevation', 'tpi_1250', 'tpi_250', 'tpi_150']
 
 
@@ -187,5 +189,5 @@ if __name__ == '__main__':
     metadata_ = None
     # metadata_ = os.path.join(param_dir, 'training_metadata.json')
     write_pth_training_data(out_csv, metadata_, out_pth, target=target_var, hourly_dir=hourly_data,
-                            chunk_size=48, shuffle=True)
+                            chunk_size=72, shuffle=True)
 # ========================= EOF ==============================================================================

@@ -109,7 +109,6 @@ def train_model(dirpath, pth, metadata, batch_size=1, learning_rate=0.01, n_work
                                   num_workers=n_workers,
                                   collate_fn=lambda batch: [x for x in batch if x is not None])
 
-
     vdir = os.path.join(pth, 'val')
     v_files = [os.path.join(vdir, f) for f in os.listdir(vdir)]
     val_dataset = PTHLSTMDataset(file_paths=v_files,

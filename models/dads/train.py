@@ -8,7 +8,7 @@ import torch
 from pytorch_lightning.callbacks import ModelCheckpoint, EarlyStopping
 from torch.utils.data import DataLoader, Dataset
 
-from models.lstm.train import PTHLSTMDataset
+from models.simple_lstm.train import PTHLSTMDataset
 
 from models.dads.dads_gnn import DadsMetGNN
 
