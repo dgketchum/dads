@@ -92,7 +92,7 @@ def custom_collate(batch):
     return default_collate(batch)
 
 
-def train_model(dirpath, pth, metadata, batch_size=64, learning_rate=0.01,
+def train_model(dirpath, pth, metadata, target, batch_size=64, learning_rate=0.01,
                 n_workers=1, logging_csv=None):
     """"""
 
@@ -132,7 +132,8 @@ def train_model(dirpath, pth, metadata, batch_size=64, learning_rate=0.01,
                                 collate_fn=lambda batch: [x for x in batch if x is not None])
 
     model = WeatherAutoencoder(input_dim=tensor_width,
-                               latent_size=16,
+                               latent_size=4,
+                               dropout=0.5,
                                learning_rate=learning_rate,
                                log_csv=logging_csv,
                                scaler=val_dataset.scaler,
@@ -176,6 +177,8 @@ if __name__ == '__main__':
     else:
         raise NotImplementedError('Specify the machine this is running on')
 
+    variable = 'mean_temp'
+
     zoran = '/home/dgketchum/training'
     nvm = '/media/nvm/training'
     if os.path.exists(zoran):
@@ -188,7 +191,7 @@ if __name__ == '__main__':
         print('modeling with data from UM drive')
         training = os.path.join(d, 'training')
 
-    print('========================== training autoencoder ==========================')
+    print(f'========================== training autoencoder {variable} ==========================')
 
     param_dir = os.path.join(training, 'autoencoder')
     pth_ = os.path.join(param_dir, 'pth')
@@ -201,5 +204,6 @@ if __name__ == '__main__':
     os.mkdir(chk)
     logger_csv = os.path.join(chk, 'training_{}.csv'.format(now))
 
-    train_model(chk, pth_, metadata_, batch_size=128, learning_rate=0.0001, n_workers=workers, logging_csv=logger_csv)
+    train_model(chk, pth_, metadata_, target=variable, batch_size=256, learning_rate=0.001,
+                n_workers=workers, logging_csv=logger_csv)
 # ========================= EOF ====================================================================

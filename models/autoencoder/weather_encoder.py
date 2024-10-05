@@ -198,8 +198,8 @@ class WeatherAutoencoder(pl.LightningModule):
         self.mask = []
 
     def configure_optimizers(self):
-        optimizer = optim.Adam(self.parameters(), lr=self.learning_rate, weight_decay=1e-5)
-        scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=5)
+        optimizer = optim.Adam(self.parameters(), lr=self.learning_rate, weight_decay=1e-4)
+        scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=2)
         return {
             'optimizer': optimizer,
             'lr_scheduler': {

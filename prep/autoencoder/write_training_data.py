@@ -7,6 +7,7 @@ import random
 import torch
 import numpy as np
 import pandas as pd
+import geopandas as gpd
 from sklearn.metrics import r2_score, root_mean_squared_error
 
 TERRAIN_FEATURES = ['slope', 'aspect', 'elevation', 'tpi_1250', 'tpi_250', 'tpi_150']
@@ -42,8 +43,9 @@ def positional_encoding(seq_len, d_model):
     return pe, pe_str
 
 
-def write_pth_training_data(csv_dir, training_metadata, output_dir, train_frac=0.8, chunk_size=72,
+def write_pth_training_data(stations, csv_dir, training_metadata, output_dir, chunk_size=72,
                             chunks_per_file=1000, d_model=4, shuffle=False, include_mask=False):
+
     metadata = {'chunk_size': chunk_size,
                 'chunks_per_file': chunks_per_file,
                 'column_order': [],
@@ -54,15 +56,31 @@ def write_pth_training_data(csv_dir, training_metadata, output_dir, train_frac=0
                 'data_frequency': [],
                 'observation_count': 0}
 
+    gdf = gpd.read_file(stations)
+    gdf.index = gdf['fid']
+    train_split = gdf[['train']]
+
     files_ = [f for f in os.listdir(csv_dir) if f.endswith('.csv')]
-
+    names = [f.split('.')[0] for f in files_]
     if shuffle:
-        stations = [f.split('.')[0] for f in files_]
-        random.shuffle(stations)
+        random.shuffle(names)
     else:
-        stations = sorted([f.split('.')[0] for f in files_])
+        names = sorted(names)
 
-    destiny = ['train' if random.random() < train_frac else 'val' for _ in stations]
+    destiny, stations = [], []
+    for s in names:
+        try:
+            train_status = train_split.loc[s, 'train']
+        except KeyError:
+            continue
+
+        if train_status:
+            destiny.append('train')
+            stations.append(s)
+        else:
+            destiny.append('val')
+            stations.append(s)
+
     obs, gm, nl = [], [], []
 
     first, write_files = True, 0
@@ -176,8 +194,9 @@ def write_pth_training_data(csv_dir, training_metadata, output_dir, train_frac=0
                     json.dump(metadata, fp, indent=4)
                 first = False
 
-    print('\n{} sites\n{} observations, {} held out for validation'.format(write_files, metadata['observation_count'],
-                                                                           len(obs)))
+    print('\n{} sites, {} train, {} val\n{} observations'.format(write_files, destiny.count('train'),
+                                                                 destiny.count('val'),
+                                                                 metadata['observation_count']))
 
     if len(obs) > 0:
         print_rmse(obs, nl, gm)
@@ -195,6 +214,8 @@ if __name__ == '__main__':
     d = '/media/research/IrrigationGIS/dads'
     if not os.path.exists(d):
         d = '/home/dgketchum/data/IrrigationGIS/dads'
+
+    shapefile = '/media/research/IrrigationGIS/dads/met/stations/dads_stations_res_elev_mgrs_split_small.shp'
 
     zoran = '/home/dgketchum/training'
     nvm = '/media/nvm/training'
@@ -226,5 +247,5 @@ if __name__ == '__main__':
 
     # metadata_ = None
     metadata_ = os.path.join(param_dir, 'training_metadata.json')
-    write_pth_training_data(sta, metadata_, out_pth, chunk_size=365, d_model=4, shuffle=True, include_mask=True)
+    write_pth_training_data(shapefile, sta, metadata_, out_pth, chunk_size=365, d_model=4, shuffle=True, include_mask=True)
 # ========================= EOF ==============================================================================
