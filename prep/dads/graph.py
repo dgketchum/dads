@@ -115,7 +115,7 @@ if __name__ == '__main__':
     stations_ = '/media/nvm/training/dads/graph/stations.shp'
     output_dir_ = '/media/nvm/training/dads/graph'
 
-    node_prep = Graph(stations_, output_dir_, k_nearest=5)
+    node_prep = Graph(stations_, output_dir_, k_nearest=10)
     node_prep.generate_edge_index()
     # node_prep.preprocess_data()
 
