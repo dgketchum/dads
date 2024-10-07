@@ -1,15 +1,10 @@
 import json
 import os
-import pandas as pd
 
 import geopandas as gpd
 import numpy as np
-from shapely.geometry import LineString, Point
-from sklearn.metrics.pairwise import cosine_similarity
-from sklearn.preprocessing import MinMaxScaler
-import torch
-import networkx as nx
 from fiona.crs import CRS
+from shapely.geometry import LineString, Point
 
 
 class Graph:
@@ -42,42 +37,71 @@ class Graph:
         train_coords = np.array([[point.y, point.x] for point in train_gdf.geometry])
         val_coords = np.array([[point.y, point.x] for point in val_gdf.geometry])
 
-        distances = []
+        # bipartite validation edge set (i.e., from training to validation nodes)
+        distance_val = []
         for i in range(len(train_coords)):
-            distances.append([
+            distance_val.append([
                 haversine_distance(train_coords[i][0], train_coords[i][1],
                                    val_coords[j][0], val_coords[j][1]) for j in range(len(val_coords))])
-        distances = np.array(distances)
+        distance_val = np.array(distance_val)
+        k_ind_v = np.argsort(distance_val, axis=0)[:self.k_nearest, :]
+        train_index_map = {i: j for i, j in enumerate(train_gdf.index)}
+        k_ind_v = np.vectorize(train_index_map.get)(k_ind_v.ravel()).reshape(k_ind_v.shape)
+        row_indices_v = np.repeat(np.arange(len(val_gdf)), self.k_nearest)
+        spatial_edges_v = np.column_stack([row_indices_v, k_ind_v.T.ravel()])
+        val_index_map = {i: j for i, j in enumerate(val_gdf.index)}
+        spatial_edges_v[:, 0] = np.vectorize(val_index_map.get)(spatial_edges_v[:, 0])
 
-        k_indices = np.argsort(distances, axis=0)[:self.k_nearest, :]
+        # undirected train-to-train edge set
+        distance = []
+        for i in range(len(train_coords)):
+            distance.append([
+                haversine_distance(train_coords[i][0], train_coords[i][1],
+                                   train_coords[j][0], train_coords[j][1]) for j in range(len(train_coords))])
+        distance = np.array(distance)
+        k_indices = np.argsort(distance, axis=0)[:self.k_nearest, :]
         train_index_map = {i: j for i, j in enumerate(train_gdf.index)}
         k_indices = np.vectorize(train_index_map.get)(k_indices.ravel()).reshape(k_indices.shape)
+        row_indices = np.repeat(np.arange(len(train_gdf)), self.k_nearest)
+        spatial_edges_t = np.column_stack([row_indices, k_indices.T.ravel()])
+        train_index_map = {i: j for i, j in enumerate(train_gdf.index)}
+        spatial_edges_t[:, 0] = np.vectorize(train_index_map.get)(spatial_edges_t[:, 0])
 
-        row_indices = np.repeat(np.arange(len(val_gdf)), self.k_nearest)
-        spatial_edges = np.column_stack([row_indices, k_indices.T.ravel()])
-
-        val_index_map = {i: j for i, j in enumerate(val_gdf.index)}
-        spatial_edges[:, 0] = np.vectorize(val_index_map.get)(spatial_edges[:, 0])
+        spatial_edges = np.concatenate([spatial_edges_v, spatial_edges_t])
 
         to_from = [1, 0]
         spatial_edges = spatial_edges[:, to_from]
 
         index_to_staid = {i: staid for i, staid in enumerate(gdf['fid'])}
-        edge_lines = []
+        edge_lines, train = [], []
         to_, from_ = [], []
 
-        for i, j in spatial_edges:
+        for e, (i, j) in enumerate(spatial_edges):
+
+            from_fid = gdf.iloc[i]['fid']
+            to_fid = gdf.iloc[j]['fid']
+
+            if to_fid == 'LRCM8' and e > 16:
+                a = 1
+
             point1 = Point(gdf.iloc[i].geometry)
             point2 = Point(gdf.iloc[j].geometry)
             line = LineString([point1, point2])
 
-            from_.append(gdf.iloc[i]['fid'])
-            to_.append(gdf.iloc[j]['fid'])
+            from_.append(from_fid)
+            to_.append(to_fid)
+
             edge_lines.append(line)
+
+            if gdf.iloc[i]['train'] and gdf.iloc[j]['train']:
+                train.append(1)
+            else:
+                train.append(0)
 
         gdf_edges = gpd.GeoDataFrame({'geometry': edge_lines})
         gdf_edges['to'] = to_
         gdf_edges['from'] = from_
+        gdf_edges['train'] = train
 
         with open(os.path.join(self.output_dir, 'edge_indx_map.json'), 'w') as f:
             json.dump(index_to_staid, f)
@@ -115,7 +139,7 @@ if __name__ == '__main__':
     stations_ = '/media/nvm/training/dads/graph/stations.shp'
     output_dir_ = '/media/nvm/training/dads/graph'
 
-    node_prep = Graph(stations_, output_dir_, k_nearest=10)
+    node_prep = Graph(stations_, output_dir_, k_nearest=5)
     node_prep.generate_edge_index()
     # node_prep.preprocess_data()
 
