@@ -1,36 +1,49 @@
 import json
 import os
 
+import pandas as pd
 import geopandas as gpd
 import numpy as np
 from fiona.crs import CRS
 from shapely.geometry import LineString, Point
 
+from models.dads import SIMILARITY_COLS
+from sklearn.preprocessing import MinMaxScaler
+
 
 class Graph:
     def __init__(self, stations, output_dir, k_nearest=2, bounds=None):
         self.fields = stations
-        self.valid_target_stations = None
         self.output_dir = output_dir
         self.k_nearest = k_nearest
         self.pth_stations = []
         self.bounds = bounds
 
     def generate_edge_index(self):
-        gdf = gpd.read_file(self.fields)
-        gdf.index = list(range(gdf.shape[0]))
+        stations = gpd.read_file(self.fields)
+        stations.index = list(range(stations.shape[0]))
 
         if self.bounds:
             w, s, e, n = self.bounds
-            gdf = gdf[(gdf['latitude'] < n) & (gdf['latitude'] >= s)]
-            gdf = gdf[(gdf['longitude'] < e) & (gdf['longitude'] >= w)]
+            stations = stations[(stations['latitude'] < n) & (stations['latitude'] >= s)]
+            stations = stations[(stations['longitude'] < e) & (stations['longitude'] >= w)]
 
-        if self.valid_target_stations:
-            with open(self.valid_target_stations, 'r') as f:
-                select = json.load(f)
-                gdf = gdf.loc[select['stations']]
+        attrs_select = list(SIMILARITY_COLS.keys()) + ['train']
+        attributes = stations[attrs_select].copy()
+        attributes.index = stations['fid']
+        scaler = MinMaxScaler()
+        attributes = pd.DataFrame(scaler.fit_transform(attributes),
+                                  columns=attributes.columns,
+                                  index=attributes.index)
+        val_dct, train_dct = {}, {}
+        for i, r in attributes.iterrows():
+            t = r['train']
+            if t:
+                train_dct[i] = r.to_list()[:-1]
+            else:
+                val_dct[i] = r.to_list()[:-1]
 
-        gdf = gdf[['fid', 'train', 'geometry']]
+        gdf = stations[['fid', 'train', 'geometry']].copy()
         train_gdf = gdf[gdf['train'] == 1]
         val_gdf = gdf[gdf['train'] == 0]
 
@@ -81,9 +94,6 @@ class Graph:
             from_fid = gdf.iloc[i]['fid']
             to_fid = gdf.iloc[j]['fid']
 
-            if to_fid == 'LRCM8' and e > 16:
-                a = 1
-
             point1 = Point(gdf.iloc[i].geometry)
             point2 = Point(gdf.iloc[j].geometry)
             line = LineString([point1, point2])
@@ -103,10 +113,19 @@ class Graph:
         gdf_edges['from'] = from_
         gdf_edges['train'] = train
 
-        with open(os.path.join(self.output_dir, 'edge_indx_map.json'), 'w') as f:
-            json.dump(index_to_staid, f)
+        train_edges = gdf_edges[gdf_edges['train'] == 1].groupby('to')['from'].agg(list).to_dict()
+        with open(os.path.join(self.output_dir, 'train_edge_index.json'), 'w') as f:
+            json.dump(train_edges, f)
 
-        np.savetxt(os.path.join(self.output_dir, 'edge_indx.np'), spatial_edges)
+        with open(os.path.join(self.output_dir, 'train_edge_attr.json'), 'w') as f:
+            json.dump(train_dct, f)
+
+        val_edges = gdf_edges[gdf_edges['train'] == 0].groupby('to')['from'].agg(list).to_dict()
+        with open(os.path.join(self.output_dir, 'val_edge_index.json'), 'w') as f:
+            json.dump(val_edges, f)
+
+        with open(os.path.join(self.output_dir, 'val_edge_attr.json'), 'w') as f:
+            json.dump(val_dct, f)
 
         gdf.crs = CRS.from_epsg(4326)
         gdf_edges.crs = CRS.from_epsg(4326)
@@ -141,6 +160,5 @@ if __name__ == '__main__':
 
     node_prep = Graph(stations_, output_dir_, k_nearest=5)
     node_prep.generate_edge_index()
-    # node_prep.preprocess_data()
 
 # ========================= EOF ====================================================================

@@ -94,7 +94,7 @@ def infer_embeddings(model_dir, data_dir, metadata_path, embedding_path):
         # Average embeddings if there are multiple samples per station
         mean_embedding = torch.cat(station_embeddings, dim=2).mean(dim=2)
         embeddings[station_name] = mean_embedding.tolist()
-        print(station_name)
+        print(station_name, mean_embedding.mean().item())
 
     with open(embedding_path, 'w') as fp:
         json.dump(embeddings, fp, indent=4)
