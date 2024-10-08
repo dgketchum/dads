@@ -29,17 +29,24 @@ resource.setrlimit(resource.RLIMIT_NOFILE, (4096, rlimit[1]))
 
 
 class PTHLSTMDataset(Dataset):
-    def __init__(self, file_paths, col_index, expected_width, chunk_size, transform=None):
+    def __init__(self, file_paths, col_index, expected_width, chunk_size, transform=None, return_station_name=False):
         self.chunk_size = chunk_size
         self.transform = transform
         self.col_index = col_index
+        self.return_station_name = return_station_name
 
         all_data = []
+        self.station_names = []
         for file_path in file_paths:
+            station_name = os.path.splitext(os.path.basename(file_path))[0]
             data = torch.load(file_path, weights_only=True)
             if data.shape[2] != expected_width:
                 print(f"Skipping {file_path},shape mismatch. Expected {expected_width} columns, got {data.shape[2]}")
                 continue
+
+            for _ in range(len(data)):
+                self.station_names.append(station_name)
+
             all_data.append(data)
 
         self.data = torch.cat(all_data, dim=0)
@@ -73,7 +80,11 @@ class PTHLSTMDataset(Dataset):
                      chunk[:, self.col_index[1]],
                      chunk[:, self.col_index[2]:])
 
-        return y, gm, lf
+        if self.return_station_name:
+            station_name = self.station_names[idx]
+            return y, gm, lf, station_name
+        else:
+            return y, gm, lf
 
 
 def custom_collate(batch):
