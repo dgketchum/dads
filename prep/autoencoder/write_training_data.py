@@ -170,9 +170,10 @@ def write_pth_training_data(stations, csv_dir, training_metadata, output_dir, ch
             # if nan_frac > 0.0 and fate == 'val':
             #     continue
 
-            if nan_frac > 0.5:
-                continue
+            # if nan_frac > 0.5:
+            #     continue
 
+            # TODO: piece together data if the station is mostly nan
             station_chunks.append(chunk_daily)
             station_chunk_ct += 1
 
@@ -215,7 +216,7 @@ if __name__ == '__main__':
     if not os.path.exists(d):
         d = '/home/dgketchum/data/IrrigationGIS/dads'
 
-    shapefile = '/media/research/IrrigationGIS/dads/met/stations/dads_stations_res_elev_mgrs_split_small.shp'
+    shapefile =  '/media/nvm/training/dads/graph/stations.shp'
 
     zoran = '/home/dgketchum/training'
     nvm = '/media/nvm/training'
@@ -247,5 +248,6 @@ if __name__ == '__main__':
 
     # metadata_ = None
     metadata_ = os.path.join(param_dir, 'training_metadata.json')
-    write_pth_training_data(shapefile, sta, metadata_, out_pth, chunk_size=365, d_model=4, shuffle=True, include_mask=True)
+    write_pth_training_data(shapefile, sta, metadata_, out_pth, chunk_size=365, d_model=4,
+                            shuffle=True, include_mask=True)
 # ========================= EOF ==============================================================================
