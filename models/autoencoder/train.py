@@ -132,8 +132,8 @@ def train_model(dirpath, pth, metadata, target, batch_size=64, learning_rate=0.0
                                 collate_fn=lambda batch: [x for x in batch if x is not None])
 
     model = WeatherAutoencoder(input_dim=tensor_width,
-                               latent_size=4,
-                               dropout=0.5,
+                               latent_size=1,
+                               dropout=0.1,
                                learning_rate=learning_rate,
                                log_csv=logging_csv,
                                scaler=val_dataset.scaler,
@@ -204,6 +204,6 @@ if __name__ == '__main__':
     os.mkdir(chk)
     logger_csv = os.path.join(chk, 'training_{}.csv'.format(now))
 
-    train_model(chk, pth_, metadata_, target=variable, batch_size=256, learning_rate=0.001,
+    train_model(chk, pth_, metadata_, target=variable, batch_size=512, learning_rate=0.0001,
                 n_workers=workers, logging_csv=logger_csv)
 # ========================= EOF ====================================================================

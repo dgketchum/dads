@@ -57,7 +57,7 @@ def infer_embeddings(model_dir, data_dir, metadata_path, embedding_path):
     model_path = os.path.join(model_dir, 'best_model.ckpt')
     model = WeatherAutoencoder.load_from_checkpoint(model_path,
                                                     input_dim=tensor_width,
-                                                    latent_size=4,
+                                                    latent_size=1,
                                                     learning_rate=0.0001,
                                                     **meta)
     model.to(device)
@@ -130,7 +130,7 @@ if __name__ == '__main__':
     pth_ = os.path.join(param_dir, 'pth')
     metadata_ = os.path.join(param_dir, 'training_metadata.json')
 
-    model_run = os.path.join(param_dir, 'checkpoints', '10041435')
+    model_run = os.path.join(param_dir, 'checkpoints', '10130956')
     model_ = os.path.join(model_run, 'best_model.ckpt')
     scaler_ = os.path.join(model_run, 'scaler.json')
     embeddings_file = os.path.join(model_run, 'embeddings.json')
