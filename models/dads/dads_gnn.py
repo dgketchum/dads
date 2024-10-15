@@ -1,3 +1,4 @@
+import os
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -10,7 +11,7 @@ from models.simple_lstm.lstm import LSTMPredictor
 
 
 class AttentionGCNConv(nn.Module):
-    def __init__(self, in_channels, out_channels):
+    def __init__(self, in_channels, out_channels, edge_attr_dim):
         super().__init__()
         self.linear = nn.Linear(in_channels, out_channels)
         self.attn_mlp = nn.Sequential(
@@ -18,25 +19,35 @@ class AttentionGCNConv(nn.Module):
             nn.ReLU(),
             nn.Linear(out_channels, 1)
         )
+        self.edge_attr_transform = nn.Linear(edge_attr_dim, out_channels)
 
-    def forward(self, x, edge_index, edge_attr):
-        x = self.linear(x)
-        row, col = edge_index
-        agg = torch.index_select(x, 0, col) * edge_attr.unsqueeze(-1)
-        attn_weights = self.attn_mlp(edge_attr.unsqueeze(-1))
-        attn_weights = torch.softmax(attn_weights, dim=1)
+    def forward(self, data):
+
+        x = self.linear(data.x.squeeze())
+        row, col = data.edge_index
+        row -= 1
+        edge_attr = data.edge_attr
+        edge_attr = self.edge_attr_transform(edge_attr)
+        node_vec = torch.index_select(x, 0, col)
+
+        agg = node_vec * edge_attr
+        attn_weights = self.attn_mlp(agg.unsqueeze(-1))
+        attn_weights = torch.softmax(attn_weights, dim=1).squeeze()
         agg = agg * attn_weights
         agg = torch.zeros_like(x).scatter_add_(0, row.unsqueeze(-1).expand_as(agg), agg)
+
         return agg
 
 
 class DadsMetGNN(pl.LightningModule):
-    def __init__(self, pretrained_lstm_path, output_dim, hidden_dim=64,
+    def __init__(self, pretrained_lstm_path, output_dim, n_nodes=5, hidden_dim=64, edge_attr_dim=20,
                  num_gnn_layers=5, dropout=0.2, learning_rate=1e-3, **lstm_meta):
 
         super().__init__()
         self.save_hyperparameters()
         self.learning_rate = learning_rate
+        self.n_nodes = n_nodes
+        self.output_dim = output_dim
 
         data_frequency = lstm_meta['data_frequency']
         lf_bands = data_frequency.count('lf') - 2
@@ -53,25 +64,29 @@ class DadsMetGNN(pl.LightningModule):
         self.gnn_layers = nn.ModuleList()
         self.norms = nn.ModuleList()
         for _ in range(num_gnn_layers):
-            self.gnn_layers.append(AttentionGCNConv(hidden_dim, hidden_dim))
+            self.gnn_layers.append(AttentionGCNConv(hidden_dim, hidden_dim, edge_attr_dim))
             self.norms.append(LayerNorm(hidden_dim))
 
-        self.lstm_transform = nn.Linear(lstm_meta['hidden_dim'], hidden_dim)
+        self.lstm_transform = nn.Linear(output_dim, hidden_dim)
         self.dropout = nn.Dropout(dropout)
-        self.output_layer = nn.Linear(hidden_dim, output_dim)
+        self.fc = nn.Linear(hidden_dim * 2, output_dim)
 
     def forward(self, data, sequence):
         lstm_output = self.lstm(sequence)
+        lstm_output = lstm_output.unsqueeze(1)
         lstm_output = self.lstm_transform(lstm_output)
-        x = data.x
 
         for i in range(len(self.gnn_layers)):
-            x = self.gnn_layers[i](x, data.edge_index, data.edge_attr)
+            x = self.gnn_layers[i](data)
             x = F.relu(x)
             x = self.norms[i](x)
             x = self.dropout(x)
 
-        out = self.output_layer(x + lstm_output)
+        lstm_output = lstm_output.repeat_interleave(self.n_nodes, dim=0)
+        combined_features = torch.cat([x, lstm_output], dim=1)
+        out = self.fc(combined_features)
+        out = out.view(-1, self.n_nodes, self.output_dim)
+        out = out.mean(dim=1)
         return out
 
     def training_step(self, batch, batch_idx):
