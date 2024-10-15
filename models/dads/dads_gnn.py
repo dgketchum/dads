@@ -4,8 +4,9 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch import optim as optim
 from torch.optim.lr_scheduler import ReduceLROnPlateau
-from torch_geometric.nn import GCNConv, LayerNorm
+from torch_geometric.nn import LayerNorm
 import pytorch_lightning as pl
+from sklearn.metrics import r2_score, root_mean_squared_error
 
 from models.simple_lstm.lstm import LSTMPredictor
 
@@ -22,7 +23,6 @@ class AttentionGCNConv(nn.Module):
         self.edge_attr_transform = nn.Linear(edge_attr_dim, out_channels)
 
     def forward(self, data):
-
         x = self.linear(data.x.squeeze())
         row, col = data.edge_index
         row -= 1
@@ -48,6 +48,7 @@ class DadsMetGNN(pl.LightningModule):
         self.learning_rate = learning_rate
         self.n_nodes = n_nodes
         self.output_dim = output_dim
+        self.criterion = nn.L1Loss()
 
         data_frequency = lstm_meta['data_frequency']
         lf_bands = data_frequency.count('lf') - 2
@@ -73,8 +74,14 @@ class DadsMetGNN(pl.LightningModule):
 
     def forward(self, data, sequence):
         lstm_output = self.lstm(sequence)
-        lstm_output = lstm_output.unsqueeze(1)
-        lstm_output = self.lstm_transform(lstm_output)
+
+        try:
+            lstm_output = lstm_output.unsqueeze(1)
+        except:
+            lstm_output = lstm_output.unsqueeze(0)
+            lstm_output = lstm_output.unsqueeze(0)
+
+        lstm_feat = self.lstm_transform(lstm_output)
 
         for i in range(len(self.gnn_layers)):
             x = self.gnn_layers[i](data)
@@ -82,19 +89,63 @@ class DadsMetGNN(pl.LightningModule):
             x = self.norms[i](x)
             x = self.dropout(x)
 
-        lstm_output = lstm_output.repeat_interleave(self.n_nodes, dim=0)
-        combined_features = torch.cat([x, lstm_output], dim=1)
+        lstm_feat = lstm_feat.repeat_interleave(self.n_nodes, dim=0)
+        combined_features = torch.cat([x, lstm_feat], dim=1)
         out = self.fc(combined_features)
         out = out.view(-1, self.n_nodes, self.output_dim)
         out = out.mean(dim=1)
-        return out
+        return out, lstm_output
 
     def training_step(self, batch, batch_idx):
         data, y, _, sequence = batch
-        out = self(data, sequence)
+        out, lstm = self(data, sequence)
+        y = y[:, -1:]
         loss = F.mse_loss(out, y)
         self.log('train_loss', loss)
         return loss
+
+    def validation_step(self, batch, batch_idx):
+        data, y_obs, gm, sequence = batch
+        y_hat, lstm = self(data, sequence)
+        y_hat = y_hat.squeeze()
+        y_lstm = lstm.squeeze()
+        y_obs = y_obs[:, -1]
+        y_gm = gm[:, -1]
+
+        loss_obs = self.criterion(y_hat, y_obs)
+        self.log('val_loss', loss_obs, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
+
+        if len(y_hat.shape) < 1:
+            y_obs = y_obs.unsqueeze(0)
+            y_hat = y_hat.unsqueeze(0)
+            y_lstm = y_lstm.unsqueeze(0)
+            y_gm = y_gm.unsqueeze(0)
+
+        y_obs = y_obs.detach().cpu().numpy()
+        y_hat = y_hat.detach().cpu().numpy()
+        y_lstm = y_lstm.detach().cpu().numpy()
+        y_gm = y_gm.detach().cpu().numpy()
+
+        # r2_obs = r2_score(y_obs_np, y_hat_obs_np)
+        # r2_gm = r2_score(y_obs_np, y_gm_np)
+
+        rmse_obs_dads = root_mean_squared_error(y_obs, y_hat)
+        rmse_obs_lstm = root_mean_squared_error(y_obs, y_lstm)
+        rmse_gm = root_mean_squared_error(y_obs, y_gm)
+
+        # self.log('val_r2', r2_obs, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
+        # self.log('val_r2_gm', r2_gm, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
+
+        self.log('rmse_obs_dads', rmse_obs_dads, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
+        self.log('rmse_obs_lstm', rmse_obs_lstm, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
+        self.log('val_rmse_gm', rmse_gm, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
+
+        current_lr = self.trainer.optimizers[0].param_groups[0]['lr']
+        self.log('lr', current_lr, on_step=False, on_epoch=True, prog_bar=True)
+        # lr_ratio = current_lr / self.learning_rate
+        # self.log('lr_ratio', lr_ratio, on_step=False, on_epoch=True, prog_bar=True)
+
+        return loss_obs
 
     def configure_optimizers(self):
         optimizer = optim.Adam(self.parameters(), lr=self.learning_rate)
