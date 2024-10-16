@@ -189,7 +189,7 @@ if __name__ == '__main__':
     if not os.path.exists(d):
         d = '/home/dgketchum/data/IrrigationGIS/dads'
 
-    target_var = 'vpd'
+    target_var = 'mean_temp'
     glob_ = 'dads_stations_elev_mgrs'
 
     fields = os.path.join(d, 'met', 'stations', '{}.csv'.format(glob_))
@@ -197,8 +197,8 @@ if __name__ == '__main__':
     cdr_ = os.path.join(d, 'rs', 'cdr', 'joined')
     solrad = os.path.join(d, 'dem', 'rsun_tables')
 
-    zoran = '/home/dgketchum/training'
-    nvm = '/media/nvm/training'
+    zoran = '/home/dgketchum/training/lstm'
+    nvm = '/media/nvm/training/lstm'
     if os.path.exists(zoran):
         print('writing to zoran')
         training = zoran

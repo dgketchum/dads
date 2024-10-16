@@ -27,7 +27,6 @@ def print_rmse(o, n, g):
 
 def write_pth_training_data(csv_dir, training_metadata, output_dir, train_frac=0.8, chunk_size=72,
                             chunks_per_file=1000, target='rsds', hourly_dir=None, shuffle=False):
-
     metadata = {'chunk_size': chunk_size,
                 'chunks_per_file': chunks_per_file,
                 'column_order': [],
@@ -90,11 +89,14 @@ def write_pth_training_data(csv_dir, training_metadata, output_dir, train_frac=0
         df.drop(columns=['dt_diff', 'doy'], inplace=True)
         dfhr.drop(columns=['doy', 'hour'], inplace=True)
 
-        metadata['column_order'] = df.columns.to_list()
-        metadata['column_order'].extend(dfhr.columns.to_list())
+        if first:
+            metadata['column_order'] = df.columns.to_list()
+            metadata['column_order'].extend(dfhr.columns.to_list())
 
-        [metadata['data_frequency'].append('lf') for _ in df.columns]
-        [metadata['data_frequency'].append('hf') for _ in dfhr.columns]
+            [metadata['data_frequency'].append('lf') for _ in df.columns]
+            [metadata['data_frequency'].append('hf') for _ in dfhr.columns]
+
+            first = False
 
         data_tensor_daily = torch.tensor(df.values, dtype=torch.float32)
         data_tensor_hourly = torch.tensor(dfhr.values, dtype=torch.float32)
@@ -153,10 +155,10 @@ if __name__ == '__main__':
     if not os.path.exists(d):
         d = '/home/dgketchum/data/IrrigationGIS/dads'
 
-    target_var = 'vpd'
+    target_var = 'mean_temp'
 
-    zoran = '/home/dgketchum/training'
-    nvm = '/media/nvm/training'
+    zoran = '/home/dgketchum/training/lstm'
+    nvm = '/media/nvm/training/lstm'
     if os.path.exists(zoran):
         print('reading from zoran')
         training = zoran
@@ -186,8 +188,8 @@ if __name__ == '__main__':
 
     print('========================== writing {} traing data =========================='.format(target_var))
 
-    metadata_ = None
-    # metadata_ = os.path.join(param_dir, 'training_metadata.json')
+    # metadata_ = None
+    metadata_ = os.path.join(param_dir, 'training_metadata.json')
     write_pth_training_data(out_csv, metadata_, out_pth, target=target_var, hourly_dir=hourly_data,
                             chunk_size=72, shuffle=True)
 # ========================= EOF ==============================================================================
