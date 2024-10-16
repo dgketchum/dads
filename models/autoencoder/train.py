@@ -92,7 +92,7 @@ def custom_collate(batch):
     return default_collate(batch)
 
 
-def train_model(dirpath, pth, metadata, target, batch_size=64, learning_rate=0.01,
+def train_model(dirpath, pth, metadata, target, batch_size=64, learning_rate=0.001,
                 n_workers=1, logging_csv=None):
     """"""
 
@@ -102,6 +102,8 @@ def train_model(dirpath, pth, metadata, target, batch_size=64, learning_rate=0.0
     chunk_size = meta['chunk_size']
     tensor_width = len(meta['column_order'])
     data_width = len(meta['data_columns'])
+    # TODO: predict difference between obs and reanalysis
+    target_position = meta['column_order'].index(f'{target}_nl')
 
     tdir = os.path.join(pth, 'train')
     t_files = [os.path.join(tdir, f) for f in os.listdir(tdir)]
@@ -132,8 +134,10 @@ def train_model(dirpath, pth, metadata, target, batch_size=64, learning_rate=0.0
                                 collate_fn=lambda batch: [x for x in batch if x is not None])
 
     model = WeatherAutoencoder(input_dim=tensor_width,
-                               latent_size=1,
+                               latent_size=64,
+                               hidden_size=1024,
                                dropout=0.1,
+                               target_col=target_position,
                                learning_rate=learning_rate,
                                log_csv=logging_csv,
                                scaler=val_dataset.scaler,
@@ -171,7 +175,7 @@ if __name__ == '__main__':
         d = '/home/dgketchum/data/IrrigationGIS/dads'
 
     if device_name == 'NVIDIA GeForce RTX 2080':
-        workers = 6
+        workers = 0
     elif device_name == 'NVIDIA RTX A6000':
         workers = 6
     else:
@@ -204,6 +208,6 @@ if __name__ == '__main__':
     os.mkdir(chk)
     logger_csv = os.path.join(chk, 'training_{}.csv'.format(now))
 
-    train_model(chk, pth_, metadata_, target=variable, batch_size=512, learning_rate=0.0001,
+    train_model(chk, pth_, metadata_, target=variable, batch_size=512, learning_rate=0.001,
                 n_workers=workers, logging_csv=logger_csv)
 # ========================= EOF ====================================================================

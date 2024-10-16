@@ -11,11 +11,11 @@ from torch.optim.lr_scheduler import ReduceLROnPlateau
 
 
 class FCEncoder(nn.Module):
-    def __init__(self, input_dim, hidden_size, latent_size, dropout):
+    def __init__(self, input_dim, hidden_size, dropout):
         super(FCEncoder, self).__init__()
         self.fc1 = nn.Linear(input_dim, hidden_size)
-        self.fc_mu = nn.Linear(hidden_size, latent_size)
-        self.fc_logvar = nn.Linear(hidden_size, latent_size)
+        self.fc_mu = nn.Linear(hidden_size, hidden_size)
+        self.fc_logvar = nn.Linear(hidden_size, hidden_size)
         self.dropout = nn.Dropout(dropout)
 
     def forward(self, x):
@@ -43,12 +43,12 @@ class FCDecoder(nn.Module):
 
 class WeatherAutoencoder(pl.LightningModule):
     def __init__(self, input_dim=14, learning_rate=0.0001, latent_size=2, hidden_size=400,
-                 dropout=0.1, log_csv=None, scaler=None, **kwargs):
+                 dropout=0.1, target_col=None, log_csv=None, scaler=None, **kwargs):
 
         super(WeatherAutoencoder, self).__init__()
         self.latent_size = latent_size
-        self.encoder = FCEncoder(input_dim, hidden_size, latent_size, dropout)
-        self.decoder = FCDecoder(input_dim, hidden_size, latent_size, dropout, sigmoid=False)
+        self.encoder = FCEncoder(input_dim, hidden_size, dropout)
+        self.decoder = FCDecoder(input_dim, latent_size, hidden_size, dropout, sigmoid=False)
         self.input_dim = input_dim
 
         self.criterion = nn.L1Loss()
@@ -65,6 +65,8 @@ class WeatherAutoencoder(pl.LightningModule):
 
         self.data_width = len(self.data_columns)
         self.tensor_width = len(self.column_order)
+        self.hidden_size = hidden_size
+        self.target_col = target_col
 
         # hack to get model output to on_validation_epoch_end hook
         self.y_last = []
@@ -80,8 +82,10 @@ class WeatherAutoencoder(pl.LightningModule):
     def forward(self, x):
         mu, logvar = self.encoder(x.float().view(-1, self.input_dim))
         z = self.reparameterization(mu, logvar)
+        embed = z.view(-1, self.hidden_size, self.chunk_size)
+        embed = torch.max(embed, dim=2).values
         x_hat = self.decoder(z)
-        return x_hat, mu, logvar, z
+        return x_hat, mu, logvar, embed
 
     def init_bias(self):
         for module in [self.input_projection, self.output_projection, self.embedding_layer]:
@@ -96,6 +100,11 @@ class WeatherAutoencoder(pl.LightningModule):
         x[mask] = x_mean
 
         y_hat, mu, logvar, z = self(x)
+
+        if self.target_col is not None:
+            x = x[:, :, self.target_col].unsqueeze(2)
+            y_hat = y_hat[:, self.target_col].unsqueeze(1)
+
         y_hat = y_hat.flatten().unsqueeze(1)
         y = x.flatten().unsqueeze(1)
         loss = self.criterion(y_hat, y)
@@ -109,16 +118,28 @@ class WeatherAutoencoder(pl.LightningModule):
 
         y_hat, mu, logvar, z = self(y)
 
-        self.y_last.append(y)
         self.y_hat_last.append(y_hat.view(-1, self.tensor_width))
+        self.y_last.append(y)
         self.mask.append(mask)
 
-        y_flat = y[:, :, :self.data_width].flatten()
-        yh_flat = y_hat[:, :self.data_width].flatten()
-        loss_mask = mask.unsqueeze(2).repeat_interleave(y.size(2), dim=2)
-        loss_mask = loss_mask[:, :, :self.data_width].flatten()
+        if self.target_col is not None:
+            y = y[:, :, self.target_col].unsqueeze(2)
+            y_hat = y_hat[:, self.target_col].unsqueeze(1)
 
-        loss_obs = self.criterion(y_flat[loss_mask], yh_flat[loss_mask])
+            y_flat = y.flatten()
+            yh_flat = y_hat.flatten()
+            loss_mask = mask.unsqueeze(2)
+            loss_mask = loss_mask.flatten()
+
+            loss_obs = self.criterion(y_flat[loss_mask], yh_flat[loss_mask])
+
+        else:
+            y_flat = y[:, :, :self.data_width].flatten()
+            yh_flat = y_hat[:, :self.data_width].flatten()
+            loss_mask = mask.unsqueeze(2).repeat_interleave(y.size(2), dim=2)
+            loss_mask = loss_mask[:, :, :self.data_width].flatten()
+
+            loss_obs = self.criterion(y_flat[loss_mask], yh_flat[loss_mask])
 
         self.log('val_loss', loss_obs, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
 
@@ -164,6 +185,7 @@ class WeatherAutoencoder(pl.LightningModule):
 
             y = torch.cat(self.y_last, dim=0)
             y = y.cpu()
+
             y[:, :, :self.data_width] = self.scaler.inverse_transform(y[:, :, :self.data_width])
             y = y.view(-1, self.tensor_width)
 
@@ -177,6 +199,10 @@ class WeatherAutoencoder(pl.LightningModule):
             mask = mask.cpu()
 
             for i, col in enumerate(self.data_columns):
+
+                if self.target_col is not None:
+                    if i != self.target_col:
+                        continue
 
                 obs = y[mask][:, i]
                 pred = y_hat[mask][:, i]

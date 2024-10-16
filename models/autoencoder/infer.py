@@ -57,8 +57,9 @@ def infer_embeddings(model_dir, data_dir, metadata_path, embedding_path):
     model_path = os.path.join(model_dir, 'best_model.ckpt')
     model = WeatherAutoencoder.load_from_checkpoint(model_path,
                                                     input_dim=tensor_width,
-                                                    latent_size=1,
-                                                    learning_rate=0.0001,
+                                                    latent_size=64,
+                                                    hidden_size=1024,
+                                                    learning_rate=0.001,
                                                     **meta)
     model.to(device)
     model.eval()
@@ -84,6 +85,9 @@ def infer_embeddings(model_dir, data_dir, metadata_path, embedding_path):
         dataset = InferenceDataset(file_path, tensor_width, data_width, chunk_size, scaler)
         dataloader = DataLoader(dataset, batch_size=1, shuffle=False, num_workers=0)
 
+        # TODO: check validation with the reconstitute model
+        # also check clustering to ensure vector diversity
+
         station_embeddings = []
         for batch in dataloader:
             x = batch.to(device)
@@ -92,7 +96,7 @@ def infer_embeddings(model_dir, data_dir, metadata_path, embedding_path):
             station_embeddings.append(z.unsqueeze(2).detach().cpu())
 
         # Average embeddings if there are multiple samples per station
-        mean_embedding = torch.cat(station_embeddings, dim=2).mean(dim=2)
+        mean_embedding = torch.cat(station_embeddings, dim=0).mean(dim=0)
         embeddings[station_name] = mean_embedding.tolist()
         print(station_name, mean_embedding.mean().item())
 
@@ -130,7 +134,7 @@ if __name__ == '__main__':
     pth_ = os.path.join(param_dir, 'pth')
     metadata_ = os.path.join(param_dir, 'training_metadata.json')
 
-    model_run = os.path.join(param_dir, 'checkpoints', '10130956')
+    model_run = os.path.join(param_dir, 'checkpoints', '10151451')
     model_ = os.path.join(model_run, 'best_model.ckpt')
     scaler_ = os.path.join(model_run, 'scaler.json')
     embeddings_file = os.path.join(model_run, 'embeddings.json')
