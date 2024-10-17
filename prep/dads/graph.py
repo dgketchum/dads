@@ -40,8 +40,9 @@ class Graph:
             t = r['train']
             if t:
                 train_dct[i] = r.to_list()[:-1]
-            else:
-                val_dct[i] = r.to_list()[:-1]
+
+            # put all in val dict, since training stations' nodes are sent to validation nodes for now
+            val_dct[i] = r.to_list()[:-1]
 
         gdf = stations[['fid', 'train', 'geometry']].copy()
         train_gdf = gdf[gdf['train'] == 1]

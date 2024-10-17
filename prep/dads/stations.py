@@ -56,7 +56,7 @@ if __name__ == '__main__':
 
     target_var = 'mean_temp'
 
-    glob_ = 'dads_stations_res_elev_mgrs_split_small'
+    glob_ = 'dads_stations_res_elev_mgrs_split'
 
     fields = os.path.join(d, 'met', 'stations', '{}.shp'.format(glob_))
     landsat_ = os.path.join(d, 'rs', 'dads_stations', 'landsat', 'station_data')
@@ -75,7 +75,8 @@ if __name__ == '__main__':
         print('reading from UM drive')
         training = os.path.join(d, 'training')
 
-    csv_dir_ = os.path.join(training, 'lstm_simple', target_var, 'compiled_csv')
+    # TODO remove this confusing dependence on getting RS and terrain data from lstm training data
+    csv_dir_ = os.path.join(training, 'simple_lstm', target_var, 'compiled_csv')
 
     out_csv_ = os.path.join(training, 'dads', 'graph', 'stations.csv')
 
