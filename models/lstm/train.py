@@ -150,7 +150,7 @@ if __name__ == '__main__':
     if not os.path.exists(d):
         d = '/home/dgketchum/data/IrrigationGIS/dads'
 
-    target_var = 'vpd'
+    target_var = 'mean_temp'
 
     if device_name == 'NVIDIA GeForce RTX 2080':
         workers = 6
@@ -159,8 +159,8 @@ if __name__ == '__main__':
     else:
         raise NotImplementedError('Specify the machine this is running on')
 
-    zoran = '/home/dgketchum/training'
-    nvm = '/media/nvm/training'
+    zoran = '/home/dgketchum/training/lstm'
+    nvm = '/media/nvm/training/lstm'
     if os.path.exists(zoran):
         print('modeling with data from zoran')
         training = zoran
