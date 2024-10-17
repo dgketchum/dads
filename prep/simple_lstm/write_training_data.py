@@ -141,10 +141,10 @@ if __name__ == '__main__':
         d = '/home/dgketchum/data/IrrigationGIS/dads'
 
     target_var = 'mean_temp'
-    shapefile = '/media/research/IrrigationGIS/dads/met/stations/dads_stations_res_elev_mgrs_split_small.shp'
+    shapefile = os.path.join(d, 'met', 'stations', 'dads_stations_res_elev_mgrs_split.shp')
 
-    zoran = '/home/dgketchum/training/lstm_simple'
-    nvm = '/media/nvm/training/lstm_simple'
+    zoran = '/home/dgketchum/training/simple_lstm'
+    nvm = '/media/nvm/training/simple_lstm'
     if os.path.exists(zoran):
         print('reading from zoran')
         training = zoran

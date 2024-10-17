@@ -177,8 +177,8 @@ if __name__ == '__main__':
     else:
         raise NotImplementedError('Specify the machine this is running on')
 
-    zoran = '/home/dgketchum/training/lstm_simple'
-    nvm = '/media/nvm/training/lstm_simple'
+    zoran = '/home/dgketchum/training/simple_lstm'
+    nvm = '/media/nvm/training/simple_lstm'
     if os.path.exists(zoran):
         print('modeling with data from zoran')
         training = zoran

@@ -28,6 +28,7 @@ def join_training(stations, ts_dir, landsat_dir, dem_dir, out_dir, var='rsds',
         'snotel': 0,
         'landsat_obs_time_misalign': 0,
         'sol_fid': 0,
+        'exists': 0,
     }
 
     tiles = stations['MGRS_TILE'].unique()
@@ -47,6 +48,7 @@ def join_training(stations, ts_dir, landsat_dir, dem_dir, out_dir, var='rsds',
 
             outfile = os.path.join(out_dir, '{}.csv'.format(f))
             if os.path.exists(outfile) and not overwrite:
+                missing['exists'] += 1
                 continue
 
             if f in stations['orig_netid'].tolist():
@@ -143,8 +145,8 @@ if __name__ == '__main__':
     landsat_ = os.path.join(d, 'rs', 'dads_stations', 'landsat', 'station_data')
     solrad = os.path.join(d, 'dem', 'rsun_tables')
 
-    zoran = '/home/dgketchum/training/lstm_simple'
-    nvm = '/media/nvm/training/lstm_simple'
+    zoran = '/home/dgketchum/training/simple_lstm'
+    nvm = '/media/nvm/training/simple_lstm'
     if os.path.exists(zoran):
         print('writing to zoran')
         training = zoran
@@ -181,7 +183,7 @@ if __name__ == '__main__':
 
     # CONUS (-180., 25., -60., 85.)
     # W. MT: (-117., 42.5, -110., 49.)
-    join_training(fields, sta, landsat_, solrad, out_csv, var=target_var, bounds=(-125., 40., -103., 49.),
+    join_training(fields, sta, landsat_, solrad, out_csv, var=target_var, bounds=None,
                   shuffle=True, overwrite=overwrite_, sample_frac=1.0)
 
 # ========================= EOF ==============================================================================

@@ -51,6 +51,10 @@ class LSTMPredictor(pl.LightningModule):
         x = x.squeeze()
         x = self.input_expansion(x)
         out, _ = self.lstm(x)
+
+        if len(x.shape) == 2:
+            out = out.unsqueeze(0)
+
         out = out[:, -1, :]
 
         out = self.fc1(out)
