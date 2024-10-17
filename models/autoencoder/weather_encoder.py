@@ -153,9 +153,6 @@ class WeatherAutoencoder(pl.LightningModule):
 
         loss_obs = self.criterion(y[nan_mask], y_hat[nan_mask])
 
-        if torch.isnan(loss_obs):
-            a = 1
-
         self.log('val_loss', loss_obs, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
 
         current_lr = self.trainer.optimizers[0].param_groups[0]['lr']
