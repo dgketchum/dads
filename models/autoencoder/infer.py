@@ -6,7 +6,8 @@ import numpy as np
 from torch.utils.data import Dataset, DataLoader
 from models.autoencoder.weather_encoder import WeatherAutoencoder
 from models.scalers import MinMaxScaler
-
+import matplotlib.pyplot as plt
+from sklearn.manifold import TSNE
 
 device_name = None
 if torch.cuda.is_available():
@@ -45,7 +46,7 @@ class InferenceDataset(Dataset):
         return chunk
 
 
-def infer_embeddings(model_dir, data_dir, metadata_path, embedding_path):
+def infer_embeddings(model_dir, data_dir, metadata_path, embedding_path, plot=False):
     with open(metadata_path, 'r') as f:
         meta = json.load(f)
 
@@ -57,9 +58,10 @@ def infer_embeddings(model_dir, data_dir, metadata_path, embedding_path):
     model_path = os.path.join(model_dir, 'best_model.ckpt')
     model = WeatherAutoencoder.load_from_checkpoint(model_path,
                                                     input_dim=tensor_width,
+                                                    output_dim=5,
                                                     latent_size=64,
                                                     hidden_size=1024,
-                                                    learning_rate=0.001,
+                                                    dropout=0.1,
                                                     **meta)
     model.to(device)
     model.eval()
@@ -73,12 +75,14 @@ def infer_embeddings(model_dir, data_dir, metadata_path, embedding_path):
     scaler.scale = np.array(dct['scale']).reshape(1, -1)
 
     embeddings = {}
+    all_embeddings = []
+    station_names = []
 
     train_files = [os.path.join(data_dir, 'train', f) for f in os.listdir(os.path.join(data_dir, 'train'))]
     val_files = [os.path.join(data_dir, 'val', f) for f in os.listdir(os.path.join(data_dir, 'val'))]
     files_ = train_files + val_files
 
-    for f in files_:
+    for i, f in enumerate(files_):
         station_name = os.path.basename(f).replace('.pth', '')
         file_path = os.path.join(data_dir, f)
 
@@ -98,7 +102,25 @@ def infer_embeddings(model_dir, data_dir, metadata_path, embedding_path):
         # Average embeddings if there are multiple samples per station
         mean_embedding = torch.cat(station_embeddings, dim=0).mean(dim=0)
         embeddings[station_name] = mean_embedding.tolist()
+        all_embeddings.append(mean_embedding)
+        station_names.append(station_name)
         print(station_name, mean_embedding.mean().item())
+
+    if plot:
+        all_embeddings = torch.cat(all_embeddings, dim=1).T.numpy()
+
+        tsne = TSNE(n_components=2, random_state=42)
+        embeddings_2d = tsne.fit_transform(all_embeddings)
+
+        plt.figure(figsize=(10, 8))
+        plt.scatter(embeddings_2d[:, 0], embeddings_2d[:, 1])
+        for i, name in enumerate(station_names):
+            plt.annotate(name, (embeddings_2d[i, 0], embeddings_2d[i, 1]))
+
+        plt.title("t-SNE Visualization of Station Embeddings")
+        plt.xlabel("t-SNE Dimension 1")
+        plt.ylabel("t-SNE Dimension 2")
+        plt.show()
 
     with open(embedding_path, 'w') as fp:
         json.dump(embeddings, fp, indent=4)
@@ -134,7 +156,7 @@ if __name__ == '__main__':
     pth_ = os.path.join(param_dir, 'pth')
     metadata_ = os.path.join(param_dir, 'training_metadata.json')
 
-    model_run = os.path.join(param_dir, 'checkpoints', '10151451')
+    model_run = os.path.join(param_dir, 'checkpoints', '10171216')
     model_ = os.path.join(model_run, 'best_model.ckpt')
     scaler_ = os.path.join(model_run, 'scaler.json')
     embeddings_file = os.path.join(model_run, 'embeddings.json')

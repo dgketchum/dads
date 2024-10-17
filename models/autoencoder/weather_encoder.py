@@ -1,11 +1,11 @@
 import csv
 
-import torch
 import numpy as np
 import pytorch_lightning as pl
+import torch
 from sklearn.metrics import r2_score, root_mean_squared_error
-from torch import optim
 from torch import nn
+from torch import optim
 from torch.nn import functional as F
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 
@@ -26,10 +26,10 @@ class FCEncoder(nn.Module):
 
 
 class FCDecoder(nn.Module):
-    def __init__(self, input_dim, hidden_size, latent_size, dropout, sigmoid=True):
+    def __init__(self, output_dim, hidden_size, latent_size, dropout, sigmoid=True):
         super(FCDecoder, self).__init__()
         self.fc1 = nn.Linear(latent_size, hidden_size)
-        self.fc2 = nn.Linear(hidden_size, input_dim)
+        self.fc2 = nn.Linear(hidden_size, output_dim)
         self.dropout = nn.Dropout(dropout)
         self.sigmoid = sigmoid
 
@@ -42,14 +42,15 @@ class FCDecoder(nn.Module):
 
 
 class WeatherAutoencoder(pl.LightningModule):
-    def __init__(self, input_dim=14, learning_rate=0.0001, latent_size=2, hidden_size=400,
-                 dropout=0.1, target_col=None, log_csv=None, scaler=None, **kwargs):
+    def __init__(self, input_dim=14, output_dim=5, learning_rate=0.0001, latent_size=2, hidden_size=400,
+                 dropout=0.1, margin=1.0, log_csv=None, scaler=None, **kwargs):
 
         super(WeatherAutoencoder, self).__init__()
         self.latent_size = latent_size
         self.encoder = FCEncoder(input_dim, hidden_size, dropout)
-        self.decoder = FCDecoder(input_dim, latent_size, hidden_size, dropout, sigmoid=False)
+        self.decoder = FCDecoder(output_dim, latent_size, hidden_size, dropout, sigmoid=False)
         self.input_dim = input_dim
+        self.output_dim = output_dim
 
         self.criterion = nn.L1Loss()
         self.learning_rate = learning_rate
@@ -66,12 +67,19 @@ class WeatherAutoencoder(pl.LightningModule):
         self.data_width = len(self.data_columns)
         self.tensor_width = len(self.column_order)
         self.hidden_size = hidden_size
-        self.target_col = target_col
 
         # hack to get model output to on_validation_epoch_end hook
         self.y_last = []
         self.y_hat_last = []
         self.mask = []
+
+        self.margin = margin
+
+    def triplet_loss(self, anchor, positive, negative):
+        distance_positive = F.pairwise_distance(anchor, positive)
+        distance_negative = F.pairwise_distance(anchor, negative)
+        losses = F.relu(distance_positive - distance_negative + self.margin)
+        return losses.mean()
 
     @staticmethod
     def reparameterization(mu, logvar):
@@ -93,53 +101,60 @@ class WeatherAutoencoder(pl.LightningModule):
                 nn.init.uniform_(module.bias, -0.1, 0.1)
 
     def training_step(self, batch, batch_idx):
-        x, mask = stack_batch(batch)
+        x, y, mask, x_pos, x_neg = stack_batch(batch)
+
         x = torch.nan_to_num(x)
+        y = y.view(-1, self.output_dim)
 
         x_mean = x[mask].mean(dim=0)
         x[mask] = x_mean
 
         y_hat, mu, logvar, z = self(x)
 
-        if self.target_col is not None:
-            x = x[:, :, self.target_col].unsqueeze(2)
-            y_hat = y_hat[:, self.target_col].unsqueeze(1)
+        mask = mask[:, :, :self.output_dim].view(-1, self.output_dim)
+        loss = self.criterion(y_hat[mask], y[mask])
 
-        y_hat = y_hat.flatten().unsqueeze(1)
-        y = x.flatten().unsqueeze(1)
-        loss = self.criterion(y_hat, y)
+        if x_pos is not None and x_neg is not None:
+            x_pos = torch.nan_to_num(x_pos)
+            x_neg = torch.nan_to_num(x_neg)
+            _, _, _, z_pos = self(x_pos)
+            _, _, _, z_neg = self(x_neg)
+            triplet_loss = self.triplet_loss(z, z_pos, z_neg)
+            loss += triplet_loss * 2.0
+            self.log('triplet_loss', triplet_loss)
 
-        self.log('train_loss', loss)
+        self.log('reconstruction_loss', loss)
+        self.log('train_loss', loss, on_step=True)
+
         return loss
 
     def validation_step(self, batch, batch_idx):
-        y, mask = stack_batch(batch)
-        y = torch.nan_to_num(y)
+        x, y, mask, x_pos, x_neg = stack_batch(batch)
 
-        y_hat, mu, logvar, z = self(y)
+        x = torch.nan_to_num(x)
+        y = y.view(-1, self.output_dim)
+        mask = mask[:, :, :self.output_dim].view(-1, self.output_dim)
 
-        self.y_hat_last.append(y_hat.view(-1, self.tensor_width))
+        y_hat, mu, logvar, z = self(x)
+
+        self.y_hat_last.append(y_hat)
         self.y_last.append(y)
         self.mask.append(mask)
 
-        if self.target_col is not None:
-            y = y[:, :, self.target_col].unsqueeze(2)
-            y_hat = y_hat[:, self.target_col].unsqueeze(1)
+        y = y.flatten()
+        y_hat = y_hat.flatten()
+        loss_mask = mask.flatten()
 
-            y_flat = y.flatten()
-            yh_flat = y_hat.flatten()
-            loss_mask = mask.unsqueeze(2)
-            loss_mask = loss_mask.flatten()
+        y = y[loss_mask]
+        y_hat = y_hat[loss_mask]
 
-            loss_obs = self.criterion(y_flat[loss_mask], yh_flat[loss_mask])
+        # TODO: this should not be necessary
+        nan_mask = ~torch.isnan(y)
 
-        else:
-            y_flat = y[:, :, :self.data_width].flatten()
-            yh_flat = y_hat[:, :self.data_width].flatten()
-            loss_mask = mask.unsqueeze(2).repeat_interleave(y.size(2), dim=2)
-            loss_mask = loss_mask[:, :, :self.data_width].flatten()
+        loss_obs = self.criterion(y[nan_mask], y_hat[nan_mask])
 
-            loss_obs = self.criterion(y_flat[loss_mask], yh_flat[loss_mask])
+        if torch.isnan(loss_obs):
+            a = 1
 
         self.log('val_loss', loss_obs, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
 
@@ -149,79 +164,6 @@ class WeatherAutoencoder(pl.LightningModule):
         self.log('lr_ratio', lr_ratio, on_step=False, on_epoch=True, prog_bar=True)
 
         return loss_obs
-
-    def on_validation_epoch_end(self):
-
-        if self.log_csv:
-
-            if self.current_epoch == 0:
-                train_loss = np.nan
-
-                val_cols = []
-                for p in self.data_columns:
-                    val_cols.append(f'{p}_r2')
-                    val_cols.append(f'{p}_rmse')
-
-                headers = ['epoch', 'train_loss', 'val_loss', 'lr', 'lr_ratio'] + val_cols
-
-                with open(self.log_csv, 'w', newline='\n') as f:
-                    f.seek(0)
-                    writer = csv.writer(f)
-                    writer.writerow(headers)
-
-            else:
-                train_loss = self.trainer.callback_metrics['train_loss'].item()
-
-            val_loss = self.trainer.callback_metrics['val_loss'].item()
-
-            current_lr = self.trainer.optimizers[0].param_groups[0]['lr']
-            lr_ratio = current_lr / self.learning_rate
-
-            log_data = [self.current_epoch,
-                        round(train_loss, 4),
-                        round(val_loss, 4),
-                        round(current_lr, 4),
-                        round(lr_ratio, 4)]
-
-            y = torch.cat(self.y_last, dim=0)
-            y = y.cpu()
-
-            y[:, :, :self.data_width] = self.scaler.inverse_transform(y[:, :, :self.data_width])
-            y = y.view(-1, self.tensor_width)
-
-            y_hat = torch.cat(self.y_hat_last, dim=0)
-            y_hat = y_hat.cpu()
-            y_hat[:, :self.data_width] = self.scaler.inverse_transform(y_hat[:, :self.data_width])
-            y_hat = y_hat.view(-1, self.tensor_width)
-
-            mask = torch.cat(self.mask, dim=0)
-            mask = mask.view(-1)
-            mask = mask.cpu()
-
-            for i, col in enumerate(self.data_columns):
-
-                if self.target_col is not None:
-                    if i != self.target_col:
-                        continue
-
-                obs = y[mask][:, i]
-                pred = y_hat[mask][:, i]
-
-                try:
-                    r2_obs = r2_score(obs, pred)
-                    rmse_obs = root_mean_squared_error(obs, pred)
-                    log_data.extend([round(r2_obs, 4), round(rmse_obs, 4)])
-                except ValueError:
-
-                    log_data.extend([round(np.nan, 4), round(np.nan, 4)])
-
-            with open(self.log_csv, 'a', newline='') as f:
-                writer = csv.writer(f)
-                writer.writerow(log_data)
-
-        self.y_hat_last = []
-        self.y_last = []
-        self.mask = []
 
     def configure_optimizers(self):
         optimizer = optim.Adam(self.parameters(), lr=self.learning_rate, weight_decay=1e-4)
@@ -239,9 +181,25 @@ class WeatherAutoencoder(pl.LightningModule):
 
 
 def stack_batch(batch):
-    x = torch.stack([item[0] for item in batch])
-    mask = torch.stack([item[1] for item in batch])
-    return x, mask
+    x, y, mask, pos, neg = [], [], [], [], []
+
+    for item in batch:
+        if any([i is None for i in item]):
+            continue
+        else:
+            x.append(item[0])
+            y.append(item[1])
+            mask.append(item[2])
+            pos.append(item[3])
+            neg.append(item[4])
+
+    x = torch.stack(x)
+    y = torch.stack(y)
+    mask = torch.stack(mask)
+    pos = torch.stack(pos)
+    neg = torch.stack(neg)
+
+    return x, y, mask, pos, neg
 
 
 if __name__ == '__main__':
