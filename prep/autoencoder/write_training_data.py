@@ -1,5 +1,4 @@
-from xml.etree.ElementInclude import include
-
+import shutil
 import os
 import json
 import random
@@ -45,7 +44,6 @@ def positional_encoding(seq_len, d_model):
 
 def write_pth_training_data(stations, csv_dir, training_metadata, output_dir, chunk_size=72,
                             chunks_per_file=1000, d_model=4, shuffle=False, include_mask=False):
-
     metadata = {'chunk_size': chunk_size,
                 'chunks_per_file': chunks_per_file,
                 'column_order': [],
@@ -210,13 +208,52 @@ def find_first_valid_row(tensor, i, j):
     return None
 
 
+def organize_existing_samples(stations, csv_dir, output_dir):
+
+    gdf = gpd.read_file(stations)
+    gdf.index = gdf['fid']
+    train_split = gdf[['train']]
+
+    files_ = [f for f in os.listdir(csv_dir) if f.endswith('.csv')]
+    names = [f.split('.')[0] for f in files_]
+
+    destiny, stations = [], []
+    for s in names:
+        try:
+            train_status = train_split.loc[s, 'train']
+        except KeyError:
+            continue
+
+        if train_status:
+            destiny.append('train')
+            stations.append(s)
+        else:
+            destiny.append('val')
+            stations.append(s)
+
+    for j, (fate, station) in enumerate(zip(destiny, stations), start=1):
+
+        v_file = os.path.join(output_dir, 'train', '{}.pth'.format(station))
+        t_file = os.path.join(output_dir, 'val', '{}.pth'.format(station))
+
+        if fate == 'train' and os.path.exists(v_file):
+            shutil.move(v_file, t_file)
+            print(f'moved {os.path.basename(v_file)} from val to train')
+
+        elif fate == 'val' and os.path.exists(t_file):
+            shutil.move(t_file, v_file)
+            print(f'moved {os.path.basename(t_file)} from train to val')
+
+        else:
+            pass
+
 if __name__ == '__main__':
 
     d = '/media/research/IrrigationGIS/dads'
     if not os.path.exists(d):
         d = '/home/dgketchum/data/IrrigationGIS/dads'
 
-    shapefile =  '/media/nvm/training/dads/graph/stations.shp'
+    shapefile = os.path.join(d, 'met', 'stations', 'dads_stations_res_elev_mgrs_split.shp')
 
     zoran = '/home/dgketchum/training'
     nvm = '/media/nvm/training'
@@ -250,4 +287,6 @@ if __name__ == '__main__':
     metadata_ = os.path.join(param_dir, 'training_metadata.json')
     write_pth_training_data(shapefile, sta, metadata_, out_pth, chunk_size=365, d_model=4,
                             shuffle=True, include_mask=True)
+
+    # organize_existing_samples(shapefile, sta, out_pth)
 # ========================= EOF ==============================================================================
