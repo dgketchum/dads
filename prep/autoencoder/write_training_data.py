@@ -84,8 +84,8 @@ def write_pth_training_data(stations, csv_dir, training_metadata, output_dir, ch
     first, write_files = True, 0
     for j, (fate, station) in enumerate(zip(destiny, stations), start=1):
 
-        v_file = os.path.join(output_dir, 'train', '{}.pth'.format(station))
-        t_file = os.path.join(output_dir, 'val', '{}.pth'.format(station))
+        t_file = os.path.join(output_dir, 'train', '{}.pth'.format(station))
+        v_file = os.path.join(output_dir, 'val', '{}.pth'.format(station))
 
         if any([os.path.exists(t_file), os.path.exists(v_file)]):
             print('{} exists'.format(station))
@@ -168,8 +168,8 @@ def write_pth_training_data(stations, csv_dir, training_metadata, output_dir, ch
             # if nan_frac > 0.0 and fate == 'val':
             #     continue
 
-            # if nan_frac > 0.5:
-            #     continue
+            if nan_frac > 0.67:
+                continue
 
             # TODO: piece together data if the station is mostly nan
             station_chunks.append(chunk_daily)
@@ -233,8 +233,8 @@ def organize_existing_samples(stations, csv_dir, output_dir):
 
     for j, (fate, station) in enumerate(zip(destiny, stations), start=1):
 
-        v_file = os.path.join(output_dir, 'train', '{}.pth'.format(station))
-        t_file = os.path.join(output_dir, 'val', '{}.pth'.format(station))
+        v_file = os.path.join(output_dir, 'val', '{}.pth'.format(station))
+        t_file = os.path.join(output_dir, 'train', '{}.pth'.format(station))
 
         if fate == 'train' and os.path.exists(v_file):
             shutil.move(v_file, t_file)
@@ -288,5 +288,4 @@ if __name__ == '__main__':
     write_pth_training_data(shapefile, sta, metadata_, out_pth, chunk_size=365, d_model=4,
                             shuffle=True, include_mask=True)
 
-    # organize_existing_samples(shapefile, sta, out_pth)
 # ========================= EOF ==============================================================================
