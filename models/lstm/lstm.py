@@ -98,7 +98,7 @@ class LSTMPredictor(pl.LightningModule):
             val_r2 = self.trainer.callback_metrics['val_r2'].item()
             gm_r2 = self.trainer.callback_metrics['val_r2_gm'].item()
             val_rmse = self.trainer.callback_metrics['val_rmse'].item()
-            gm_rmse = self.trainer.callback_metrics['val_rmse_gm'].item()
+            gm_rmse = self.trainer.callback_metrics['rmse_gm'].item()
             current_lr = self.trainer.optimizers[0].param_groups[0]['lr']
             lr_ratio = current_lr / self.learning_rate
 
@@ -148,7 +148,7 @@ class LSTMPredictor(pl.LightningModule):
         self.log('val_r2_gm', r2_gm, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
 
         self.log('val_rmse', rmse_obs, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
-        self.log('val_rmse_gm', rmse_gm, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
+        self.log('rmse_gm', rmse_gm, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
 
         current_lr = self.trainer.optimizers[0].param_groups[0]['lr']
         self.log('lr', current_lr, on_step=False, on_epoch=True, prog_bar=True)
