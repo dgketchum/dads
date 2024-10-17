@@ -15,11 +15,9 @@ class AttentionGCNConv(nn.Module):
     def __init__(self, in_channels, out_channels, edge_attr_dim):
         super().__init__()
         self.linear = nn.Linear(in_channels, out_channels)
-        self.attn_mlp = nn.Sequential(
-            nn.Linear(1, out_channels),
-            nn.ReLU(),
-            nn.Linear(out_channels, 1)
-        )
+        self.attn_mlp = nn.Sequential(nn.Linear(1, out_channels),
+                                      nn.ReLU(),
+                                      nn.Linear(out_channels, 1))
         self.edge_attr_transform = nn.Linear(edge_attr_dim, out_channels)
 
     def forward(self, data):
@@ -41,13 +39,14 @@ class AttentionGCNConv(nn.Module):
 
 class DadsMetGNN(pl.LightningModule):
     def __init__(self, pretrained_lstm_path, output_dim, n_nodes=5, hidden_dim=64, edge_attr_dim=20,
-                 num_gnn_layers=5, dropout=0.2, learning_rate=1e-3, **lstm_meta):
+                 dropout=0.1, learning_rate=1e-3, **lstm_meta):
 
         super().__init__()
         self.save_hyperparameters()
         self.learning_rate = learning_rate
         self.n_nodes = n_nodes
         self.output_dim = output_dim
+        self.hidden_dim = hidden_dim
         self.criterion = nn.L1Loss()
 
         data_frequency = lstm_meta['data_frequency']
@@ -62,11 +61,8 @@ class DadsMetGNN(pl.LightningModule):
         for param in self.lstm.parameters():
             param.requires_grad = False
 
-        self.gnn_layers = nn.ModuleList()
-        self.norms = nn.ModuleList()
-        for _ in range(num_gnn_layers):
-            self.gnn_layers.append(AttentionGCNConv(hidden_dim, hidden_dim, edge_attr_dim))
-            self.norms.append(LayerNorm(hidden_dim))
+        self.gnn_layer = AttentionGCNConv(hidden_dim, hidden_dim, edge_attr_dim)
+        self.norm = LayerNorm(hidden_dim)
 
         self.lstm_transform = nn.Linear(output_dim, hidden_dim)
         self.dropout = nn.Dropout(dropout)
@@ -83,16 +79,16 @@ class DadsMetGNN(pl.LightningModule):
 
         lstm_feat = self.lstm_transform(lstm_output)
 
-        for i in range(len(self.gnn_layers)):
-            x = self.gnn_layers[i](data)
-            x = F.relu(x)
-            x = self.norms[i](x)
-            x = self.dropout(x)
+        x = self.gnn_layer(data)
+        x = F.relu(x)
+        x = self.norm(x)
+        x = self.dropout(x)
+        x = x.view(-1, self.n_nodes, self.hidden_dim)
 
-        lstm_feat = lstm_feat.repeat_interleave(self.n_nodes, dim=0)
-        combined_features = torch.cat([x, lstm_feat], dim=1)
+        lstm_feat = lstm_feat.unsqueeze(1)
+        lstm_feat = lstm_feat.repeat_interleave(self.n_nodes, dim=1)
+        combined_features = torch.cat([x, lstm_feat], dim=2)
         out = self.fc(combined_features)
-        out = out.view(-1, self.n_nodes, self.output_dim)
         out = out.mean(dim=1)
         return out, lstm_output
 
@@ -126,19 +122,16 @@ class DadsMetGNN(pl.LightningModule):
         y_lstm = y_lstm.detach().cpu().numpy()
         y_gm = y_gm.detach().cpu().numpy()
 
-        # r2_obs = r2_score(y_obs_np, y_hat_obs_np)
-        # r2_gm = r2_score(y_obs_np, y_gm_np)
-
-        rmse_obs_dads = root_mean_squared_error(y_obs, y_hat)
-        rmse_obs_lstm = root_mean_squared_error(y_obs, y_lstm)
+        rmse_dads = root_mean_squared_error(y_obs, y_hat)
+        rmse_lstm = root_mean_squared_error(y_obs, y_lstm)
         rmse_gm = root_mean_squared_error(y_obs, y_gm)
 
         # self.log('val_r2', r2_obs, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
         # self.log('val_r2_gm', r2_gm, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
 
-        self.log('rmse_obs_dads', rmse_obs_dads, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
-        self.log('rmse_obs_lstm', rmse_obs_lstm, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
-        self.log('val_rmse_gm', rmse_gm, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
+        self.log('rmse_dads', rmse_dads, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
+        self.log('rmse_lstm', rmse_lstm, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
+        self.log('rmse_gm', rmse_gm, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
 
         current_lr = self.trainer.optimizers[0].param_groups[0]['lr']
         self.log('lr', current_lr, on_step=False, on_epoch=True, prog_bar=True)
@@ -150,7 +143,7 @@ class DadsMetGNN(pl.LightningModule):
     def configure_optimizers(self):
         optimizer = optim.Adam(self.parameters(), lr=self.learning_rate)
         scheduler = ReduceLROnPlateau(optimizer, mode='min',
-                                      factor=0.5, patience=5)
+                                      factor=0.5, patience=2)
         return {
             'optimizer': optimizer,
             'lr_scheduler': {
