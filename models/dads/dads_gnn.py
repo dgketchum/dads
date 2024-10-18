@@ -4,7 +4,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch import optim as optim
-from torch.optim.lr_scheduler import ReduceLROnPlateau, CosineAnnealingWarmRestarts
+from torch.optim.lr_scheduler import ReduceLROnPlateau
+from torch_scatter import scatter_mean
 from torch_geometric.nn import LayerNorm
 import pytorch_lightning as pl
 from sklearn.metrics import r2_score, root_mean_squared_error
@@ -35,7 +36,7 @@ class AttentionGCNConv(nn.Module):
         attn_weights = self.attn_mlp(agg.unsqueeze(-1))
         attn_weights = torch.softmax(attn_weights, dim=1).squeeze()
         agg = agg * attn_weights
-        agg = torch.zeros_like(x).scatter_add_(0, row.unsqueeze(-1).expand_as(agg), agg)
+        agg = scatter_mean(agg, data.batch, dim=0)
 
         return agg
 
@@ -93,10 +94,11 @@ class DadsMetGNN(pl.LightningModule):
             x = F.relu(x)
             x = self.norms[i](x)
             x = self.dropout(x)
-            x_list.append(x)
+            x_list.append(x.unsqueeze(1))
 
-        x = torch.cat(x_list, dim=0)
-        x = x.view(-1, self.n_nodes * len(self.gnn_layers), self.hidden_dim)
+        if len(x_list) > 1:
+            x = torch.cat(x_list, dim=1)
+
         combined_features = torch.cat([x, lstm_feat], dim=1)
         out = self.fc(combined_features)
         out = out.mean(dim=1)

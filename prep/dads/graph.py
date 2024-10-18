@@ -114,14 +114,16 @@ class Graph:
         gdf_edges['from'] = from_
         gdf_edges['train'] = train
 
-        train_edges = gdf_edges[gdf_edges['train'] == 1].groupby('to')['from'].agg(list).to_dict()
+        # TODO: limit the reach into validation stations when larger receptive field is implemented
+        train_edges = gdf_edges.groupby('to')['from'].agg(list).to_dict()
         with open(os.path.join(self.output_dir, 'train_edge_index.json'), 'w') as f:
             json.dump(train_edges, f)
 
         with open(os.path.join(self.output_dir, 'train_edge_attr.json'), 'w') as f:
             json.dump(train_dct, f)
 
-        val_edges = gdf_edges[gdf_edges['train'] == 0].groupby('to')['from'].agg(list).to_dict()
+        # TODO: limit the reach into validation stations when larger receptive field is implemented
+        val_edges = gdf_edges.groupby('to')['from'].agg(list).to_dict()
         with open(os.path.join(self.output_dir, 'val_edge_index.json'), 'w') as f:
             json.dump(val_edges, f)
 

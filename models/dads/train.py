@@ -69,6 +69,7 @@ class DadsDataset(Dataset):
 
                 if e in node_keys and e in attr_keys:
                     final_edges.append(e)
+
                 if len(final_edges) == n_nodes:
                     if k in node_keys and k in edge_keys:
                         attributes[k] = final_edges
@@ -95,26 +96,47 @@ class DadsDataset(Dataset):
     def __getitem__(self, idx):
         y, gm, sequence, target_station = self.lstm_dataset[idx]
 
-        source_stations = self.edge_map[target_station]
-        source_embeddings = [self.embeddings[stn] for stn in source_stations]
-
-        x = torch.tensor(np.hstack([source_embeddings]), dtype=torch.float)
-
+        current_stations = [target_station]
         data_list = []
+
         for _ in range(self.num_gnn_layers):
-            source_indices = torch.arange(1, len(source_stations) + 1)
-            target_index = torch.tensor([0] * len(source_stations))
-            edge_index = torch.stack([source_indices, target_index], dim=0)
+            next_stations = []
+            source_embeddings = []
+            edge_index_list = []
+            edge_attr_list = []
 
-            to_point = self.edge_attr[target_station]
-            from_point = [to_point - self.edge_attr[stn] for stn in source_stations]
-            edge_attr = torch.stack(from_point, dim=0)
+            for stn in current_stations:
 
-            data = Data(x=x, edge_index=edge_index, edge_attr=edge_attr)
+                try:
+                    neighbors = self.edge_map[stn]
+                except KeyError:
+                    continue
+
+                next_stations.extend(neighbors)
+
+                source_embeddings.extend([self.embeddings[n] for n in neighbors])
+
+                source_indices = torch.arange(1, len(neighbors) + 1)
+                target_index = torch.tensor([0] * len(neighbors))
+                edge_index = torch.stack([source_indices, target_index], dim=0)
+                edge_index_list.append(edge_index)
+
+                to_point = self.edge_attr[stn]
+                from_point = [to_point - self.edge_attr[n] for n in neighbors]
+                edge_attr = torch.stack(from_point, dim=0)
+                edge_attr_list.append(edge_attr)
+
+            all_edge_index = torch.cat(edge_index_list, dim=1)
+            all_edge_attr = torch.cat(edge_attr_list, dim=0)
+
+            x = torch.tensor(np.hstack([source_embeddings]), dtype=torch.float)
+            data = Data(x=x, edge_index=all_edge_index, edge_attr=all_edge_attr)
             data_list.append(data)
 
+            current_stations = next_stations
+
         if self.num_gnn_layers == 1:
-            return data_list[0], y, gm, sequence
+            return data_list, y, gm, sequence
         else:
             return data_list, y, gm, sequence
 
@@ -222,9 +244,9 @@ if __name__ == '__main__':
 
     now = datetime.now().strftime('%m%d%H%M')
     chk = os.path.join(dads, 'checkpoints', now)
-    os.mkdir(chk)
-    logger_csv = os.path.join(chk, 'training_{}.csv'.format(now))
-    # logger_csv = None
+    # os.mkdir(chk)
+    # logger_csv = os.path.join(chk, 'training_{}.csv'.format(now))
+    logger_csv = None
 
     train_model(chk, param_dir, model_dir, encoder_dir, edges, layers=2, batch_size=3, nodes=5, dropout=0.5,
                 learning_rate=0.001, n_workers=workers, logging_csv=logger_csv)
