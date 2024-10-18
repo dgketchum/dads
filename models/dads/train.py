@@ -23,8 +23,11 @@ resource.setrlimit(resource.RLIMIT_NOFILE, (4096, rlimit[1]))
 
 
 class DadsDataset(Dataset):
-    def __init__(self, n_nodes, lstm_input_files, lstm_meta, embedding_dir, edge_map_file, edge_attr_file):
+    def __init__(self, n_nodes, lstm_input_files, lstm_meta, embedding_dir, edge_map_file, edge_attr_file,
+                 num_gnn_layers=1):
         """"""
+
+        self.num_gnn_layers = num_gnn_layers
 
         embedding_dict_file = os.path.join(embedding_dir, 'embeddings.json')
         with open(embedding_dict_file, 'r') as f:
@@ -97,20 +100,27 @@ class DadsDataset(Dataset):
 
         x = torch.tensor(np.hstack([source_embeddings]), dtype=torch.float)
 
-        source_indices = torch.arange(1, len(source_stations) + 1)
-        target_index = torch.tensor([0] * len(source_stations))
-        edge_index = torch.stack([source_indices, target_index], dim=0)
+        data_list = []
+        for _ in range(self.num_gnn_layers):
+            source_indices = torch.arange(1, len(source_stations) + 1)
+            target_index = torch.tensor([0] * len(source_stations))
+            edge_index = torch.stack([source_indices, target_index], dim=0)
 
-        to_point = self.edge_attr[target_station]
-        from_point = [to_point - self.edge_attr[stn] for stn in source_stations]
-        edge_attr = torch.stack(from_point, dim=0)
+            to_point = self.edge_attr[target_station]
+            from_point = [to_point - self.edge_attr[stn] for stn in source_stations]
+            edge_attr = torch.stack(from_point, dim=0)
 
-        data = Data(x=x, edge_index=edge_index, edge_attr=edge_attr)
-        return data, y, gm, sequence
+            data = Data(x=x, edge_index=edge_index, edge_attr=edge_attr)
+            data_list.append(data)
+
+        if self.num_gnn_layers == 1:
+            return data_list[0], y, gm, sequence
+        else:
+            return data_list, y, gm, sequence
 
 
-def train_model(dirpath, lstm_data, lstm_model, embeddings, edge_info, nodes=5, batch_size=1, dropout=0.2,
-                learning_rate=0.01, n_workers=1, logging_csv=None):
+def train_model(dirpath, lstm_data, lstm_model, embeddings, edge_info, layers=3, nodes=5, batch_size=1,
+                dropout=0.2, learning_rate=0.01, n_workers=1, logging_csv=None):
     """"""
 
     metadata_ = os.path.join(lstm_data, 'training_metadata.json')
@@ -121,7 +131,7 @@ def train_model(dirpath, lstm_data, lstm_model, embeddings, edge_info, nodes=5, 
     t_files = [os.path.join(tdir, f) for f in os.listdir(tdir)]
     train_edges = os.path.join(edge_info, 'train_edge_index.json')
     train_attr = os.path.join(edge_info, 'train_edge_attr.json')
-    train_dataset = DadsDataset(nodes, t_files, meta, embeddings, train_edges, train_attr)
+    train_dataset = DadsDataset(nodes, t_files, meta, embeddings, train_edges, train_attr, layers)
     train_dataloader = DataLoader(train_dataset,
                                   batch_size=batch_size,
                                   shuffle=True,
@@ -131,15 +141,15 @@ def train_model(dirpath, lstm_data, lstm_model, embeddings, edge_info, nodes=5, 
     v_files = [os.path.join(vdir, f) for f in os.listdir(vdir)]
     val_edges = os.path.join(edge_info, 'val_edge_index.json')
     val_attr = os.path.join(edge_info, 'val_edge_attr.json')
-    val_dataset = DadsDataset(nodes, v_files, meta, embeddings, val_edges, val_attr)
+    val_dataset = DadsDataset(nodes, v_files, meta, embeddings, val_edges, val_attr, layers)
     val_dataloader = DataLoader(val_dataset,
                                 batch_size=batch_size,
                                 shuffle=False,
                                 num_workers=n_workers)
 
-    model = DadsMetGNN(lstm_model, output_dim=1, n_nodes=nodes, edge_emb_dim=6, hidden_dim=1024, edge_attr_dim=20,
-                       dropout=dropout, learning_rate=learning_rate, freeze_lstm=True,
-                       **meta)
+    model = DadsMetGNN(lstm_model, output_dim=1, gnn_layers=layers, n_nodes=nodes, edge_emb_dim=6, hidden_dim=1024,
+                       edge_attr_dim=20, dropout=dropout, learning_rate=learning_rate, freeze_lstm=True,
+                       log_csv=logging_csv, **meta)
 
     checkpoint_callback = ModelCheckpoint(
         monitor='val_loss',
@@ -179,7 +189,7 @@ if __name__ == '__main__':
     target_var = 'mean_temp'
 
     if device_name == 'NVIDIA GeForce RTX 2080':
-        workers = 6
+        workers = 0
     elif device_name == 'NVIDIA RTX A6000':
         workers = 6
     else:
@@ -204,17 +214,18 @@ if __name__ == '__main__':
     model_dir = os.path.join(param_dir, 'checkpoints', '10170839')
 
     # graph
-    edges = os.path.join(training, 'dads', 'graph')
+    dads = os.path.join(training, 'dads')
+    edges = os.path.join(dads, 'graph')
 
     # climate embedding
     encoder_dir = os.path.join(training, 'autoencoder', 'checkpoints', '10171216')
 
     now = datetime.now().strftime('%m%d%H%M')
-    chk = os.path.join(param_dir, 'checkpoints', now)
-    # os.mkdir(chk)
-    # logger_csv = os.path.join(chk, 'training_{}.csv'.format(now))
-    logger_csv = None
+    chk = os.path.join(dads, 'checkpoints', now)
+    os.mkdir(chk)
+    logger_csv = os.path.join(chk, 'training_{}.csv'.format(now))
+    # logger_csv = None
 
-    train_model(chk, param_dir, model_dir, encoder_dir, edges, batch_size=32, nodes=5, dropout=0.5,
+    train_model(chk, param_dir, model_dir, encoder_dir, edges, layers=2, batch_size=3, nodes=5, dropout=0.5,
                 learning_rate=0.001, n_workers=workers, logging_csv=logger_csv)
 # ========================= EOF ====================================================================

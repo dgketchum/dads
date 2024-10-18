@@ -1,9 +1,10 @@
 import os
+import csv
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch import optim as optim
-from torch.optim.lr_scheduler import ReduceLROnPlateau
+from torch.optim.lr_scheduler import ReduceLROnPlateau, CosineAnnealingWarmRestarts
 from torch_geometric.nn import LayerNorm
 import pytorch_lightning as pl
 from sklearn.metrics import r2_score, root_mean_squared_error
@@ -15,9 +16,11 @@ class AttentionGCNConv(nn.Module):
     def __init__(self, in_channels, out_channels, edge_attr_dim):
         super().__init__()
         self.linear = nn.Linear(in_channels, out_channels)
-        self.attn_mlp = nn.Sequential(nn.Linear(1, out_channels),
-                                      nn.ReLU(),
-                                      nn.Linear(out_channels, 1))
+        self.attn_mlp = nn.Sequential(
+            nn.Linear(1, out_channels),
+            nn.ReLU(),
+            nn.Linear(out_channels, 1)
+        )
         self.edge_attr_transform = nn.Linear(edge_attr_dim, out_channels)
 
     def forward(self, data):
@@ -39,7 +42,7 @@ class AttentionGCNConv(nn.Module):
 
 class DadsMetGNN(pl.LightningModule):
     def __init__(self, pretrained_lstm_path, output_dim, n_nodes=5, hidden_dim=64, edge_attr_dim=20,
-                 dropout=0.1, learning_rate=1e-3, **lstm_meta):
+                 gnn_layers=5, dropout=0.1, learning_rate=1e-3, log_csv=None, **lstm_meta):
 
         super().__init__()
         self.save_hyperparameters()
@@ -48,6 +51,7 @@ class DadsMetGNN(pl.LightningModule):
         self.output_dim = output_dim
         self.hidden_dim = hidden_dim
         self.criterion = nn.L1Loss()
+        self.log_csv = log_csv
 
         data_frequency = lstm_meta['data_frequency']
         lf_bands = data_frequency.count('lf') - 2
@@ -61,12 +65,15 @@ class DadsMetGNN(pl.LightningModule):
         for param in self.lstm.parameters():
             param.requires_grad = False
 
-        self.gnn_layer = AttentionGCNConv(hidden_dim, hidden_dim, edge_attr_dim)
-        self.norm = LayerNorm(hidden_dim)
+        self.gnn_layers = nn.ModuleList()
+        self.norms = nn.ModuleList()
+        for _ in range(gnn_layers):
+            self.gnn_layers.append(AttentionGCNConv(hidden_dim, hidden_dim, edge_attr_dim))
+            self.norms.append(LayerNorm(hidden_dim))
 
         self.lstm_transform = nn.Linear(output_dim, hidden_dim)
         self.dropout = nn.Dropout(dropout)
-        self.fc = nn.Linear(hidden_dim * 2, output_dim)
+        self.fc = nn.Linear(hidden_dim, output_dim)
 
     def forward(self, data, sequence):
         lstm_output = self.lstm(sequence)
@@ -78,16 +85,19 @@ class DadsMetGNN(pl.LightningModule):
             lstm_output = lstm_output.unsqueeze(0)
 
         lstm_feat = self.lstm_transform(lstm_output)
-
-        x = self.gnn_layer(data)
-        x = F.relu(x)
-        x = self.norm(x)
-        x = self.dropout(x)
-        x = x.view(-1, self.n_nodes, self.hidden_dim)
-
         lstm_feat = lstm_feat.unsqueeze(1)
-        lstm_feat = lstm_feat.repeat_interleave(self.n_nodes, dim=1)
-        combined_features = torch.cat([x, lstm_feat], dim=2)
+
+        x_list = []
+        for i in range(len(self.gnn_layers)):
+            x = self.gnn_layers[i](data[i])
+            x = F.relu(x)
+            x = self.norms[i](x)
+            x = self.dropout(x)
+            x_list.append(x)
+
+        x = torch.cat(x_list, dim=0)
+        x = x.view(-1, self.n_nodes * len(self.gnn_layers), self.hidden_dim)
+        combined_features = torch.cat([x, lstm_feat], dim=1)
         out = self.fc(combined_features)
         out = out.mean(dim=1)
         return out, lstm_output
@@ -126,8 +136,13 @@ class DadsMetGNN(pl.LightningModule):
         rmse_lstm = root_mean_squared_error(y_obs, y_lstm)
         rmse_gm = root_mean_squared_error(y_obs, y_gm)
 
-        # self.log('val_r2', r2_obs, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
-        # self.log('val_r2_gm', r2_gm, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
+        r2_dads = r2_score(y_obs, y_hat)
+        r2_lstm = r2_score(y_obs, y_lstm)
+        r2_gm = r2_score(y_obs, y_gm)
+
+        self.log('r2_dads', r2_dads, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
+        self.log('r2_lstm', r2_lstm, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
+        self.log('r2_gm', r2_gm, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
 
         self.log('rmse_dads', rmse_dads, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
         self.log('rmse_lstm', rmse_lstm, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
@@ -139,6 +154,47 @@ class DadsMetGNN(pl.LightningModule):
         # self.log('lr_ratio', lr_ratio, on_step=False, on_epoch=True, prog_bar=True)
 
         return loss_obs
+
+    def on_train_epoch_end(self):
+
+        if self.log_csv:
+            train_loss = self.trainer.callback_metrics['train_loss'].item()
+            val_loss = self.trainer.callback_metrics['val_loss'].item()
+            r2_dads = self.trainer.callback_metrics['r2_dads'].item()
+            r2_lstm = self.trainer.callback_metrics['r2_lstm'].item()
+            r2_gm = self.trainer.callback_metrics['r2_gm'].item()
+            rmse_dads = self.trainer.callback_metrics['rmse_dads'].item()
+            rmse_lstm = self.trainer.callback_metrics['rmse_lstm'].item()
+            rmse_gm = self.trainer.callback_metrics['rmse_gm'].item()
+            current_lr = self.trainer.optimizers[0].param_groups[0]['lr']
+            lr_ratio = current_lr / self.learning_rate
+
+            log_data = [self.current_epoch,
+                        round(train_loss, 4),
+                        round(val_loss, 4),
+                        round(r2_dads, 4),
+                        round(r2_lstm, 4),
+                        round(r2_gm, 4),
+                        round(rmse_dads, 4),
+                        round(rmse_lstm, 4),
+                        round(rmse_gm, 4),
+                        round(current_lr, 4),
+                        round(lr_ratio, 4)]
+
+            with open(self.log_csv, 'a', newline='') as f:
+                writer = csv.writer(f)
+                writer.writerow(log_data)
+
+            if self.current_epoch == 0:
+                with open(self.log_csv, 'r+', newline='') as f:
+                    reader = csv.reader(f)
+                    header = next(reader)
+                    f.seek(0)
+                    writer = csv.writer(f)
+                    writer.writerow(['epoch', 'train_loss', 'val_loss', 'r2_dads', 'r2_lstm', 'r2_gm',
+                                     'rmse_dads', 'rmse_lstm', 'rmse_gm',
+                                     'lr', 'lr_ratio'])
+                    writer.writerow(header)
 
     def configure_optimizers(self):
         optimizer = optim.Adam(self.parameters(), lr=self.learning_rate)
