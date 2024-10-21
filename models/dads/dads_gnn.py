@@ -1,14 +1,15 @@
-import os
 import csv
+import os
+
+import pytorch_lightning as pl
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
+from pytorch_lightning.callbacks import Callback
+from sklearn.metrics import r2_score, root_mean_squared_error
+from torch import nn
 from torch import optim as optim
 from torch.optim.lr_scheduler import ReduceLROnPlateau
-from torch_scatter import scatter_mean
 from torch_geometric.nn import LayerNorm
-import pytorch_lightning as pl
-from sklearn.metrics import r2_score, root_mean_squared_error
 
 from models.simple_lstm.lstm import LSTMPredictor
 
@@ -16,12 +17,11 @@ from models.simple_lstm.lstm import LSTMPredictor
 class AttentionGCNConv(nn.Module):
     def __init__(self, in_channels, out_channels, edge_attr_dim):
         super().__init__()
+        self.out_channels = out_channels
         self.linear = nn.Linear(in_channels, out_channels)
-        self.attn_mlp = nn.Sequential(
-            nn.Linear(1, out_channels),
-            nn.ReLU(),
-            nn.Linear(out_channels, 1)
-        )
+        self.attn_mlp = nn.Sequential(nn.Linear(1, out_channels),
+                                      nn.ReLU(),
+                                      nn.Linear(out_channels, 1))
         self.edge_attr_transform = nn.Linear(edge_attr_dim, out_channels)
 
     def forward(self, data):
@@ -32,19 +32,19 @@ class AttentionGCNConv(nn.Module):
         edge_attr = self.edge_attr_transform(edge_attr)
         node_vec = torch.index_select(x, 0, col)
 
-        agg = node_vec * edge_attr
-        attn_weights = self.attn_mlp(agg.unsqueeze(-1))
+        combined_feat = torch.cat([node_vec, edge_attr], dim=-1)
+        attn_weights = self.attn_mlp(combined_feat.unsqueeze(-1))
         attn_weights = torch.softmax(attn_weights, dim=1).squeeze()
-        agg = agg * attn_weights
-        agg = scatter_mean(agg, data.batch, dim=0)
+
+        node_vec = torch.index_select(x, 0, col).repeat_interleave(2, dim=1)
+        agg = node_vec * attn_weights
 
         return agg
 
 
 class DadsMetGNN(pl.LightningModule):
-    def __init__(self, pretrained_lstm_path, output_dim, n_nodes=5, hidden_dim=64, edge_attr_dim=20,
-                 gnn_layers=5, dropout=0.1, learning_rate=1e-3, log_csv=None, **lstm_meta):
-
+    def __init__(self, pretrained_lstm_path, output_dim, n_nodes=5, hidden_dim=64,
+                 edge_attr_dim=20, dropout=0.1, learning_rate=1e-3, log_csv=None, **lstm_meta):
         super().__init__()
         self.save_hyperparameters()
         self.learning_rate = learning_rate
@@ -66,15 +66,12 @@ class DadsMetGNN(pl.LightningModule):
         for param in self.lstm.parameters():
             param.requires_grad = False
 
-        self.gnn_layers = nn.ModuleList()
-        self.norms = nn.ModuleList()
-        for _ in range(gnn_layers):
-            self.gnn_layers.append(AttentionGCNConv(hidden_dim, hidden_dim, edge_attr_dim))
-            self.norms.append(LayerNorm(hidden_dim))
+        self.gnn_layer = AttentionGCNConv(hidden_dim, hidden_dim, edge_attr_dim)
+        self.norm = LayerNorm(hidden_dim * 2)
 
         self.lstm_transform = nn.Linear(output_dim, hidden_dim)
         self.dropout = nn.Dropout(dropout)
-        self.fc = nn.Linear(hidden_dim, output_dim)
+        self.fc = nn.Linear(hidden_dim * 2, output_dim)
 
     def forward(self, data, sequence):
         lstm_output = self.lstm(sequence)
@@ -86,19 +83,16 @@ class DadsMetGNN(pl.LightningModule):
             lstm_output = lstm_output.unsqueeze(0)
 
         lstm_feat = self.lstm_transform(lstm_output)
+
+        x = self.gnn_layer(data)
+        x = self.norm(x)
+        x = F.relu(x)
+        x = self.dropout(x)
+        x = x.view(-1, self.n_nodes, self.hidden_dim * 2)
+
         lstm_feat = lstm_feat.unsqueeze(1)
-
-        x_list = []
-        for i in range(len(self.gnn_layers)):
-            x = self.gnn_layers[i](data[i])
-            x = F.relu(x)
-            x = self.norms[i](x)
-            x = self.dropout(x)
-            x_list.append(x.unsqueeze(1))
-
-        if len(x_list) > 1:
-            x = torch.cat(x_list, dim=1)
-
+        lstm_feat = lstm_feat.repeat_interleave(self.n_nodes, dim=1)
+        lstm_feat = lstm_feat.repeat_interleave(2, dim=2)
         combined_features = torch.cat([x, lstm_feat], dim=1)
         out = self.fc(combined_features)
         out = out.mean(dim=1)
@@ -108,17 +102,18 @@ class DadsMetGNN(pl.LightningModule):
         data, y, _, sequence = batch
         out, lstm = self(data, sequence)
         y = y[:, -1:]
+
         loss = F.mse_loss(out, y)
         self.log('train_loss', loss)
         return loss
 
     def validation_step(self, batch, batch_idx):
-        data, y_obs, gm, sequence = batch
+        data, y_obs, y_gm, sequence = batch
         y_hat, lstm = self(data, sequence)
         y_hat = y_hat.squeeze()
         y_lstm = lstm.squeeze()
         y_obs = y_obs[:, -1]
-        y_gm = gm[:, -1]
+        y_gm = y_gm[:, -1]
 
         loss_obs = self.criterion(y_hat, y_obs)
         self.log('val_loss', loss_obs, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
@@ -209,6 +204,22 @@ class DadsMetGNN(pl.LightningModule):
                 'monitor': 'val_loss'
             }
         }
+
+
+class LRChangeCallback(Callback):
+    def __init__(self, checkpoint_path):
+        self.previous_lr = None
+        self.checkpoint_path = checkpoint_path
+
+    def on_train_epoch_start(self, trainer, pl_module):
+        optimizer = trainer.optimizers[0]
+        current_lr = optimizer.param_groups[0]['lr']
+
+        if self.previous_lr is None:
+            self.previous_lr = current_lr
+        elif self.previous_lr != current_lr:
+            DadsMetGNN.load_from_checkpoint(checkpoint_path=self.checkpoint_path)
+            self.previous_lr = current_lr
 
 
 if __name__ == '__main__':

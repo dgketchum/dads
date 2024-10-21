@@ -11,9 +11,10 @@ from pytorch_lightning.callbacks import ModelCheckpoint, EarlyStopping
 from torch.utils.data import Dataset
 from torch_geometric.loader import DataLoader
 from models.simple_lstm.train import PTHLSTMDataset
-from models.scalers import MinMaxScaler
+from pytorch_lightning.callbacks import LearningRateMonitor
 
-from models.dads.dads_gnn import DadsMetGNN
+
+from models.dads.dads_gnn import DadsMetGNN, LRChangeCallback
 
 torch.set_float32_matmul_precision('medium')
 torch.cuda.get_device_name(torch.cuda.current_device())
@@ -23,11 +24,8 @@ resource.setrlimit(resource.RLIMIT_NOFILE, (4096, rlimit[1]))
 
 
 class DadsDataset(Dataset):
-    def __init__(self, n_nodes, lstm_input_files, lstm_meta, embedding_dir, edge_map_file, edge_attr_file,
-                 num_gnn_layers=1):
+    def __init__(self, n_nodes, lstm_input_files, lstm_meta, embedding_dir, edge_map_file, edge_attr_file):
         """"""
-
-        self.num_gnn_layers = num_gnn_layers
 
         embedding_dict_file = os.path.join(embedding_dir, 'embeddings.json')
         with open(embedding_dict_file, 'r') as f:
@@ -48,7 +46,6 @@ class DadsDataset(Dataset):
         with open(edge_map_file, 'r') as f:
             edge_map = json.load(f)
 
-        # restrict input data to those stations for which we have embeddings and edge attributes
         node_keys = list(self.embeddings.keys())
         attr_keys = list(self.edge_attr.keys())
         edge_keys = list(edge_map.keys())
@@ -96,53 +93,25 @@ class DadsDataset(Dataset):
     def __getitem__(self, idx):
         y, gm, sequence, target_station = self.lstm_dataset[idx]
 
-        current_stations = [target_station]
-        data_list = []
+        source_stations = self.edge_map[target_station]
+        source_embeddings = [self.embeddings[stn] for stn in source_stations]
 
-        for _ in range(self.num_gnn_layers):
-            next_stations = []
-            source_embeddings = []
-            edge_index_list = []
-            edge_attr_list = []
+        x = torch.tensor(np.hstack([source_embeddings]), dtype=torch.float)
 
-            for stn in current_stations:
+        source_indices = torch.arange(1, len(source_stations) + 1)
+        target_index = torch.tensor([0] * len(source_stations))
+        edge_index = torch.stack([source_indices, target_index], dim=0)
 
-                try:
-                    neighbors = self.edge_map[stn]
-                except KeyError:
-                    continue
+        to_point = self.edge_attr[target_station]
+        from_point = [to_point - self.edge_attr[stn] for stn in source_stations]
+        edge_attr = torch.stack(from_point, dim=0)
 
-                next_stations.extend(neighbors)
-
-                source_embeddings.extend([self.embeddings[n] for n in neighbors])
-
-                source_indices = torch.arange(1, len(neighbors) + 1)
-                target_index = torch.tensor([0] * len(neighbors))
-                edge_index = torch.stack([source_indices, target_index], dim=0)
-                edge_index_list.append(edge_index)
-
-                to_point = self.edge_attr[stn]
-                from_point = [to_point - self.edge_attr[n] for n in neighbors]
-                edge_attr = torch.stack(from_point, dim=0)
-                edge_attr_list.append(edge_attr)
-
-            all_edge_index = torch.cat(edge_index_list, dim=1)
-            all_edge_attr = torch.cat(edge_attr_list, dim=0)
-
-            x = torch.tensor(np.hstack([source_embeddings]), dtype=torch.float)
-            data = Data(x=x, edge_index=all_edge_index, edge_attr=all_edge_attr)
-            data_list.append(data)
-
-            current_stations = next_stations
-
-        if self.num_gnn_layers == 1:
-            return data_list, y, gm, sequence
-        else:
-            return data_list, y, gm, sequence
+        data = Data(x=x, edge_index=edge_index, edge_attr=edge_attr)
+        return data, y, gm, sequence
 
 
-def train_model(dirpath, lstm_data, lstm_model, embeddings, edge_info, layers=3, nodes=5, batch_size=1,
-                dropout=0.2, learning_rate=0.01, n_workers=1, logging_csv=None):
+def train_model(dirpath, lstm_data, lstm_model, embeddings, edge_info, nodes=5, batch_size=1,
+                dropout=0.2, learning_rate=0.01, n_workers=1, logging_csv=None, device='gpu'):
     """"""
 
     metadata_ = os.path.join(lstm_data, 'training_metadata.json')
@@ -153,7 +122,7 @@ def train_model(dirpath, lstm_data, lstm_model, embeddings, edge_info, layers=3,
     t_files = [os.path.join(tdir, f) for f in os.listdir(tdir)]
     train_edges = os.path.join(edge_info, 'train_edge_index.json')
     train_attr = os.path.join(edge_info, 'train_edge_attr.json')
-    train_dataset = DadsDataset(nodes, t_files, meta, embeddings, train_edges, train_attr, layers)
+    train_dataset = DadsDataset(nodes, t_files, meta, embeddings, train_edges, train_attr)
     train_dataloader = DataLoader(train_dataset,
                                   batch_size=batch_size,
                                   shuffle=True,
@@ -163,13 +132,13 @@ def train_model(dirpath, lstm_data, lstm_model, embeddings, edge_info, layers=3,
     v_files = [os.path.join(vdir, f) for f in os.listdir(vdir)]
     val_edges = os.path.join(edge_info, 'val_edge_index.json')
     val_attr = os.path.join(edge_info, 'val_edge_attr.json')
-    val_dataset = DadsDataset(nodes, v_files, meta, embeddings, val_edges, val_attr, layers)
+    val_dataset = DadsDataset(nodes, v_files, meta, embeddings, val_edges, val_attr)
     val_dataloader = DataLoader(val_dataset,
                                 batch_size=batch_size,
                                 shuffle=False,
                                 num_workers=n_workers)
 
-    model = DadsMetGNN(lstm_model, output_dim=1, gnn_layers=layers, n_nodes=nodes, edge_emb_dim=6, hidden_dim=1024,
+    model = DadsMetGNN(lstm_model, output_dim=1, n_nodes=nodes, edge_emb_dim=6, hidden_dim=1024,
                        edge_attr_dim=20, dropout=dropout, learning_rate=learning_rate, freeze_lstm=True,
                        log_csv=logging_csv, **meta)
 
@@ -190,8 +159,8 @@ def train_model(dirpath, lstm_data, lstm_model, embeddings, edge_info, layers=3,
         check_finite=True,
     )
 
-    trainer = pl.Trainer(max_epochs=1000, callbacks=[checkpoint_callback, early_stop_callback],
-                         accelerator='gpu', devices=1)
+    trainer = pl.Trainer(max_epochs=100, callbacks=[checkpoint_callback, early_stop_callback],
+                         accelerator=device, devices=1)
     trainer.fit(model, train_dataloader, val_dataloader)
 
 
@@ -210,13 +179,6 @@ if __name__ == '__main__':
 
     target_var = 'mean_temp'
 
-    if device_name == 'NVIDIA GeForce RTX 2080':
-        workers = 0
-    elif device_name == 'NVIDIA RTX A6000':
-        workers = 6
-    else:
-        raise NotImplementedError('Specify the machine this is running on')
-
     zoran = '/home/dgketchum/training'
     nvm = '/media/nvm/training'
     if os.path.exists(zoran):
@@ -233,7 +195,7 @@ if __name__ == '__main__':
 
     # lstm model
     param_dir = os.path.join(training, 'simple_lstm', target_var)
-    model_dir = os.path.join(param_dir, 'checkpoints', '10170839')
+    model_dir = os.path.join(param_dir, 'checkpoints', '10181509')
 
     # graph
     dads = os.path.join(training, 'dads')
@@ -244,10 +206,12 @@ if __name__ == '__main__':
 
     now = datetime.now().strftime('%m%d%H%M')
     chk = os.path.join(dads, 'checkpoints', now)
-    # os.mkdir(chk)
-    # logger_csv = os.path.join(chk, 'training_{}.csv'.format(now))
-    logger_csv = None
+    os.mkdir(chk)
+    logger_csv = os.path.join(chk, 'training_{}.csv'.format(now))
+    # logger_csv = None
+    workers = 6
+    device_ = 'gpu'
 
-    train_model(chk, param_dir, model_dir, encoder_dir, edges, layers=2, batch_size=3, nodes=5, dropout=0.5,
-                learning_rate=0.001, n_workers=workers, logging_csv=logger_csv)
+    train_model(chk, param_dir, model_dir, encoder_dir, edges, batch_size=32, nodes=5, dropout=0.5,
+                learning_rate=0.001, n_workers=workers, logging_csv=logger_csv, device=device_)
 # ========================= EOF ====================================================================
