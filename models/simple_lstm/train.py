@@ -103,7 +103,8 @@ def custom_collate(batch):
     return default_collate(batch)
 
 
-def train_model(dirpath, pth, metadata, batch_size=1, learning_rate=0.01, n_workers=1, logging_csv=None):
+def train_model(dirpath, sequence_data, metadata, batch_size=1, learning_rate=0.01, n_workers=1,
+                strided=False, logging_csv=None):
     """"""
 
     with open(metadata, 'r') as f:
@@ -116,10 +117,10 @@ def train_model(dirpath, pth, metadata, batch_size=1, learning_rate=0.01, n_work
     print('tensor cols: {}'.format(tensor_width))
     chunk_size = meta['chunk_size']
 
-    model = LSTMPredictor(num_bands=lf_bands,
-                          learning_rate=learning_rate,
-                          dropout_rate=0.3,
-                          log_csv=logging_csv)
+    if strided:
+        pth = os.path.join(sequence_data, 'strided_pth')
+    else:
+        pth = os.path.join(sequence_data, 'consecutive_pth')
 
     tdir = os.path.join(pth, 'train')
     t_files = [os.path.join(tdir, f) for f in os.listdir(tdir)]
@@ -145,6 +146,13 @@ def train_model(dirpath, pth, metadata, batch_size=1, learning_rate=0.01, n_work
 
     val_dataloader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=n_workers,
                                 collate_fn=custom_collate)
+
+    model = LSTMPredictor(num_bands=lf_bands,
+                          learning_rate=learning_rate,
+                          dropout_rate=0.3,
+                          expansion_factor=24,
+                          log_csv=logging_csv,
+                          scaler=train_dataset.scaler)
 
     print(f"Number of training samples: {len(train_dataset)}")
     print(f"Number of validation samples: {len(val_dataset)}")
@@ -201,7 +209,6 @@ if __name__ == '__main__':
     print('========================== modeling {} =========================='.format(target_var))
 
     param_dir = os.path.join(training, target_var)
-    pth_ = os.path.join(param_dir, 'pth')
     metadata_ = os.path.join(param_dir, 'training_metadata.json')
 
     now = datetime.now().strftime('%m%d%H%M')
@@ -209,5 +216,6 @@ if __name__ == '__main__':
     os.mkdir(chk)
     logger_csv = os.path.join(chk, 'training_{}.csv'.format(now))
 
-    train_model(chk, pth_, metadata_, batch_size=256, learning_rate=0.0005, n_workers=workers, logging_csv=logger_csv)
+    train_model(chk, param_dir, metadata_, batch_size=256, learning_rate=0.001, n_workers=workers,
+                logging_csv=logger_csv, strided=False)
 # ========================= EOF ====================================================================

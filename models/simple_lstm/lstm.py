@@ -17,7 +17,9 @@ class LSTMPredictor(pl.LightningModule):
                  learning_rate=0.01,
                  expansion_factor=2,
                  dropout_rate=0.1,
-                 log_csv=None):
+                 log_csv=None,
+                 scaler=None):
+
         super().__init__()
 
         self.input_expansion = nn.Sequential(
@@ -46,6 +48,7 @@ class LSTMPredictor(pl.LightningModule):
         self.criterion = nn.L1Loss()
         self.learning_rate = learning_rate
         self.log_csv = log_csv
+        self.scaler = scaler
 
     def forward(self, x):
         x = x.squeeze()
@@ -55,16 +58,16 @@ class LSTMPredictor(pl.LightningModule):
         if len(x.shape) == 2:
             out = out.unsqueeze(0)
 
-        out = out[:, -1, :]
+        # out = out[:, -1, :]
 
         out = self.fc1(out)
         out = self.output_layers(out).squeeze()
         return out
 
     def training_step(self, batch, batch_idx):
-        y, gm, lf = stack_batch(batch)
+        y_obs, gm, lf = stack_batch(batch)
         y_hat = self(lf)
-        y_obs = y[:, -1]
+        # y_obs = y_obs[:, -1]
 
         loss = self.criterion(y_hat, y_obs)
         self.log('train_loss', loss)
@@ -107,20 +110,24 @@ class LSTMPredictor(pl.LightningModule):
                     writer.writerow(header)
 
     def validation_step(self, batch, batch_idx):
-        y, gm, lf = batch
+        y_obs, y_gm, lf = batch
         y_hat = self(lf)
-        y_obs = y[:, -1]
-        y_gm = gm[:, -1]
+        # y_obs = y_obs[:, -1]
+        # y_gm = y_gm[:, -1]
 
         loss_obs = self.criterion(y_hat, y_obs)
         self.log('val_loss', loss_obs, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
 
-        y_hat_obs_np = y_hat.detach().cpu().numpy()
+        y_obs = self.inverse_transform(y_obs, idx=0)
+        y_hat = self.inverse_transform(y_hat, idx=1)
+        y_gm = self.inverse_transform(y_gm, idx=2)
+
+        y_hat_np = y_hat.detach().cpu().numpy()
         y_obs_np = y_obs.detach().cpu().numpy()
         y_gm_np = y_gm.detach().cpu().numpy()
 
-        r2_obs = r2_score(y_obs_np, y_hat_obs_np)
-        rmse_obs = root_mean_squared_error(y_obs_np, y_hat_obs_np)
+        r2_obs = r2_score(y_obs_np, y_hat_np)
+        rmse_obs = root_mean_squared_error(y_obs_np, y_hat_np)
         r2_gm = r2_score(y_obs_np, y_gm_np)
         rmse_gm = root_mean_squared_error(y_obs_np, y_gm_np)
 
@@ -147,6 +154,10 @@ class LSTMPredictor(pl.LightningModule):
                 'monitor': 'val_loss'
             }
         }
+
+    def inverse_transform(self, a, idx):
+        a = a * (self.scaler.scale[0, -1, idx] + 5e-8) + self.scaler.bias[0, -1, idx]
+        return a
 
 
 def stack_batch(batch):
