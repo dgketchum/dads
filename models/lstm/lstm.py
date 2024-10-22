@@ -44,7 +44,7 @@ class LSTMPredictor(pl.LightningModule):
         self.lstm_lf = nn.LSTM(num_bands_lf * expansion_factor * 4, hidden_size, num_layers, batch_first=True,
                                bidirectional=True)
 
-        self.fc1 = nn.Linear(2 * hidden_size, hidden_size * 4)
+        self.fc1 = nn.Linear(4 * hidden_size, hidden_size * 4)
 
         self.output_layers = nn.Sequential(
             nn.ReLU(),
@@ -55,7 +55,7 @@ class LSTMPredictor(pl.LightningModule):
             nn.Linear(hidden_size, 1)
         )
 
-        self.attn = nn.Linear(2 * hidden_size, 1)
+        self.attn = nn.Linear(4 * hidden_size, 1)
 
         self.criterion = nn.L1Loss()
         self.learning_rate = learning_rate
@@ -64,20 +64,20 @@ class LSTMPredictor(pl.LightningModule):
         self.scaler = scaler
 
     def forward(self, x_lf, x_hf):
-        # x_lf = x_lf.squeeze()
-        # x_lf = self.input_expansion_lf(x_lf)
-        # out_lf, _ = self.lstm_lf(x_lf)
-        # out_lf = out_lf[:, -1, :]
+        x_lf = x_lf.squeeze()
+        x_lf = self.input_expansion_lf(x_lf)
+        out_lf, _ = self.lstm_lf(x_lf)
+        out_lf = out_lf[:, -1, :]
 
         x_hf = x_hf.squeeze()
         x_hf = self.input_expansion_hf(x_hf)
         out_hf, _ = self.lstm_hf(x_hf)
         out_hf = out_hf[:, -1, :]
 
-        # cat_out = torch.cat((out_hf, out_lf), dim=1)
-        attn_weights = torch.softmax(self.attn(out_hf), dim=1)
+        cat_out = torch.cat((out_hf, out_lf), dim=1)
+        attn_weights = torch.softmax(self.attn(cat_out), dim=1)
         attn_weights = attn_weights.unsqueeze(-1)
-        combined = torch.sum(attn_weights * out_hf.unsqueeze(1), dim=1)
+        combined = torch.sum(attn_weights * cat_out.unsqueeze(1), dim=1)
 
         out = self.fc1(combined)
         out = self.output_layers(out).squeeze()

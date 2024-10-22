@@ -111,7 +111,7 @@ def train_model(dirpath, pth, metadata, batch_size=1, learning_rate=0.01, n_work
     chunk_size = meta['chunk_size']
 
     tdir = os.path.join(pth, 'train')
-    t_files = [os.path.join(tdir, f) for f in os.listdir(tdir)][:300]
+    t_files = [os.path.join(tdir, f) for f in os.listdir(tdir)]
     train_dataset = PTHLSTMDataset(file_paths=t_files,
                                    col_index=idxs,
                                    expected_width=tensor_width,
@@ -126,7 +126,7 @@ def train_model(dirpath, pth, metadata, batch_size=1, learning_rate=0.01, n_work
                                   collate_fn=lambda batch: [x for x in batch if x is not None])
 
     vdir = os.path.join(pth, 'val')
-    v_files = [os.path.join(vdir, f) for f in os.listdir(vdir)][:100]
+    v_files = [os.path.join(vdir, f) for f in os.listdir(vdir)]
     val_dataset = PTHLSTMDataset(file_paths=v_files,
                                  col_index=idxs,
                                  expected_width=tensor_width,
@@ -138,6 +138,7 @@ def train_model(dirpath, pth, metadata, batch_size=1, learning_rate=0.01, n_work
     model = LSTMPredictor(num_bands_lf=lf_bands,
                           num_bands_hf=hf_bands,
                           learning_rate=learning_rate,
+                          expansion_factor=8,
                           log_csv=logging_csv,
                           scaler=train_dataset.scaler)
 
@@ -177,7 +178,7 @@ if __name__ == '__main__':
     if device_name == 'NVIDIA GeForce RTX 2080':
         workers = 6
     elif device_name == 'NVIDIA RTX A6000':
-        workers = 6
+        workers = 12
     else:
         raise NotImplementedError('Specify the machine this is running on')
 
@@ -203,6 +204,7 @@ if __name__ == '__main__':
     chk = os.path.join(param_dir, 'checkpoints', now)
     os.mkdir(chk)
     logger_csv = os.path.join(chk, 'training_{}.csv'.format(now))
+    # logger_csv = None
 
-    train_model(chk, pth_, metadata_, batch_size=512, learning_rate=0.001, n_workers=workers, logging_csv=logger_csv)
+    train_model(chk, pth_, metadata_, batch_size=64, learning_rate=0.001, n_workers=workers, logging_csv=logger_csv)
 # ========================= EOF ====================================================================
