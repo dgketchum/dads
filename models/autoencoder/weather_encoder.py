@@ -14,14 +14,16 @@ class FCEncoder(nn.Module):
     def __init__(self, input_dim, hidden_size, dropout):
         super(FCEncoder, self).__init__()
         self.fc1 = nn.Linear(input_dim, hidden_size)
-        self.fc_mu = nn.Linear(hidden_size, hidden_size)
-        self.fc_logvar = nn.Linear(hidden_size, hidden_size)
+        self.fc2 = nn.Linear(hidden_size, hidden_size // 2)
+        self.fc_mu = nn.Linear(hidden_size // 2, hidden_size // 2)
+        self.fc_logvar = nn.Linear(hidden_size // 2, hidden_size // 2)
         self.dropout = nn.Dropout(dropout)
 
     def forward(self, x):
         h1 = F.relu(self.fc1(self.dropout(x)))
-        mu = self.fc_mu(h1)
-        logvar = self.fc_logvar(h1)
+        h2 = F.relu(self.fc2(h1))
+        mu = self.fc_mu(h2)
+        logvar = self.fc_logvar(h2)
         return mu, logvar
 
 
