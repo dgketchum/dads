@@ -43,19 +43,22 @@ class AttentionGCNConv(nn.Module):
 
 
 class DadsMetGNN(pl.LightningModule):
-    def __init__(self, pretrained_lstm_path, output_dim, n_nodes=5, hidden_dim=64,
-                 edge_attr_dim=20, dropout=0.1, learning_rate=1e-3, log_csv=None, **lstm_meta):
+    def __init__(self, pretrained_lstm_path, output_dim, n_nodes=5, hidden_dim=64, edge_attr_dim=20,
+                 dropout=0.1, learning_rate=1e-3, log_csv=None, **lstm_meta):
         super().__init__()
         self.save_hyperparameters()
         self.learning_rate = learning_rate
         self.n_nodes = n_nodes
         self.output_dim = output_dim
         self.hidden_dim = hidden_dim
-        self.criterion = nn.L1Loss()
+        self.criterion = nn.MSELoss()
         self.log_csv = log_csv
 
         data_frequency = lstm_meta['data_frequency']
         lf_bands = data_frequency.count('lf') - 2
+        self.column_indices = lstm_meta['column_indices']
+        self.tensor_width = lstm_meta['tensor_width']
+        self.scaler = lstm_meta['scaler']
 
         model_path = os.path.join(pretrained_lstm_path, 'best_model.ckpt')
         self.lstm = LSTMPredictor.load_from_checkpoint(model_path,
@@ -82,6 +85,11 @@ class DadsMetGNN(pl.LightningModule):
             lstm_output = lstm_output.unsqueeze(0)
             lstm_output = lstm_output.unsqueeze(0)
 
+        try:
+            lstm_output = lstm_output[:, :, -1:]
+        except:
+            lstm_output = lstm_output[:, -1:]
+
         lstm_feat = self.lstm_transform(lstm_output)
 
         x = self.gnn_layer(data)
@@ -90,7 +98,6 @@ class DadsMetGNN(pl.LightningModule):
         x = self.dropout(x)
         x = x.view(-1, self.n_nodes, self.hidden_dim * 2)
 
-        lstm_feat = lstm_feat.unsqueeze(1)
         lstm_feat = lstm_feat.repeat_interleave(self.n_nodes, dim=1)
         lstm_feat = lstm_feat.repeat_interleave(2, dim=2)
         combined_features = torch.cat([x, lstm_feat], dim=1)
@@ -116,13 +123,19 @@ class DadsMetGNN(pl.LightningModule):
         y_gm = y_gm[:, -1]
 
         loss_obs = self.criterion(y_hat, y_obs)
-        self.log('val_loss', loss_obs, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
+        self.log('val_loss', loss_obs, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True,
+                 batch_size=data.batch_size)
 
         if len(y_hat.shape) < 1:
             y_obs = y_obs.unsqueeze(0)
             y_hat = y_hat.unsqueeze(0)
             y_lstm = y_lstm.unsqueeze(0)
             y_gm = y_gm.unsqueeze(0)
+
+        y_obs = self.inverse_transform(y_obs, idx=self.column_indices[0])
+        y_hat = self.inverse_transform(y_hat, idx=self.column_indices[1])
+        y_lstm = self.inverse_transform(y_lstm, idx=self.column_indices[1])
+        y_gm = self.inverse_transform(y_gm, idx=self.column_indices[2])
 
         y_obs = y_obs.detach().cpu().numpy()
         y_hat = y_hat.detach().cpu().numpy()
@@ -137,22 +150,29 @@ class DadsMetGNN(pl.LightningModule):
         r2_lstm = r2_score(y_obs, y_lstm)
         r2_gm = r2_score(y_obs, y_gm)
 
-        self.log('r2_dads', r2_dads, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
-        self.log('r2_lstm', r2_lstm, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
-        self.log('r2_gm', r2_gm, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
+        self.log('r2_dads', r2_dads, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True,
+                 batch_size=data.batch_size)
+        self.log('r2_lstm', r2_lstm, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True,
+                 batch_size=data.batch_size)
+        self.log('r2_gm', r2_gm, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True,
+                 batch_size=data.batch_size)
 
-        self.log('rmse_dads', rmse_dads, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
-        self.log('rmse_lstm', rmse_lstm, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
-        self.log('rmse_gm', rmse_gm, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
+        self.log('rmse_dads', rmse_dads, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True,
+                 batch_size=data.batch_size)
+        self.log('rmse_lstm', rmse_lstm, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True,
+                 batch_size=data.batch_size)
+        self.log('rmse_gm', rmse_gm, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True,
+                 batch_size=data.batch_size)
 
         current_lr = self.trainer.optimizers[0].param_groups[0]['lr']
-        self.log('lr', current_lr, on_step=False, on_epoch=True, prog_bar=True)
+        self.log('lr', current_lr, on_step=False, on_epoch=True, prog_bar=True,
+                 batch_size=data.batch_size)
         # lr_ratio = current_lr / self.learning_rate
         # self.log('lr_ratio', lr_ratio, on_step=False, on_epoch=True, prog_bar=True)
 
         return loss_obs
 
-    def on_train_epoch_end(self):
+    def on_validation_epoch_end(self):
 
         if self.log_csv:
             train_loss = self.trainer.callback_metrics['train_loss'].item()
@@ -204,6 +224,10 @@ class DadsMetGNN(pl.LightningModule):
                 'monitor': 'val_loss'
             }
         }
+
+    def inverse_transform(self, a, idx):
+        a = a * (self.scaler.scale[0, -1, idx] + 5e-8) + self.scaler.bias[0, -1, idx]
+        return a
 
 
 class LRChangeCallback(Callback):
