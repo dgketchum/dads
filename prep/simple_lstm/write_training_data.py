@@ -27,7 +27,7 @@ def print_rmse(o, n, g):
 
 
 def write_pth_training_data(stations, csv_dir, training_metadata, output_dir, chunk_size=72,
-                            chunks_per_file=1000, target='rsds', shuffle=False):
+                            chunks_per_file=1000, target='rsds', shuffle=False, strided=False):
     metadata = {'chunk_size': chunk_size,
                 'chunks_per_file': chunks_per_file,
                 'column_order': [],
@@ -101,17 +101,30 @@ def write_pth_training_data(stations, csv_dir, training_metadata, output_dir, ch
         num_chunks = len(data_tensor) // chunk_size
 
         station_chunk_ct, station_chunks = 0, []
-        for i in range(num_chunks):
+        if strided:
+            # Sliding window approach
+            for i in range(len(data_tensor) - chunk_size + 1):
+                chunk = data_tensor[i: i + chunk_size]
+                check_consecutive = np.array(day_diff[i + chunk_size - 1])
+                sequence_check = np.all(check_consecutive == 1)
+                if not sequence_check:
+                    continue
 
-            chunk = data_tensor[i * chunk_size: (i + 1) * chunk_size]
+                station_chunks.append(chunk)
+                station_chunk_ct += 1
+        else:
+            # Consecutive temporal blocks with day difference check
+            num_chunks = len(data_tensor) // chunk_size
+            for i in range(num_chunks):
+                chunk = data_tensor[i * chunk_size: (i + 1) * chunk_size]
 
-            check_consecutive = np.array(day_diff[i + chunk_size - 1])
-            sequence_check = np.all(check_consecutive == 1)
-            if not sequence_check:
-                continue
+                check_consecutive = np.array(day_diff[i + chunk_size - 1])
+                sequence_check = np.all(check_consecutive == 1)
+                if not sequence_check:
+                    continue
 
-            station_chunks.append(chunk)
-            station_chunk_ct += 1
+                station_chunks.append(chunk)
+                station_chunk_ct += 1
 
         if len(station_chunks) > 0:
             outfile = os.path.join(output_dir, fate, '{}.pth'.format(station))
@@ -158,7 +171,7 @@ if __name__ == '__main__':
     param_dir = os.path.join(training, target_var)
 
     out_csv = os.path.join(param_dir, 'compiled_csv')
-    out_pth = os.path.join(param_dir, 'pth')
+    out_pth = os.path.join(param_dir, 'strided_pth')
 
     if not os.path.exists(out_pth):
         os.mkdir(out_pth)
@@ -174,5 +187,5 @@ if __name__ == '__main__':
     # metadata_ = None
     metadata_ = os.path.join(param_dir, 'training_metadata.json')
     write_pth_training_data(shapefile, out_csv, metadata_, out_pth, target=target_var,
-                            chunk_size=72, shuffle=True)
+                            chunk_size=72, shuffle=True, strided=True)
 # ========================= EOF ==============================================================================
