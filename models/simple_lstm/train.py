@@ -3,15 +3,14 @@ import json
 import resource
 from datetime import datetime
 
-from models.scalers import MinMaxScaler
-
-import pytorch_lightning as pl
 import torch
+import numpy as np
+import pytorch_lightning as pl
 from pytorch_lightning.callbacks import ModelCheckpoint, EarlyStopping
-
 from torch.utils.data import DataLoader, Dataset
 from torch.utils.data._utils.collate import default_collate
 
+from models.scalers import MinMaxScaler
 from models.simple_lstm.lstm import LSTMPredictor
 
 device_name = None
@@ -29,7 +28,8 @@ resource.setrlimit(resource.RLIMIT_NOFILE, (4096, rlimit[1]))
 
 
 class PTHLSTMDataset(Dataset):
-    def __init__(self, file_paths, col_index, expected_width, chunk_size, transform=None, return_station_name=False):
+    def __init__(self, file_paths, col_index, expected_width, chunk_size, transform=None, return_station_name=False,
+                 scaler_json=None):
         self.chunk_size = chunk_size
         self.transform = transform
         self.col_index = col_index
@@ -51,9 +51,18 @@ class PTHLSTMDataset(Dataset):
 
         self.data = torch.cat(all_data, dim=0)
 
-        self.scaler = MinMaxScaler()
-        self.scaler.fit(self.data)
-        self.data = self.scaler.transform(self.data)
+        if scaler_json:
+            with open(scaler_json, 'r') as f:
+                dct = json.load(f)
+            self.scaler = MinMaxScaler(out_range=(0, 1.0), axis=0)
+            self.scaler.bias = torch.tensor(dct['bias'], dtype=torch.float32).reshape(1, -1, expected_width)
+            self.scaler.scale = torch.tensor(dct['scale'], dtype=torch.float32).reshape(1, -1, expected_width)
+            self.data = self.scaler.transform(self.data)
+
+        else:
+            self.scaler = MinMaxScaler()
+            self.scaler.fit(self.data)
+            self.data = self.scaler.transform(self.data)
 
     def __len__(self):
         return len(self.data)
