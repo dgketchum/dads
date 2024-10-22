@@ -11,10 +11,8 @@ from pytorch_lightning.callbacks import ModelCheckpoint, EarlyStopping
 from torch.utils.data import Dataset
 from torch_geometric.loader import DataLoader
 from models.simple_lstm.train import PTHLSTMDataset
-from pytorch_lightning.callbacks import LearningRateMonitor
 
-
-from models.dads.dads_gnn import DadsMetGNN, LRChangeCallback
+from models.dads.dads_gnn import DadsMetGNN
 
 torch.set_float32_matmul_precision('medium')
 torch.cuda.get_device_name(torch.cuda.current_device())
@@ -24,7 +22,7 @@ resource.setrlimit(resource.RLIMIT_NOFILE, (4096, rlimit[1]))
 
 
 class DadsDataset(Dataset):
-    def __init__(self, n_nodes, lstm_input_files, lstm_meta, embedding_dir, edge_map_file, edge_attr_file):
+    def __init__(self, n_nodes, lstm_input_files, lstm_meta, embedding_dir, edge_map_file, edge_attr_file, scaler):
         """"""
 
         embedding_dict_file = os.path.join(embedding_dir, 'embeddings.json')
@@ -77,15 +75,17 @@ class DadsDataset(Dataset):
         filter_files = [f for f in lstm_input_files if os.path.basename(f).replace('.pth', '') in attributes.keys()]
 
         data_frequency = lstm_meta['data_frequency']
-        idxs = (0, 1, 2, len(data_frequency))
-        tensor_width = data_frequency.count('lf')
+        # target, GridMET, sequence
+        self.column_indices = (0, 1, 2, len(data_frequency))
+        self.tensor_width = data_frequency.count('lf')
         chunk_size = lstm_meta['chunk_size']
 
         self.lstm_dataset = PTHLSTMDataset(file_paths=filter_files,
-                                           col_index=idxs,
-                                           expected_width=tensor_width,
+                                           col_index=self.column_indices,
+                                           expected_width=self.tensor_width,
                                            chunk_size=chunk_size,
-                                           return_station_name=True)
+                                           return_station_name=True,
+                                           scaler_json=scaler)
 
     def __len__(self):
         return len(self.lstm_dataset)
@@ -110,7 +110,7 @@ class DadsDataset(Dataset):
         return data, y, gm, sequence
 
 
-def train_model(dirpath, lstm_data, lstm_model, embeddings, edge_info, nodes=5, batch_size=1,
+def train_model(dirpath, lstm_data, lstm_model, embeddings, edge_info, nodes=5, batch_size=1, strided=False,
                 dropout=0.2, learning_rate=0.01, n_workers=1, logging_csv=None, device='gpu'):
     """"""
 
@@ -118,26 +118,36 @@ def train_model(dirpath, lstm_data, lstm_model, embeddings, edge_info, nodes=5, 
     with open(metadata_, 'r') as f:
         meta = json.load(f)
 
-    tdir = os.path.join(lstm_data, 'pth', 'train')
+    if strided:
+        pth = os.path.join(lstm_data, 'strided_pth')
+    else:
+        pth = os.path.join(lstm_data, 'consecutive_pth')
+
+    scaler = os.path.join(lstm_model, 'scaler.json')
+
+    tdir = os.path.join(pth, 'train')
     t_files = [os.path.join(tdir, f) for f in os.listdir(tdir)]
     train_edges = os.path.join(edge_info, 'train_edge_index.json')
     train_attr = os.path.join(edge_info, 'train_edge_attr.json')
-    train_dataset = DadsDataset(nodes, t_files, meta, embeddings, train_edges, train_attr)
+    train_dataset = DadsDataset(nodes, t_files, meta, embeddings, train_edges, train_attr, scaler=scaler)
     train_dataloader = DataLoader(train_dataset,
                                   batch_size=batch_size,
                                   shuffle=True,
                                   num_workers=n_workers)
 
-    vdir = os.path.join(lstm_data, 'pth', 'val')
+    vdir = os.path.join(pth, 'val')
     v_files = [os.path.join(vdir, f) for f in os.listdir(vdir)]
     val_edges = os.path.join(edge_info, 'val_edge_index.json')
     val_attr = os.path.join(edge_info, 'val_edge_attr.json')
-    val_dataset = DadsDataset(nodes, v_files, meta, embeddings, val_edges, val_attr)
+    val_dataset = DadsDataset(nodes, v_files, meta, embeddings, val_edges, val_attr, scaler=scaler)
     val_dataloader = DataLoader(val_dataset,
                                 batch_size=batch_size,
                                 shuffle=False,
                                 num_workers=n_workers)
 
+    meta['column_indices'] = train_dataset.column_indices
+    meta['tensor_width'] = train_dataset.tensor_width
+    meta['scaler'] = train_dataset.lstm_dataset.scaler
     model = DadsMetGNN(lstm_model, output_dim=1, n_nodes=nodes, edge_emb_dim=6, hidden_dim=1024,
                        edge_attr_dim=20, dropout=dropout, learning_rate=learning_rate, freeze_lstm=True,
                        log_csv=logging_csv, **meta)
@@ -206,12 +216,12 @@ if __name__ == '__main__':
 
     now = datetime.now().strftime('%m%d%H%M')
     chk = os.path.join(dads, 'checkpoints', now)
-    os.mkdir(chk)
-    logger_csv = os.path.join(chk, 'training_{}.csv'.format(now))
-    # logger_csv = None
+    # os.mkdir(chk)
+    # logger_csv = os.path.join(chk, 'training_{}.csv'.format(now))
+    logger_csv = None
     workers = 6
     device_ = 'gpu'
 
-    train_model(chk, param_dir, model_dir, encoder_dir, edges, batch_size=32, nodes=5, dropout=0.5,
+    train_model(chk, param_dir, model_dir, encoder_dir, edges, batch_size=32, nodes=5, dropout=0.5, strided=True,
                 learning_rate=0.001, n_workers=workers, logging_csv=logger_csv, device=device_)
 # ========================= EOF ====================================================================
