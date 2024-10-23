@@ -135,7 +135,8 @@ if __name__ == '__main__':
     # export_dem(mgrs, chk)
 
     pt_buffer = 100
-    stations = 'dads_stations_elev_mgrs'
+    # stations = 'dads_stations_elev_mgrs'
+    stations = 'ghcn_CANUSA_stations_mgrs'
     pts = 'projects/ee-dgketchum/assets/dads/{}'.format(stations)
     file_ = '{}_{}'.format(stations, pt_buffer)
     export_terrain_features(file_prefix=file_, points_layer=pts, buffer_=pt_buffer,

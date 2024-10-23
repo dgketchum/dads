@@ -226,14 +226,14 @@ if __name__ == '__main__':
     w17 = pd.read_csv(w17)['MGRS_TILE'].astype(str)
     w17 = list(set(w17))
 
-    sites = os.path.join(d, 'dads', 'met', 'stations', 'dads_stations_res_elev_mgrs.csv')
-    sites = pd.read_csv(sites)['MGRS_TILE'].astype(str)
-    mgrs_tiles = list(set(sites))
-    mgrs_tiles = [t for t in mgrs_tiles if t not in w17 and t != 'nan']
-    mgrs_tiles.sort()
-    mgrs_tiles.reverse()
+    # sites = os.path.join(d, 'dads', 'met', 'stations', 'dads_stations_res_elev_mgrs.csv')
+    # sites = pd.read_csv(sites)['MGRS_TILE'].astype(str)
+    # mgrs_tiles = list(set(sites))
+    # mgrs_tiles = [t for t in mgrs_tiles if t not in w17 and t != 'nan']
+    # mgrs_tiles.sort()
+    # mgrs_tiles.reverse()
 
-    stations = 'dads_stations_elev_mgrs'
+    stations = 'ghcn_CANUSA_stations_mgrs'
     pts = 'projects/ee-dgketchum/assets/dads/{}'.format(stations)
 
     geo = 'users/dgketchum/boundaries/western_states_expanded_union'
@@ -241,10 +241,10 @@ if __name__ == '__main__':
     years_.reverse()
 
     failed = []
-    chk = os.path.join(d, 'dads', 'rs', 'dads_stations', 'landsat', 'tiles')
+    chk = os.path.join(d, 'dads', 'rs', 'ghcn_stations', 'landsat', 'tiles')
     for buffer_ in [500]:
         file_ = '{}_{}'.format(stations, buffer_)
-        request_band_extract(file_, pts, region=geo, years=years_, buffer=buffer_, check_dir=chk, tiles=mgrs_tiles)
+        request_band_extract(file_, pts, region=geo, years=years_[:1], buffer=buffer_, check_dir=chk, tiles=w17)
 
     # chk = os.path.join(d, 'dads', 'rs', 'dads_stations', 'modis')
     # extract_modis(stations, pts, years=years_, check_dir=chk)
