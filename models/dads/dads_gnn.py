@@ -55,17 +55,33 @@ class DadsMetGNN(pl.LightningModule):
         self.log_csv = log_csv
 
         data_frequency = lstm_meta['data_frequency']
-        lf_bands = data_frequency.count('lf') - 2
         self.column_indices = lstm_meta['column_indices']
         self.tensor_width = lstm_meta['tensor_width']
         self.scaler = lstm_meta['scaler']
 
-        model_path = os.path.join(pretrained_lstm_path, 'best_model.ckpt')
-        self.lstm = LSTMPredictor.load_from_checkpoint(model_path,
-                                                       num_bands=lf_bands,
-                                                       learning_rate=learning_rate,
-                                                       dropout_rate=0.3,
-                                                       log_csv=None)
+        if lstm_meta['model'] == 'lstm':
+
+            from models.lstm.lstm import LSTMPredictor
+            hf_bands = data_frequency.count('hf')
+            lf_bands = data_frequency.count('lf') - 2
+            model_path = os.path.join(pretrained_lstm_path, 'best_model.ckpt')
+            self.lstm = LSTMPredictor.load_from_checkpoint(model_path,
+                                                           num_bands_lf=lf_bands,
+                                                           num_bands_hf=hf_bands,
+                                                           learning_rate=learning_rate,
+                                                           expansion_factor=2,
+                                                           log_csv=None)
+
+        elif lstm_meta['model'] == 'simple_lstm':
+
+            from models.simple_lstm.lstm import LSTMPredictor
+            lf_bands = data_frequency.count('lf') - 2
+            model_path = os.path.join(pretrained_lstm_path, 'best_model.ckpt')
+            self.lstm = LSTMPredictor.load_from_checkpoint(model_path,
+                                                           num_bands=lf_bands,
+                                                           learning_rate=learning_rate,
+                                                           expansion_factor=2,
+                                                           log_csv=None)
         for param in self.lstm.parameters():
             param.requires_grad = False
 
@@ -76,8 +92,12 @@ class DadsMetGNN(pl.LightningModule):
         self.dropout = nn.Dropout(dropout)
         self.fc = nn.Linear(hidden_dim * 2, output_dim)
 
-    def forward(self, data, sequence):
-        lstm_output = self.lstm(sequence)
+    def forward(self, data, sequence, hf=None):
+
+        if hf is not None:
+            lstm_output = self.lstm(sequence, hf)
+        else:
+            lstm_output = self.lstm(sequence)
 
         try:
             lstm_output = lstm_output.unsqueeze(1)
@@ -99,6 +119,8 @@ class DadsMetGNN(pl.LightningModule):
         x = x.view(-1, self.n_nodes, self.hidden_dim * 2)
 
         lstm_feat = lstm_feat.repeat_interleave(self.n_nodes, dim=1)
+        if hf is not None:
+            lstm_feat = lstm_feat.view(data.batch_size, self.n_nodes, -1)
         lstm_feat = lstm_feat.repeat_interleave(2, dim=2)
         combined_features = torch.cat([x, lstm_feat], dim=1)
         out = self.fc(combined_features)
@@ -106,17 +128,27 @@ class DadsMetGNN(pl.LightningModule):
         return out, lstm_output
 
     def training_step(self, batch, batch_idx):
-        data, y, _, sequence = batch
-        out, lstm = self(data, sequence)
-        y = y[:, -1:]
+        if len(batch) == 4:
+            data, y_obs, y_gm, sequence = batch
+            y_hat, lstm = self(data, sequence)
+        else:
+            data, y_obs, y_gm, lf, hf = batch
+            y_hat, lstm = self(data, lf, hf)
 
-        loss = F.mse_loss(out, y)
+        y_obs = y_obs[:, -1:]
+
+        loss = F.mse_loss(y_hat, y_obs)
         self.log('train_loss', loss)
         return loss
 
     def validation_step(self, batch, batch_idx):
-        data, y_obs, y_gm, sequence = batch
-        y_hat, lstm = self(data, sequence)
+        if len(batch) == 4:
+            data, y_obs, y_gm, sequence = batch
+            y_hat, lstm = self(data, sequence)
+        else:
+            data, y_obs, y_gm, lf, hf = batch
+            y_hat, lstm = self(data, lf, hf)
+
         y_hat = y_hat.squeeze()
         y_lstm = lstm.squeeze()
         y_obs = y_obs[:, -1]
@@ -175,7 +207,10 @@ class DadsMetGNN(pl.LightningModule):
     def on_validation_epoch_end(self):
 
         if self.log_csv:
-            train_loss = self.trainer.callback_metrics['train_loss'].item()
+            try:
+                train_loss = self.trainer.callback_metrics['train_loss'].item()
+            except KeyError:
+                train_loss = torch.nan
             val_loss = self.trainer.callback_metrics['val_loss'].item()
             r2_dads = self.trainer.callback_metrics['r2_dads'].item()
             r2_lstm = self.trainer.callback_metrics['r2_lstm'].item()

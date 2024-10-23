@@ -67,12 +67,17 @@ class LSTMPredictor(pl.LightningModule):
         x_lf = x_lf.squeeze()
         x_lf = self.input_expansion_lf(x_lf)
         out_lf, _ = self.lstm_lf(x_lf)
-        out_lf = out_lf[:, -1, :]
 
         x_hf = x_hf.squeeze()
         x_hf = self.input_expansion_hf(x_hf)
         out_hf, _ = self.lstm_hf(x_hf)
-        out_hf = out_hf[:, -1, :]
+
+        try:
+            out_lf = out_lf[:, -1, :]
+            out_hf = out_hf[:, -1, :]
+        except:
+            out_lf = out_lf[-1, :]
+            out_hf = out_hf[-1, :]
 
         cat_out = torch.cat((out_hf, out_lf), dim=1)
         attn_weights = torch.softmax(self.attn(cat_out), dim=1)
@@ -185,6 +190,9 @@ class LSTMPredictor(pl.LightningModule):
                 'monitor': 'val_loss'
             }
         }
+
+    def on_before_optimizer_step(self, optimizer):
+        torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=1.0)
 
     def inverse_transform(self, a, idx):
         a = a * (self.scaler.scale[0, -1, idx] + 5e-8) + self.scaler.bias[0, -1, idx]

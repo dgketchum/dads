@@ -29,18 +29,27 @@ resource.setrlimit(resource.RLIMIT_NOFILE, (4096, rlimit[1]))
 
 
 class PTHLSTMDataset(Dataset):
-    def __init__(self, file_paths, col_index, expected_width, chunk_size, transform=None,
+    def __init__(self, file_paths, col_index, expected_width, chunk_size, transform=None, return_station_name=False,
                  scaler_json=None):
         self.chunk_size = chunk_size
         self.transform = transform
         self.col_index = col_index
+        self.return_station_name = return_station_name
 
         all_data = []
+        self.station_names = []
+
         for file_path in file_paths:
+            station_name = os.path.splitext(os.path.basename(file_path))[0]
+
             data = torch.load(file_path, weights_only=True)
             if data.shape[2] != expected_width:
                 print(f"Skipping {file_path},shape mismatch. Expected {expected_width} columns, got {data.shape[2]}")
                 continue
+
+            for _ in range(len(data)):
+                self.station_names.append(station_name)
+
             all_data.append(data)
 
         self.data = torch.cat(all_data, dim=0)
@@ -84,7 +93,11 @@ class PTHLSTMDataset(Dataset):
                          chunk[:, self.col_index[2]: self.col_index[3]],
                          chunk[:, self.col_index[3]:])
 
-        return y, gm, lf, hf
+        if self.return_station_name:
+            station_name = self.station_names[idx]
+            return y, gm, lf, hf, station_name
+        else:
+            return y, gm, lf, hf
 
 
 def custom_collate(batch):
@@ -138,7 +151,7 @@ def train_model(dirpath, pth, metadata, batch_size=1, learning_rate=0.01, n_work
     model = LSTMPredictor(num_bands_lf=lf_bands,
                           num_bands_hf=hf_bands,
                           learning_rate=learning_rate,
-                          expansion_factor=8,
+                          expansion_factor=2,
                           log_csv=logging_csv,
                           scaler=train_dataset.scaler)
 
