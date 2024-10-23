@@ -31,7 +31,7 @@ def download_ghcn(station_id, file_dst):
     return params_
 
 
-def get_station_data(inventory, out_dir, bounds=(-125., 25., -60., 49.), overwrite=False, tracker=None):
+def get_station_data(inventory, out_dir, bounds=(-125., 25., -60., 49.), overwrite=False, tracker=None, shuffle=False):
     with open(inventory) as fh:
         data = fh.readlines()
 
@@ -53,7 +53,12 @@ def get_station_data(inventory, out_dir, bounds=(-125., 25., -60., 49.), overwri
     stations = stations[(stations['latitude'] < bounds[3]) & (stations['latitude'] >= bounds[1])]
     stations = stations[(stations['longitude'] < bounds[2]) & (stations['longitude'] >= bounds[0])]
 
-    for sid in stations['station'].unique():
+    if shuffle:
+        stations = stations.sample(frac=1.)
+
+    station_list = stations['station'].unique().tolist()
+
+    for sid in station_list:
         out_file = os.path.join(out_dir, f'{sid}.csv')
         if os.path.exists(out_file) and not overwrite:
             print(sid, 'exists, skipping')
@@ -84,6 +89,6 @@ if __name__ == '__main__':
     inventroy_ = os.path.join(ghcn, 'ghcnd-inventory.txt')
     rec_dir = os.path.join(ghcn, 'station_data')
     tracking = os.path.join(ghcn, 'downloaded_ghcn.json')
-    get_station_data(inventroy_, rec_dir, overwrite=False, tracker=tracking)
+    get_station_data(inventroy_, rec_dir, overwrite=False, tracker=tracking, shuffle=True)
 
 # ========================= EOF ====================================================================

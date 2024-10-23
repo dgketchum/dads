@@ -40,11 +40,11 @@ def read_hourly_data(stations, madis_src, madis_dst, rsun_tables, shuffle=False,
     for i, (fid, row) in enumerate(station_list.iterrows(), start=1):
 
         lon, lat, elv = row[kw['lon']], row[kw['lat']], row[kw['elev']]
-        print('{}: {} of {}; {:.2f}, {:.2f}'.format(fid, i, record_ct, lat, lon))
+        # print('{}: {} of {}; {:.2f}, {:.2f}'.format(fid, i, record_ct, lat, lon))
 
         out_file = os.path.join(madis_dst, '{}.csv'.format(fid))
         if os.path.exists(out_file) and not overwrite:
-            print('{} exists, skipping'.format(fid))
+            # print('{} exists, skipping'.format(fid))
             continue
 
         station_dir = os.path.join(madis_src, fid)
@@ -126,7 +126,7 @@ def process_daily_data(hourly_df, rsun_data, lat_, elev_, zw_=2.0, qaqc=False):
 
     valid_obs_count = hourly_df[['date']].groupby('date').agg({'date': 'count'}).copy()
     if np.nanmax(valid_obs_count['date']) > 24:
-        print('found multi-hourly obs in {}'.format(hourly_df.index[0].year))
+        # print('found multi-hourly obs in {}'.format(hourly_df.index[0].year))
         # this groupby is to force a maximum of one entry per hour
         hourly_df = hourly_df.groupby(['date', 'hour']).agg(
             temperature=('temperature', 'mean'),
@@ -182,6 +182,9 @@ def process_daily_data(hourly_df, rsun_data, lat_, elev_, zw_=2.0, qaqc=False):
     daily_df.drop(columns=['obs_ct'], inplace=True)
     daily_df.index = pd.DatetimeIndex(daily_df.index)
 
+    if daily_df.empty:
+        return None
+
     if qaqc:
         daily_df['month'] = daily_df.index.month
         daily_df['doy'] = daily_df.index.dayofyear
@@ -198,7 +201,7 @@ def process_daily_data(hourly_df, rsun_data, lat_, elev_, zw_=2.0, qaqc=False):
         pre_clean_nan_ct = np.count_nonzero(np.isnan(daily_df['rsds']))
         daily_df.loc[daily_df['rsds'] > (1.2 * daily_df['rso']), 'rsds'] = np.nan
         post_clean_nan_ct = np.count_nonzero(np.isnan(daily_df['rsds']))
-        print('Removed {} rs records'.format(post_clean_nan_ct - pre_clean_nan_ct))
+        # print('Removed {} rs records'.format(post_clean_nan_ct - pre_clean_nan_ct))
 
     # asce_params = daily_df.parallel_apply(calc_asce_params, lat=lat_, elev=elev_, zw=10, axis=1)
     asce_params = daily_df.apply(calc_asce_params, lat=lat_, elev=elev_, zw=zw_, axis=1)
@@ -291,13 +294,16 @@ if __name__ == '__main__':
     # pandarallel.initialize(nb_workers=6)
 
     sites = os.path.join(d, 'dads', 'met', 'stations', 'dads_stations_elev_mgrs.csv')
-    madis_hourly = os.path.join(d, 'climate', 'madis', 'LDAD_public', 'mesonet', 'csv')
+
+    madis_hourly_public = os.path.join(d, 'climate', 'madis', 'LDAD_public', 'mesonet', 'csv')
+    madis_hourly_research = os.path.join(d, 'climate', 'madis', 'LDAD', 'mesonet', 'csv')
+
     madis_daily_ = os.path.join(d, 'dads', 'met', 'obs', 'madis')
     madis_plot_dir = os.path.join(d, 'dads', 'met', 'obs', 'plots', 'madis_{}')
 
     solrad_out = os.path.join(d, 'dads', 'dem', 'rsun_tables')
 
-    read_hourly_data(sites, madis_hourly, madis_daily_, solrad_out, shuffle=True, bounds=(-125., 25., -66., 49.),
-                     overwrite=False, qaqc=True, plot=None)
+    read_hourly_data(sites, madis_hourly_research, madis_daily_, solrad_out, shuffle=True,
+                     bounds=(-125., 25., -66., 49.), overwrite=False, qaqc=True, plot=None)
 
 # ========================= EOF ====================================================================
