@@ -6,7 +6,7 @@ import pandas as pd
 from pandas import read_csv
 
 
-def download_ghcn(station_id, file_dst, start):
+def download_ghcn(station_id, file_dst):
     url = 'https://www.ncei.noaa.gov/pub/data/ghcn/daily/by_station/{}.csv.gz'.format(station_id)
 
     df = read_csv(url, header=None, usecols=[1, 2, 3, 6])
@@ -16,15 +16,19 @@ def download_ghcn(station_id, file_dst, start):
 
     if not any([p in params for p in target_cols]):
         print('records missing parameters')
-        return None
+        return []
 
     df = df.pivot_table(index='DATE', columns=['PARAM'],
                         values='VALUE', aggfunc='first').reindex()
-    hascols = [c for c in target_cols if c in df.columns]
-    df = df[hascols]
+
+    params_ = [c for c in target_cols if c in df.columns]
+    if len(params_) == 0:
+        return []
+
+    df = df[params_]
     df.index = [str(dt) for dt in df.index]
     df.to_csv(file_dst)
-    return hascols
+    return params_
 
 
 def get_station_data(inventory, out_dir, bounds=(-125., 25., -60., 49.), overwrite=False, tracker=None):
@@ -56,12 +60,12 @@ def get_station_data(inventory, out_dir, bounds=(-125., 25., -60., 49.), overwri
             continue
 
         try:
-            params = download_ghcn(sid, out_file, '1990-01-01')
+            params = download_ghcn(sid, out_file)
         except Exception as e:
             print(e)
             continue
 
-        if tracker:
+        if tracker and len(params) > 0:
             [meta[p].append(sid) for p in params]
 
         print(sid)
