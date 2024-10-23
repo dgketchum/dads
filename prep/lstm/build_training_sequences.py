@@ -5,10 +5,8 @@ import numpy as np
 import pandas as pd
 from tqdm import tqdm
 
-TERRAIN_FEATURES = ['slope', 'aspect', 'elevation', 'tpi_1250', 'tpi_250', 'tpi_150']
 
-
-def join_training(stations, ts_dir, landsat_dir, cdr_dir, dem_dir, out_dir, scaling_json=None, var='rsds',
+def join_training(stations, ts_dir, landsat_dir, cdr_dir, dem_dir, out_dir, var='rsds',
                   bounds=None, shuffle=False, overwrite=False, sample_frac=1.0):
     """"""
 
@@ -31,7 +29,8 @@ def join_training(stations, ts_dir, landsat_dir, cdr_dir, dem_dir, out_dir, scal
                'snotel': 0,
                'landsat_obs_time_misalign': 0,
                'sol_fid': 0,
-               'cdr_file': 0, }
+               'cdr_file': 0,
+               'exists': 0}
 
     scaling['stations'] = []
 
@@ -58,6 +57,7 @@ def join_training(stations, ts_dir, landsat_dir, cdr_dir, dem_dir, out_dir, scal
 
             outfile = os.path.join(out_dir, '{}.csv'.format(f))
             if os.path.exists(outfile) and not overwrite:
+                missing['exists'] += 1
                 continue
 
             if f in stations['orig_netid'].tolist():
@@ -134,23 +134,6 @@ def join_training(stations, ts_dir, landsat_dir, cdr_dir, dem_dir, out_dir, scal
             except TypeError:
                 pass
 
-            if scaling_json:
-                for c in ts.columns:
-
-                    for mm in ['max', 'min']:
-
-                        p = '{}_{}'.format(c, mm)
-                        v = ts[c].agg(mm, axis=0)
-
-                        if p not in scaling.keys():
-                            scaling[p] = v.item()
-
-                        if mm == 'max' and v > scaling[p]:
-                            scaling[p] = v.item()
-
-                        if mm == 'min' and v < scaling[p]:
-                            scaling[p] = v.item()
-
             if ts.empty:
                 # print('{} is empty, skipped it'.format(f))
                 continue
@@ -172,13 +155,7 @@ def join_training(stations, ts_dir, landsat_dir, cdr_dir, dem_dir, out_dir, scal
             # write csv without dt index
             ts.to_csv(outfile)
             ct += ts.shape[0]
-            scaling['stations'].append(f)
 
-    if scaling_json:
-        with open(scaling_json, 'w') as fp:
-            json.dump(scaling, fp, indent=4)
-
-    print('\ntime series obs count {}\n{} stations'.format(ct, len(scaling['stations'])))
     print('wrote {} features'.format(ts.shape[1] - 3))
     print('missing', missing)
 
@@ -223,11 +200,6 @@ if __name__ == '__main__':
         [os.remove(f) for f in l]
         print('removed existing data in {}'.format(out_csv))
 
-    if write_scaling:
-        scaling_ = os.path.join(param_dir, 'scaling_metadata.json')
-    else:
-        scaling_ = None
-
     if not os.path.exists(training):
         os.mkdir(training)
 
@@ -240,7 +212,7 @@ if __name__ == '__main__':
     print('========================== writing {} =========================='.format(target_var))
 
     # W. MT: (-117., 42.5, -110., 49.)
-    join_training(fields, sta, landsat_, cdr_, solrad, out_csv, scaling_json=scaling_, var=target_var,
+    join_training(fields, sta, landsat_, cdr_, solrad, out_csv, var=target_var,
                   bounds=(-180., 25., -60., 85.), shuffle=True, overwrite=overwrite_, sample_frac=1.0)
 
 # ========================= EOF ==============================================================================
