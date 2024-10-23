@@ -10,47 +10,53 @@ from torch.nn import functional as F
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 
 
-class FCEncoder(nn.Module):
-    def __init__(self, input_dim, hidden_size, dropout):
-        super(FCEncoder, self).__init__()
-        self.fc1 = nn.Linear(input_dim, hidden_size)
-        self.fc2 = nn.Linear(hidden_size, hidden_size // 2)
-        self.fc_mu = nn.Linear(hidden_size // 2, hidden_size // 2)
-        self.fc_logvar = nn.Linear(hidden_size // 2, hidden_size // 2)
-        self.dropout = nn.Dropout(dropout)
+class TransformerEncoder(nn.Module):
+    def __init__(self, input_dim, hidden_size, num_heads, num_layers, latent_size, dropout=0.1):
+        super(TransformerEncoder, self).__init__()
+        self.embedding = nn.Linear(input_dim, hidden_size)
+        encoder_layer = nn.TransformerEncoderLayer(d_model=hidden_size, nhead=num_heads, dropout=dropout)
+        self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
+        self.fc_latent = nn.Linear(hidden_size, latent_size)
 
     def forward(self, x):
-        h1 = F.relu(self.fc1(self.dropout(x)))
-        h2 = F.relu(self.fc2(h1))
-        mu = self.fc_mu(h2)
-        logvar = self.fc_logvar(h2)
-        return mu, logvar
+        batch_size, seq_length, _ = x.size()
+        x = self.embedding(x)
+        x = x.permute(1, 0, 2)
+        enc_output = self.transformer_encoder(x)
+        enc_output = enc_output.permute(1, 0, 2)
+        latent = self.fc_latent(enc_output)
+        return latent
 
 
-class FCDecoder(nn.Module):
-    def __init__(self, output_dim, hidden_size, latent_size, dropout, sigmoid=True):
-        super(FCDecoder, self).__init__()
-        self.fc1 = nn.Linear(latent_size, hidden_size)
-        self.fc2 = nn.Linear(hidden_size, output_dim)
-        self.dropout = nn.Dropout(dropout)
-        self.sigmoid = sigmoid
+class TransformerDecoder(nn.Module):
+    def __init__(self, latent_size, hidden_size, output_dim, num_heads, num_layers, seq_length, dropout=0.1):
+        super(TransformerDecoder, self).__init__()
+        self.latent_to_hidden = nn.Linear(latent_size, hidden_size)
+        decoder_layer = nn.TransformerDecoderLayer(d_model=hidden_size, nhead=num_heads, dropout=dropout)
+        self.transformer_decoder = nn.TransformerDecoder(decoder_layer, num_layers=num_layers)
+        self.fc_out = nn.Linear(hidden_size, output_dim)
+        self.seq_length = seq_length
 
     def forward(self, z):
-        h1 = F.relu(self.fc1(z))
-        x_hat = self.fc2(h1)
-        if self.sigmoid:
-            x_hat = torch.sigmoid(x_hat)
+        z = self.latent_to_hidden(z).unsqueeze(0)
+        z = z.repeat(self.seq_length, 1, 1)
+        dec_output = self.transformer_decoder(z, z)
+        x_hat = self.fc_out(dec_output)
+        x_hat = x_hat.permute(1, 0, 2)
         return x_hat
 
 
 class WeatherAutoencoder(pl.LightningModule):
     def __init__(self, input_dim=14, output_dim=5, learning_rate=0.0001, latent_size=2, hidden_size=400,
-                 dropout=0.1, margin=1.0, log_csv=None, scaler=None, **kwargs):
+                 dropout=0.1, margin=1.0, sequence_length=365, log_csv=None, scaler=None, **kwargs):
 
         super(WeatherAutoencoder, self).__init__()
         self.latent_size = latent_size
-        self.encoder = FCEncoder(input_dim, hidden_size, dropout)
-        self.decoder = FCDecoder(output_dim, latent_size, hidden_size, dropout, sigmoid=False)
+        self.hidden_size = hidden_size
+
+        self.encoder = TransformerEncoder(input_dim, hidden_size, 1, 2, latent_size, dropout)
+        self.decoder = TransformerDecoder(latent_size, hidden_size, output_dim, 1, 2, sequence_length, dropout)
+
         self.input_dim = input_dim
         self.output_dim = output_dim
 
@@ -68,34 +74,24 @@ class WeatherAutoencoder(pl.LightningModule):
 
         self.data_width = len(self.data_columns)
         self.tensor_width = len(self.column_order)
-        self.hidden_size = hidden_size
 
-        # hack to get model output to on_validation_epoch_end hook
         self.y_last = []
         self.y_hat_last = []
         self.mask = []
 
         self.margin = margin
 
+    def forward(self, x):
+        latent = self.encoder(x)
+        latent = torch.max(latent, dim=1).values
+        x_hat = self.decoder(latent)
+        return x_hat, latent
+
     def triplet_loss(self, anchor, positive, negative):
         distance_positive = F.pairwise_distance(anchor, positive)
         distance_negative = F.pairwise_distance(anchor, negative)
         losses = F.relu(distance_positive - distance_negative + self.margin)
         return losses.mean()
-
-    @staticmethod
-    def reparameterization(mu, logvar):
-        std = torch.exp(0.5 * logvar)
-        eps = torch.rand_like(std)
-        return mu + eps * std
-
-    def forward(self, x):
-        mu, logvar = self.encoder(x.float().view(-1, self.input_dim))
-        z = self.reparameterization(mu, logvar)
-        embed = z.view(-1, self.hidden_size, self.chunk_size)
-        embed = torch.max(embed, dim=2).values
-        x_hat = self.decoder(z)
-        return x_hat, mu, logvar, embed
 
     def init_bias(self):
         for module in [self.input_projection, self.output_projection, self.embedding_layer]:
@@ -106,21 +102,27 @@ class WeatherAutoencoder(pl.LightningModule):
         x, y, mask, x_pos, x_neg = stack_batch(batch)
 
         x = torch.nan_to_num(x)
+        y = torch.nan_to_num(y)
         y = y.view(-1, self.output_dim)
 
         x_mean = x[mask].mean(dim=0)
         x[mask] = x_mean
 
-        y_hat, mu, logvar, z = self(x)
+        y_hat, z = self(x)
 
+        y_hat = y_hat.reshape(-1, self.output_dim)
         mask = mask[:, :, :self.output_dim].view(-1, self.output_dim)
-        loss = self.criterion(y_hat[mask], y[mask])
+
+        y, y_hat = y_hat[mask], y[mask]
+        nan_mask = ~torch.isnan(y_hat)
+
+        loss = self.criterion(y[nan_mask], y_hat[nan_mask])
 
         if x_pos is not None and x_neg is not None:
             x_pos = torch.nan_to_num(x_pos)
             x_neg = torch.nan_to_num(x_neg)
-            _, _, _, z_pos = self(x_pos)
-            _, _, _, z_neg = self(x_neg)
+            _, z_pos = self(x_pos)
+            _, z_neg = self(x_neg)
             triplet_loss = self.triplet_loss(z, z_pos, z_neg)
             loss += triplet_loss * 2.0
             self.log('triplet_loss', triplet_loss)
@@ -137,7 +139,8 @@ class WeatherAutoencoder(pl.LightningModule):
         y = y.view(-1, self.output_dim)
         mask = mask[:, :, :self.output_dim].view(-1, self.output_dim)
 
-        y_hat, mu, logvar, z = self(x)
+        y_hat, z = self(x)
+        y_hat = y_hat.reshape(-1, self.output_dim)
 
         self.y_hat_last.append(y_hat)
         self.y_last.append(y)

@@ -31,7 +31,7 @@ resource.setrlimit(resource.RLIMIT_NOFILE, (4096, rlimit[1]))
 
 class WeatherDataset(Dataset):
     def __init__(self, file_paths, expected_width, data_width, chunk_size,
-                 features_path, target_indices, similarity_file=None, transform=None):
+                 features_path, target_indices=None, similarity_file=None, transform=None):
 
         self.chunk_size = chunk_size
         self.transform = transform
@@ -163,7 +163,10 @@ class WeatherDataset(Dataset):
         chunk = self.data[idx]
 
         chunk[:, :self.data_width] = self.scale_chunk(chunk[:, :self.data_width])
-        target = diff_pairs(chunk, self.target_indices)
+        if isinstance(self.target_indices[0], tuple):
+            target = diff_pairs(chunk, self.target_indices)
+        else:
+            target = chunk[:, self.target_indices]
 
         # pytorch has counterintuitive mask logic (opposite)
         # i.e., False where there is valid data
@@ -204,8 +207,8 @@ def custom_collate(batch):
     return default_collate(batch)
 
 
-def train_model(dirpath, pth, metadata, feature_dir, batch_size=64, learning_rate=0.001, n_workers=1,
-                logging_csv=None):
+def train_model(dirpath, pth, metadata, feature_dir, batch_size=64, learning_rate=0.001, n_workers=1, device='gpu',
+                bias_target=False, logging_csv=None):
     """"""
 
     with open(metadata, 'r') as f:
@@ -217,7 +220,11 @@ def train_model(dirpath, pth, metadata, feature_dir, batch_size=64, learning_rat
     data_width = len(meta['data_columns'])
 
     variables = list(set(['_'.join(v.split('_')[:-1]) for v in cols if 'pe' not in v]))
-    difference_idx = [(cols.index(f'{v}_nl'), cols.index(f'{v}_obs')) for v in variables]
+
+    if bias_target:
+        difference_idx = [(cols.index(f'{v}_nl'), cols.index(f'{v}_obs')) for v in variables]
+    else:
+        difference_idx = [cols.index(f'{v}_obs') for v in variables]
 
     tdir = os.path.join(pth, 'train')
     t_files = [os.path.join(tdir, f) for f in os.listdir(tdir)]
@@ -231,7 +238,8 @@ def train_model(dirpath, pth, metadata, feature_dir, batch_size=64, learning_rat
                                    features_path=train_features,
                                    similarity_file=train_similarity)
 
-    train_dataset.save_scaler(os.path.join(dirpath, 'scaler.json'))
+    if logging_csv:
+        train_dataset.save_scaler(os.path.join(dirpath, 'scaler.json'))
 
     train_dataloader = DataLoader(train_dataset,
                                   batch_size=batch_size,
@@ -259,8 +267,8 @@ def train_model(dirpath, pth, metadata, feature_dir, batch_size=64, learning_rat
 
     model = WeatherAutoencoder(input_dim=tensor_width,
                                output_dim=len(difference_idx),
-                               latent_size=64,
-                               hidden_size=1024,
+                               latent_size=128,
+                               hidden_size=128,
                                dropout=0.1,
                                learning_rate=learning_rate,
                                log_csv=logging_csv,
@@ -288,7 +296,7 @@ def train_model(dirpath, pth, metadata, feature_dir, batch_size=64, learning_rat
     )
 
     trainer = pl.Trainer(max_epochs=1000, callbacks=[checkpoint_callback, early_stop_callback],
-                         accelerator='gpu', devices=1)
+                         accelerator=device, devices=1)
     trainer.fit(model, train_dataloader, val_dataloader)
 
 
@@ -297,13 +305,6 @@ if __name__ == '__main__':
     d = '/media/research/IrrigationGIS/dads'
     if not os.path.exists(d):
         d = '/home/dgketchum/data/IrrigationGIS/dads'
-
-    if device_name == 'NVIDIA GeForce RTX 2080':
-        workers = 6
-    elif device_name == 'NVIDIA RTX A6000':
-        workers = 6
-    else:
-        raise NotImplementedError('Specify the machine this is running on')
 
     variable = 'mean_temp'
 
@@ -330,11 +331,12 @@ if __name__ == '__main__':
 
     now = datetime.now().strftime('%m%d%H%M')
     chk = os.path.join(param_dir, 'checkpoints', now)
-    if os.path.isdir(chk):
-        shutil.rmtree(chk)
     os.mkdir(chk)
     logger_csv = os.path.join(chk, 'training_{}.csv'.format(now))
+    # logger_csv = None
+    workers = 6
+    device_ = 'gpu'
 
-    train_model(chk, pth_, metadata_, feature_dir=edges, batch_size=32, learning_rate=0.001,
-                n_workers=workers, logging_csv=logger_csv)
+    train_model(chk, pth_, metadata_, feature_dir=edges, batch_size=16, learning_rate=0.001,
+                n_workers=workers, logging_csv=logger_csv, device=device_, bias_target=True)
 # ========================= EOF ====================================================================

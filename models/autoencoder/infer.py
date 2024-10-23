@@ -59,8 +59,8 @@ def infer_embeddings(model_dir, data_dir, metadata_path, embedding_path, plot=Fa
     model = WeatherAutoencoder.load_from_checkpoint(model_path,
                                                     input_dim=tensor_width,
                                                     output_dim=5,
-                                                    latent_size=64,
-                                                    hidden_size=1024,
+                                                    latent_size=128,
+                                                    hidden_size=128,
                                                     dropout=0.1,
                                                     **meta)
     model.to(device)
@@ -96,7 +96,7 @@ def infer_embeddings(model_dir, data_dir, metadata_path, embedding_path, plot=Fa
         for batch in dataloader:
             x = batch.to(device)
             x = torch.nan_to_num(x)
-            _, _, _, z = model(x)
+            _, z = model(x)
             station_embeddings.append(z.unsqueeze(2).detach().cpu())
 
         # Average embeddings if there are multiple samples per station
@@ -104,7 +104,7 @@ def infer_embeddings(model_dir, data_dir, metadata_path, embedding_path, plot=Fa
         embeddings[station_name] = mean_embedding.tolist()
         all_embeddings.append(mean_embedding)
         station_names.append(station_name)
-        print(station_name, mean_embedding.mean().item())
+        print('{:.3f}'.format(mean_embedding.mean().item()), station_name)
 
     if plot:
         all_embeddings = torch.cat(all_embeddings, dim=1).T.numpy()
@@ -156,10 +156,10 @@ if __name__ == '__main__':
     pth_ = os.path.join(param_dir, 'pth')
     metadata_ = os.path.join(param_dir, 'training_metadata.json')
 
-    model_run = os.path.join(param_dir, 'checkpoints', '10171216')
+    model_run = os.path.join(param_dir, 'checkpoints', '10231635')
     model_ = os.path.join(model_run, 'best_model.ckpt')
     scaler_ = os.path.join(model_run, 'scaler.json')
     embeddings_file = os.path.join(model_run, 'embeddings.json')
 
-    infer_embeddings(model_run, pth_, metadata_, embeddings_file)
+    infer_embeddings(model_run, pth_, metadata_, embeddings_file, plot=False)
 # ========================= EOF ====================================================================
