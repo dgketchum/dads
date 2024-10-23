@@ -1,39 +1,74 @@
 import os
+import json
 
-# import boto3
+import numpy as np
 import pandas as pd
-
-# s3 = boto3.resource('s3', region_name='us-east-1')
-# bucket = s3.Bucket('noaa-ghcn-pds')
+from pandas import read_csv
 
 
-def get_station_data(inventory, out_dir, bounds=(-125., 25., -96., 49.), overwrite=False):
+def download_ghcn(station_id, file_dst, start):
+    url = 'https://www.ncei.noaa.gov/pub/data/ghcn/daily/by_station/{}.csv.gz'.format(station_id)
 
+    df = read_csv(url, header=None, usecols=[1, 2, 3, 6])
+    df.columns = ['DATE', 'PARAM', 'VALUE', 'FLAG']
+    params = list(np.unique(df['PARAM']))
+    target_cols = ['TMIN', 'TMAX', 'PRCP']
+
+    if not any([p in params for p in target_cols]):
+        print('records missing parameters')
+        return None
+
+    df = df.pivot_table(index='DATE', columns=['PARAM'],
+                        values='VALUE', aggfunc='first').reindex()
+    hascols = [c for c in target_cols if c in df.columns]
+    df = df[hascols]
+    df.index = [str(dt) for dt in df.index]
+    df.to_csv(file_dst)
+    return hascols
+
+
+def get_station_data(inventory, out_dir, bounds=(-125., 25., -60., 49.), overwrite=False, tracker=None):
     with open(inventory) as fh:
         data = fh.readlines()
 
-    df = pd.DataFrame([row.split() for row in data],
-                      columns=['station', 'latitude', 'longitude', 'element', 'firstyear', 'lastyear'])
+    if tracker:
+        if os.path.exists(tracker):
+            with open(tracker, 'r') as f:
+                meta = json.load(f)
+        else:
+            meta = {'PRCP': [], 'TMIN': [], 'TMAX': []}
 
-    df['latitude'] = pd.to_numeric(df['latitude'])
-    df['longitude'] = pd.to_numeric(df['longitude'])
-    df['firstyear'] = pd.to_numeric(df['firstyear'])
-    df['lastyear'] = pd.to_numeric(df['lastyear'])
+    stations = pd.DataFrame([row.split() for row in data],
+                            columns=['station', 'latitude', 'longitude', 'element', 'firstyear', 'lastyear'])
 
-    df = df[(df['latitude'] < bounds[3]) & (df['latitude'] >= bounds[1])]
-    df = df[(df['longitude'] < bounds[2]) & (df['longitude'] >= bounds[0])]
+    stations['latitude'] = pd.to_numeric(stations['latitude'])
+    stations['longitude'] = pd.to_numeric(stations['longitude'])
+    stations['firstyear'] = pd.to_numeric(stations['firstyear'])
+    stations['lastyear'] = pd.to_numeric(stations['lastyear'])
 
-    rhav = df[df['element'] == 'RHAV']
-    rhmn = df[df['element'] == 'RHMN']
-    rhmx = df[df['element'] == 'RHMX']
+    stations = stations[(stations['latitude'] < bounds[3]) & (stations['latitude'] >= bounds[1])]
+    stations = stations[(stations['longitude'] < bounds[2]) & (stations['longitude'] >= bounds[0])]
 
-    station_path = 'parquet/by_station/STATION=AUM00011343/'
+    for sid in stations['station'].unique():
+        out_file = os.path.join(out_dir, f'{sid}.csv')
+        if os.path.exists(out_file) and not overwrite:
+            print(sid, 'exists, skipping')
+            continue
 
-    df = pd.read_parquet(f's3://noaa-ghcn-pds/{station_path}')
+        try:
+            params = download_ghcn(sid, out_file, '1990-01-01')
+        except Exception as e:
+            print(e)
+            continue
 
-    result = df[df['ELEMENT'] == 'TMAX'][['ID', 'DATE', 'DATA_VALUE', 'ELEMENT']]
+        if tracker:
+            [meta[p].append(sid) for p in params]
 
-    print(result)
+        print(sid)
+
+    if tracker:
+        with open(tracker, 'w') as fp:
+            json.dump(meta, fp, indent=4)
 
 
 if __name__ == '__main__':
@@ -41,8 +76,10 @@ if __name__ == '__main__':
     if not os.path.exists(d):
         d = '/home/dgketchum/data/IrrigationGIS'
 
-    inventroy_ = os.path.join(d, 'climate', 'ghcn', 'ghcnd-inventory.txt')
-    rec_dir = os.path.join(d, 'dads', 'met', 'ghcn')
-    get_station_data(inventroy_, rec_dir, overwrite=True)
+    ghcn = os.path.join(d, 'climate', 'ghcn')
+    inventroy_ = os.path.join(ghcn, 'ghcnd-inventory.txt')
+    rec_dir = os.path.join(ghcn, 'station_data')
+    tracking = os.path.join(ghcn, 'downloaded_ghcn.json')
+    get_station_data(inventroy_, rec_dir, overwrite=False, tracker=tracking)
 
 # ========================= EOF ====================================================================
