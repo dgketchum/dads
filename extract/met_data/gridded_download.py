@@ -110,14 +110,14 @@ def gridmet_par_map():
 
 
 def download_era5(dst):
-    for y in range(2000, 2024):
+    for y in range(2000, 2023):
         dataset = "reanalysis-era5-single-levels"
         request = {
             'product_type': ['reanalysis'],
             'variable': ['10m_u_component_of_wind', '10m_v_component_of_wind', '2m_dewpoint_temperature',
                          '2m_temperature',
                          'surface_pressure', 'total_precipitation', 'surface_net_solar_radiation'],
-            'year': ['2023'],
+            'year': [y],
             'month': ['01', '02', '03', '04', '05', '06', '07', '08', '09', '10', '11', '12'],
             'day': ['01', '02', '03', '04', '05', '06', '07', '08', '09', '10', '11', '12', '13', '14', '15', '16',
                     '17',
@@ -148,10 +148,11 @@ if __name__ == '__main__':
     madis_data_dir_ = os.path.join(d, 'climate', 'madis')
     sites = os.path.join(d, 'dads', 'met', 'stations', 'dads_stations_res_elev_mgrs.csv')
 
-    grid_dir = os.path.join(d, 'dads', 'met', 'gridded')
+    grid_dir = os.path.join(d, 'climate', 'gridded')
 
     # extract_met_data(sites, grid_dir, overwrite=False, station_type='dads',
     #                  shuffle=True, bounds=(-125., 25., -66., 49.), gridmet=True)
+
     dest_ = os.path.join(grid_dir, 'era5', 'netCDF')
     download_era5(dest_)
 

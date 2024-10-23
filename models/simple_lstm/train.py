@@ -149,8 +149,8 @@ def train_model(dirpath, sequence_data, metadata, batch_size=1, learning_rate=0.
 
     model = LSTMPredictor(num_bands=lf_bands,
                           learning_rate=learning_rate,
-                          dropout_rate=0.3,
-                          expansion_factor=24,
+                          dropout_rate=0.1,
+                          expansion_factor=4,
                           log_csv=logging_csv,
                           scaler=train_dataset.scaler)
 
@@ -190,7 +190,7 @@ if __name__ == '__main__':
     if device_name == 'NVIDIA GeForce RTX 2080':
         workers = 6
     elif device_name == 'NVIDIA RTX A6000':
-        workers = 6
+        workers = 12
     else:
         raise NotImplementedError('Specify the machine this is running on')
 

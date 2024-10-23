@@ -1,7 +1,6 @@
 import os
 import json
 import random
-from datetime import datetime
 
 import torch
 import numpy as np
@@ -10,8 +9,6 @@ from sklearn.metrics import r2_score, root_mean_squared_error
 import geopandas as gpd
 
 from prep.lstm.dt_encoder import datetime_encoded
-
-TERRAIN_FEATURES = ['slope', 'aspect', 'elevation', 'tpi_1250', 'tpi_250', 'tpi_150']
 
 
 def print_rmse(o, n, g):

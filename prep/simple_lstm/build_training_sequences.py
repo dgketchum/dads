@@ -20,16 +20,17 @@ def join_training(stations, ts_dir, landsat_dir, dem_dir, out_dir, var='rsds',
     if shuffle:
         stations = stations.sample(frac=sample_frac)
 
-    ts, ct, first, shape = None, 0, True, None
-    missing = {
-        'sol_file': 0,
-        'station_file': 0,
-        'landsat_file': 0,
-        'snotel': 0,
-        'landsat_obs_time_misalign': 0,
-        'sol_fid': 0,
-        'exists': 0,
-    }
+    ts, ct, scaling, first, shape = None, 0, {}, True, None
+    missing = {'sol_file': 0,
+               'station_file': 0,
+               'landsat_file': 0,
+               'snotel': 0,
+               'landsat_obs_time_misalign': 0,
+               'sol_fid': 0,
+               'cdr_file': 0,
+               'exists': 0}
+
+    scaling['stations'] = []
 
     tiles = stations['MGRS_TILE'].unique()
     for tile in tqdm(tiles, total=len(tiles)):
