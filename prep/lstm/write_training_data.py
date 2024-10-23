@@ -7,10 +7,9 @@ import torch
 import numpy as np
 import pandas as pd
 from sklearn.metrics import r2_score, root_mean_squared_error
+import geopandas as gpd
 
 from prep.lstm.dt_encoder import datetime_encoded
-
-TERRAIN_FEATURES = ['slope', 'aspect', 'elevation', 'tpi_1250', 'tpi_250', 'tpi_150']
 
 
 def print_rmse(o, n, g):
@@ -25,7 +24,7 @@ def print_rmse(o, n, g):
     print('rmse_gridmet', rmse_gm)
 
 
-def write_pth_training_data(csv_dir, training_metadata, output_dir, train_frac=0.8, chunk_size=72,
+def write_pth_training_data(stations, csv_dir, training_metadata, output_dir, chunk_size=72,
                             chunks_per_file=1000, target='rsds', hourly_dir=None, shuffle=False):
     metadata = {'chunk_size': chunk_size,
                 'chunks_per_file': chunks_per_file,
@@ -33,15 +32,31 @@ def write_pth_training_data(csv_dir, training_metadata, output_dir, train_frac=0
                 'data_frequency': [],
                 'observation_count': 0}
 
+    gdf = gpd.read_file(stations)
+    gdf.index = gdf['fid']
+    train_split = gdf[['train']]
+
     files_ = [f for f in os.listdir(csv_dir) if f.endswith('.csv')]
-
+    names = [f.split('.')[0] for f in files_]
     if shuffle:
-        stations = [f.split('.')[0] for f in files_]
-        random.shuffle(stations)
+        random.shuffle(names)
     else:
-        stations = sorted([f.split('.')[0] for f in files_])
+        names = sorted(names)
 
-    destiny = ['train' if random.random() < train_frac else 'val' for _ in stations]
+    destiny, stations = [], []
+    for s in names:
+        try:
+            train_status = train_split.loc[s, 'train']
+        except KeyError:
+            continue
+
+        if train_status:
+            destiny.append('train')
+            stations.append(s)
+        else:
+            destiny.append('val')
+            stations.append(s)
+
     obs, gm, nl = [], [], []
 
     first, write_files = True, 0
@@ -156,6 +171,7 @@ if __name__ == '__main__':
         d = '/home/dgketchum/data/IrrigationGIS/dads'
 
     target_var = 'mean_temp'
+    shapefile = os.path.join(d, 'met', 'stations', 'dads_stations_res_elev_mgrs_split.shp')
 
     zoran = '/home/dgketchum/training/lstm'
     nvm = '/media/nvm/training/lstm'
@@ -172,7 +188,7 @@ if __name__ == '__main__':
     param_dir = os.path.join(training, target_var)
 
     out_csv = os.path.join(param_dir, 'compiled_csv')
-    out_pth = os.path.join(param_dir, 'pth')
+    out_pth = os.path.join(param_dir, 'strided_pth')
 
     # hourly_data = None
     hourly_data = os.path.join(d, 'met', 'gridded', 'nldas2_hourly')
@@ -190,6 +206,6 @@ if __name__ == '__main__':
 
     # metadata_ = None
     metadata_ = os.path.join(param_dir, 'training_metadata.json')
-    write_pth_training_data(out_csv, metadata_, out_pth, target=target_var, hourly_dir=hourly_data,
+    write_pth_training_data(shapefile, out_csv, metadata_, out_pth, target=target_var, hourly_dir=hourly_data,
                             chunk_size=72, shuffle=True)
 # ========================= EOF ==============================================================================
