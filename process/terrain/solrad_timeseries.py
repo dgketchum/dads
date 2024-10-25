@@ -6,15 +6,37 @@ import pandas as pd
 import rasterstats
 
 
-def extract_raster_values_by_tile(shapefile_path, raster_dir, table_out, shuffle=False, overwrite=False):
-    """"""
+def extract_raster_values_by_tile(shapefile_path, raster_dir, table_out, shuffle=False,
+                                  overwrite=False, index_col='fid'):
+    """Extract raster values for each point in a shapefile, organized by MGRS tile.
+
+    This function iterates through points in a shapefile, groups them by their
+    'MGRS_TILE' attribute, and extracts corresponding RSUN values from raster files
+    located in a directory structure organized by tile and day of year.
+    The extracted values are stored in CSV files, one per tile.
+
+    Args:
+        shapefile_path (str): Path to the input shapefile.
+        raster_dir (str): Path to the directory containing RSUN raster files.
+        table_out (str): Path to the output directory for CSV files.
+        shuffle (bool, optional): Whether to shuffle the order of points before processing.
+                                  Defaults to False.
+        overwrite (bool, optional): Whether to overwrite existing CSV files.
+                                   Defaults to False.
+        index_col (str, optional): Name of the column to use as the index in the input SHP.
+                                   Defaults to 'fid'.
+
+    Returns:
+        None. The function writes CSV files to disk.
+    """
     write = False
     points = gpd.read_file(shapefile_path)
-    points.index = points['fid']
+    points.index = points[index_col]
     if shuffle:
         points = points.sample(frac=1)
 
-    for tile in points['MGRS_TILE'].unique():
+    tiles = points['MGRS_TILE'].unique().tolist()
+    for tile in tiles:
 
         if tile is None:
             continue
@@ -52,7 +74,7 @@ def extract_raster_values_by_tile(shapefile_path, raster_dir, table_out, shuffle
 
             for v in values:
                 if v['properties']['mean'] is None:
-                    print('Empty value in {} for {}'.format(tile, v['properties']['fid']))
+                    print('Empty value in {} for {}'.format(tile, v['properties'][index_col]))
                     continue
                 if first:
                     results[v['id']] = {day: v['properties']['mean']}
@@ -72,17 +94,20 @@ def extract_raster_values_by_tile(shapefile_path, raster_dir, table_out, shuffle
 
 
 if __name__ == '__main__':
-    root = '/media/research/IrrigationGIS/dads'
+    root = '/media/research/IrrigationGIS'
     if not os.path.exists(root):
-        root = '/home/dgketchum/data/IrrigationGIS/dads'
+        root = '/home/dgketchum/data/IrrigationGIS'
 
     dem_d = os.path.join(root, 'dem')
     mgrs = os.path.join(dem_d, 'w17_tiles.csv')
 
+    # '/media/research/IrrigationGIS/climate/ghcn/stations/ghcn_CANUSA_stations_mgrs_5071.shp'
     # this must be EPSG:5071 shapefile
-    shapefile_path_ = os.path.join(root, 'met', 'stations', 'dads_stations_res_elev_mgrs_5071.shp')
-    raster_dir_ = os.path.join(root, 'dem', 'rsun')
-    solrad_out = os.path.join(root, 'dem', 'rsun_tables')
-    extract_raster_values_by_tile(shapefile_path_, raster_dir_, solrad_out, shuffle=True, overwrite=False)
+    # shapefile_path_ = os.path.join(root, 'met', 'stations', 'dads_stations_res_elev_mgrs_5071.shp')
+    shapefile_path_ = os.path.join(root, 'climate', 'ghcn', 'stations', 'ghcn_CANUSA_stations_mgrs_5071.shp')
+    raster_dir_ = os.path.join(root, 'dads', 'dem', 'rsun')
+    solrad_out = os.path.join(root, 'dads', 'dem', 'rsun_tables', 'ghcn')
+    extract_raster_values_by_tile(shapefile_path_, raster_dir_, solrad_out,
+                                  shuffle=True, overwrite=False, index_col='STAID')
 
 # ========================= EOF ====================================================================
