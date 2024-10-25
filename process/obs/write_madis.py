@@ -8,22 +8,35 @@ import time
 import warnings
 from datetime import datetime, timedelta
 
-import geopandas as gpd
 import pandas as pd
 import xarray as xr
 
 warnings.filterwarnings("ignore", category=xr.SerializationWarning)
 
-SUBHOUR_RESAMPLE_MAP = {'relHumidity': 'mean',
-                        'precipAccum': 'sum',
-                        'solarRadiation': 'mean',
-                        'temperature': 'mean',
-                        'windSpeed': 'mean',
-                        'longitude': 'mean',
-                        'latitude': 'mean'}
+DESIRED_PARAMS = ['stationId', 'reportTime', 'elevation', 'stationType', 'latitude', 'longitude',
+                  'precipAccum',
+                  'solarRadiation',
+                  'temperature',
+                  'dewpoint', 'relHumidity',
+                  'windSpeed', 'windDir']
 
-params = ['relHumidity', 'precipAccum', 'solarRadiation', 'temperature', 'windSpeed']
-COLS = ['datetime'] + params
+SUBHOUR_RESAMPLE_MAP = {
+    'longitude': 'first',
+    'latitude': 'first',
+    'elevation': 'first',
+    'stationType': 'first',
+    'relHumidity': 'mean',
+    'dewpoint': 'mean',
+    'precipAccum': 'sum',
+    'solarRadiation': 'mean',
+    'temperature': 'mean',
+    'windSpeed': 'mean',
+    'windDir': 'mean',
+}
+
+MET_PARAMS = DESIRED_PARAMS[6:]
+
+METADATA = ['elevation', 'stationType', 'latitude', 'longitude']
 
 
 def transfer_list(data_directory, dst, progress_json=None, yrmo_str=None):
@@ -88,24 +101,36 @@ def generate_monthly_time_tuples(start_year, end_year, check_dir=None):
     return time_tuples
 
 
-def read_madis_hourly(data_directory, year_mo_str, output_directory, shapedir=None, bounds=(-125., 25., -66., 49.)):
+def read_madis_hourly(data_directory, year_mo_str, output_directory, station_tracker=None,
+                      bounds=(-125., 25., -66., 49.)):
     """"""
+
+    stations, station_dct = None, None
+    if station_tracker:
+        if not os.path.exists(station_tracker):
+            station_dct = {}
+        else:
+            try:
+                with open(station_tracker, 'r') as f:
+                    station_dct = json.load(f)
+                    stations = list(station_dct.keys())
+            except Exception as e:
+                station_tracker = None
+                print(e, 'error reading station tracker json')
 
     file_pattern = os.path.join(data_directory, f"*{year_mo_str}*.gz")
     file_list = sorted(glob.glob(file_pattern))
     if not file_list:
         print(f"No files found for date: {year_mo_str}")
         return
-    required_vars = ['stationId', 'relHumidity', 'precipAccum', 'solarRadiation', 'temperature',
-                     'windSpeed', 'latitude', 'longitude']
 
-    first = True
     data, sites = {}, pd.DataFrame().to_dict()
 
     start = time.perf_counter()
     for j, filename in enumerate(file_list):
 
         dt_str = os.path.basename(filename).split('.')[0].replace('_', '')
+
         temp_nc_file = None
 
         # following exception handler reads both new-style and classic NetCDF
@@ -125,26 +150,34 @@ def read_madis_hourly(data_directory, year_mo_str, output_directory, shapedir=No
                 if temp_nc_file and os.path.exists(temp_nc_file):
                     os.remove(temp_nc_file)
 
-        valid_data = ds[required_vars]
+        valid_data = ds[DESIRED_PARAMS]
         df = valid_data.to_dataframe()
         df['stationId'] = df['stationId'].astype(str)
         df = df[(df['latitude'] < bounds[3]) & (df['latitude'] >= bounds[1])]
         df = df[(df['longitude'] < bounds[2]) & (df['longitude'] >= bounds[0])]
-        df.dropna(how='any', inplace=True)
+        df.dropna(how='all', inplace=True)
         df.set_index('stationId', inplace=True, drop=True)
-
-        if first and shapedir:
-            sites = df[['latitude', 'longitude']]
-            sites = sites.groupby(sites.index).mean()
-            sites = sites.to_dict(orient='index')
-        elif shapedir:
-            for i, r in df.iterrows():
-                if i not in sites.keys():
-                    sites[i] = {'latitude': r['latitude'], 'longitude': r['longitude']}
-
         df = df.groupby(df.index).agg(SUBHOUR_RESAMPLE_MAP)
-        df['v'] = df.apply(lambda row: [float(row[v]) for v in required_vars[1:6]], axis=1)
-        df.drop(columns=required_vars[1:], inplace=True)
+
+        if station_tracker:
+            new_stations = list(set([s for s in df.index if s not in stations]))
+            stations.extend(new_stations)
+
+            if len(new_stations) > 0:
+                print(f'add {len(new_stations)} new stations to metadata')
+                add_stn = df.copy()
+                add_stn = add_stn.loc[new_stations]
+                for i, r in add_stn.iterrows():
+                    station_dct[i] = {'lat': r['latitude'],
+                                      'lon': r['longitude'],
+                                      'elev': r['elevation'],
+                                      'stype': r['stationType'].decode('utf-8'),
+                                      }
+            with open(station_tracker, 'w') as fp:
+                json.dump(station_dct, fp, indent=4)
+
+        df['v'] = df.apply(lambda row: [float(row[v]) for v in MET_PARAMS], axis=1)
+        df.drop(columns=METADATA, inplace=True)
         dct = df.to_dict(orient='index')
 
         for k, v in dct.items():
@@ -152,12 +185,6 @@ def read_madis_hourly(data_directory, year_mo_str, output_directory, shapedir=No
                 data[k] = {dt_str: v['v']}
             else:
                 data[k][dt_str] = v['v']
-
-        if first and shapedir:
-            write_locations(sites, shapedir, dt_str[:6])
-            first = False
-        else:
-            first = False
 
     for k, v in data.items():
 
@@ -167,30 +194,20 @@ def read_madis_hourly(data_directory, year_mo_str, output_directory, shapedir=No
 
         out_file = os.path.join(out_dir, '{}_{}.csv'.format(k, year_mo_str))
         df = pd.DataFrame.from_dict(v, orient='index')
-        df.columns = params
+        df.columns = MET_PARAMS
         df['datetime'] = df.index
-        df = df[['datetime'] + params]
+        df = df[['datetime'] + MET_PARAMS]
         df.to_csv(out_file, index=False)
 
     end = time.perf_counter()
     print(f"Processing {len(file_list)} files took {end - start:0.4f} seconds")
 
 
-def write_locations(loc, shp_dir, dt_):
-    try:
-        df = pd.DataFrame.from_dict(loc, orient='index')
-        gdf = gpd.GeoDataFrame(df, geometry=gpd.points_from_xy(df.longitude, df.latitude), crs='EPSG:4326')
-        shp = os.path.join(shp_dir, f'integrated_mesonet_{dt_}.shp')
-        gdf.to_file(shp)
-    except:
-        pass
-
-
 def process_time_chunk(args):
-    time_tuple, meso_dir, out_dir, out_shp = args
+    time_tuple, meso_dir, out_dir, station_trcker = args
     start_time, end_time = time_tuple
     read_madis_hourly(meso_dir, start_time[:6], out_dir,
-                      shapedir=out_shp, bounds=(-180., 25., -60., 85.))
+                      station_tracker=station_trcker, bounds=(-180., 25., -60., 85.))
 
 
 if __name__ == "__main__":
@@ -200,26 +217,26 @@ if __name__ == "__main__":
         d = '/home/dgketchum/data/IrrigationGIS'
 
     mesonet_dir = os.path.join(d, 'climate', 'madis', 'LDAD', 'mesonet')
-    outshp = os.path.join(mesonet_dir, 'shapes')
+    tracker_ = os.path.join(mesonet_dir, 'stations.json')
 
     if os.path.exists('/data/ssd1/madis'):
         netcdf_src = os.path.join(mesonet_dir, 'netCDF')
         netcdf_dst = os.path.join('/data/ssd1/madis', 'netCDF')
-        out_dir_ = os.path.join('/data/ssd1/madis', 'yrmo_csv')
+        out_dir_ = os.path.join('/data/ssd1/madis', 'inclusive_csv')
         print('operating on zoran data')
     else:
         netcdf_src = os.path.join(mesonet_dir, 'netCDF')
         netcdf_dst = os.path.join(mesonet_dir, 'netCDF')
-        out_dir_ = os.path.join(mesonet_dir, 'yrmo_csv')
+        out_dir_ = os.path.join(mesonet_dir, 'inclusive_csv')
         print('operating on network drive data')
 
     dt = pd.date_range('2020-01-01', '2024-12-31', freq='MS')
     dts = [d.strftime('%Y%m') for d in dt]
-    transfer_list(netcdf_src, netcdf_dst, progress_json=None, yrmo_str=dts)
+    # transfer_list(netcdf_src, netcdf_dst, progress_json=None, yrmo_str=dts)
 
     times = generate_monthly_time_tuples(2020, 2024, check_dir=out_dir_)
     [print(t) for t in times]
-    args_ = [(t, netcdf_dst, out_dir_, outshp) for t in times]
+    args_ = [(t, netcdf_dst, out_dir_, tracker_) for t in times]
     # random.shuffle(args_)
     # args_.reverse()
 
