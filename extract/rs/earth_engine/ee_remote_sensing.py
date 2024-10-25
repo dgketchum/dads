@@ -244,7 +244,7 @@ if __name__ == '__main__':
     chk = os.path.join(d, 'dads', 'rs', 'ghcn_stations', 'landsat', 'tiles')
     for buffer_ in [500]:
         file_ = '{}_{}'.format(stations, buffer_)
-        request_band_extract(file_, pts, region=geo, years=years_[:1], buffer=buffer_, check_dir=chk, tiles=w17)
+        request_band_extract(file_, pts, region=geo, years=years_[1:], buffer=buffer_, check_dir=chk, tiles=w17)
 
     # chk = os.path.join(d, 'dads', 'rs', 'dads_stations', 'modis')
     # extract_modis(stations, pts, years=years_, check_dir=chk)

@@ -14,21 +14,21 @@ def extract_met_data(stations, gridded_dir, overwrite=False, station_type='opene
                      bounds=None):
     kw = station_par_map(station_type)
 
-    station_list = pd.read_csv(stations, index_col='index')
+    station_list = pd.read_csv(stations, index_col=kw['index'])
 
     if shuffle:
         station_list = station_list.sample(frac=1)
 
     if bounds:
         w, s, e, n = bounds
-        station_list = station_list[(station_list['latitude'] < n) & (station_list['latitude'] >= s)]
-        station_list = station_list[(station_list['longitude'] < e) & (station_list['longitude'] >= w)]
+        station_list = station_list[(station_list[kw['lat']] < n) & (station_list[kw['lat']] >= s)]
+        station_list = station_list[(station_list[kw['lon']] < e) & (station_list[kw['lon']] >= w)]
     else:
         # NLDAS-2 extent
         ln = station_list.shape[0]
         w, s, e, n = (-125.0, 25.0, -67.0, 53.0)
-        station_list = station_list[(station_list['latitude'] < n) & (station_list['latitude'] >= s)]
-        station_list = station_list[(station_list['longitude'] < e) & (station_list['longitude'] >= w)]
+        station_list = station_list[(station_list[kw['lat']] < n) & (station_list[kw['lat']] >= s)]
+        station_list = station_list[(station_list[kw['lon']] < e) & (station_list[kw['lon']] >= w)]
         print('dropped {} stations outside NLDAS-2 extent'.format(ln - station_list.shape[0]))
 
     record_ct = station_list.shape[0]
@@ -63,7 +63,7 @@ def extract_met_data(stations, gridded_dir, overwrite=False, station_type='opene
 
 
 def get_nldas(lon, lat, start='2000-01-01', end='2023-12-31'):
-    df = nld.get_bycoords((lon, lat), start_date=start, end_date=end, source='grib',
+    df = nld.get_bycoords((lon, lat), start_date=start, end_date=end, source='netcdf',
                           variables=['prcp', 'temp', 'wind_u', 'wind_v', 'rlds', 'rsds', 'humidity'])
 
     if df.empty:
@@ -146,14 +146,14 @@ if __name__ == '__main__':
     # pandarallel.initialize(nb_workers=6)
 
     madis_data_dir_ = os.path.join(d, 'climate', 'madis')
-    sites = os.path.join(d, 'dads', 'met', 'stations', 'dads_stations_res_elev_mgrs.csv')
+    sites = os.path.join(d, 'climate', 'ghcn', 'stations', 'ghcn_CANUSA_stations_mgrs.csv')
 
-    grid_dir = os.path.join(d, 'climate', 'gridded')
+    grid_dir = os.path.join(d, 'dads', 'met', 'gridded')
 
-    # extract_met_data(sites, grid_dir, overwrite=False, station_type='dads',
-    #                  shuffle=True, bounds=(-125., 25., -66., 49.), gridmet=True)
+    extract_met_data(sites, grid_dir, overwrite=False, station_type='ghcn',
+                     shuffle=True, bounds=(-114., 42., -100., 49.), gridmet=True)
 
-    dest_ = os.path.join(grid_dir, 'era5', 'netCDF')
-    download_era5(dest_)
+    # dest_ = os.path.join(grid_dir, 'era5', 'netCDF')
+    # download_era5(dest_)
 
 # ========================= EOF ====================================================================
