@@ -102,10 +102,9 @@ def write_pth_training_data(stations, csv_dir, training_metadata, output_dir, ch
 
             df['dt_diff'] = df.index.to_series().diff().dt.days.fillna(1)
 
-        except FileNotFoundError:
+        except (FileNotFoundError, TypeError, IndexError):
             continue
-        except TypeError:
-            continue
+
         if df.empty:
             continue
 
@@ -132,7 +131,6 @@ def write_pth_training_data(stations, csv_dir, training_metadata, output_dir, ch
         df = df.loc[f'{yr}-01-01':].copy()
 
         data_tensor_daily = torch.tensor(df.values, dtype=torch.float32)
-        data_tensor_daily = data_tensor_daily[idx:]
 
         if data_tensor_daily.shape[0] < chunk_size:
             continue
@@ -143,29 +141,17 @@ def write_pth_training_data(stations, csv_dir, training_metadata, output_dir, ch
 
             end_timestamp = df.index[i * chunk_size - 1]
 
-            end_index_daily = df.index.get_loc(end_timestamp)
+            chunk_daily_end = df.index.get_loc(end_timestamp)
 
-            chunk_daily_start = max(0, end_index_daily - chunk_size + 1)
-            chunk_daily = data_tensor_daily[chunk_daily_start: end_index_daily + 1]
+            chunk_daily_start = max(0, chunk_daily_end - chunk_size + 1)
+            chunk_daily = data_tensor_daily[chunk_daily_start: chunk_daily_end + 1]
 
             pe, pe_strings = positional_encoding(chunk_daily.size(0), d_model)
             chunk_daily = torch.cat([chunk_daily, pe], dim=1)
 
-            try:
-                check_consecutive = np.array(day_diff[chunk_daily_start: end_index_daily + 1])
-            except IndexError:
-                continue
-
-            sequence_check = np.all(check_consecutive == 1)
-            if not sequence_check:
-                continue
-
             arr = chunk_daily.numpy()[:, :len(RESIDUAL_FEATURES)]
             nanct = np.count_nonzero(np.isnan(arr))
             nan_frac = nanct / (arr.size + 1e-6)
-
-            # if nan_frac > 0.0 and fate == 'val':
-            #     continue
 
             if nan_frac > 0.67:
                 continue
@@ -192,6 +178,9 @@ def write_pth_training_data(stations, csv_dir, training_metadata, output_dir, ch
                     json.dump(metadata, fp, indent=4)
                 first = False
 
+        else:
+            print(f'{station} no chunks to write')
+
     print('\n{} sites, {} train, {} val\n{} observations'.format(write_files, destiny.count('train'),
                                                                  destiny.count('val'),
                                                                  metadata['observation_count']))
@@ -205,7 +194,6 @@ def find_first_valid_row(tensor, i, j):
         if np.all(np.isfinite(tensor[row_idx, i:j + 1])):
             return row_idx
     return None
-
 
 
 if __name__ == '__main__':

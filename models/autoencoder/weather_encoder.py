@@ -47,7 +47,7 @@ class TransformerDecoder(nn.Module):
 
 
 class WeatherAutoencoder(pl.LightningModule):
-    def __init__(self, input_dim=14, output_dim=5, learning_rate=0.0001, latent_size=2, hidden_size=400,
+    def __init__(self, input_dim, output_dim, learning_rate, latent_size, hidden_size,
                  dropout=0.1, margin=1.0, sequence_length=365, log_csv=None, scaler=None, **kwargs):
 
         super(WeatherAutoencoder, self).__init__()
