@@ -334,9 +334,9 @@ if __name__ == '__main__':
     os.mkdir(chk)
     logger_csv = os.path.join(chk, 'training_{}.csv'.format(now))
     # logger_csv = None
-    workers = 6
+    workers = 12
     device_ = 'gpu'
 
-    train_model(chk, pth_, metadata_, feature_dir=edges, batch_size=16, learning_rate=0.001,
+    train_model(chk, pth_, metadata_, feature_dir=edges, batch_size=128, learning_rate=0.001,
                 n_workers=workers, logging_csv=logger_csv, device=device_, bias_target=True)
 # ========================= EOF ====================================================================
