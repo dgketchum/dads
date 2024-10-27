@@ -7,9 +7,11 @@ import shutil
 import time
 import warnings
 from datetime import datetime, timedelta
-
+import geopandas as gpd
+from shapely.geometry import Point
 import pandas as pd
 import xarray as xr
+from sklearn.utils import shuffle
 
 warnings.filterwarnings("ignore", category=xr.SerializationWarning)
 
@@ -39,7 +41,18 @@ MET_PARAMS = DESIRED_PARAMS[6:]
 METADATA = ['elevation', 'stationType', 'latitude', 'longitude']
 
 
-def transfer_list(data_directory, dst, progress_json=None, yrmo_str=None):
+def copy_file(source_file, dest_file):
+    if os.path.exists(dest_file):
+        return
+    try:
+        shutil.copy(source_file, dest_file)
+        if dest_file.endswith('01_0000.gz'):
+            print(dest_file)
+    except Exception as e:
+        print(e, os.path.basename(source_file))
+
+
+def transfer_list(data_directory, dst, progress_json=None, yrmo_str=None, workers=2):
     if progress_json:
         with open(progress_json, 'r') as f:
             progress = json.load(f)
@@ -58,16 +71,8 @@ def transfer_list(data_directory, dst, progress_json=None, yrmo_str=None):
         dst_list = [os.path.join(dst, f) for f, ym in zip(files_, yrmo) if ym in yrmo_str]
         print(len(file_list), 'files')
 
-    for i, (source_file, dest_file) in enumerate(zip(file_list, dst_list)):
-        if os.path.exists(dest_file):
-            continue
-        try:
-            shutil.copy(source_file, dest_file)
-            if dest_file.endswith('01_0000.gz'):
-                print(dest_file)
-        except Exception as e:
-            print(e, os.path.basename(source_file))
-            continue
+    with multiprocessing.Pool(processes=workers) as pool:
+        pool.starmap(copy_file, zip(file_list, dst_list))
 
 
 def generate_monthly_time_tuples(start_year, end_year, check_dir=None):
@@ -101,22 +106,70 @@ def generate_monthly_time_tuples(start_year, end_year, check_dir=None):
     return time_tuples
 
 
-def read_madis_hourly(data_directory, year_mo_str, output_directory, station_tracker=None,
-                      bounds=(-125., 25., -66., 49.)):
-    """"""
+def open_nc(f):
+    temp_nc_file = None
 
-    stations, station_dct = None, None
-    if station_tracker:
-        if not os.path.exists(station_tracker):
-            station_dct = {}
-        else:
-            try:
-                with open(station_tracker, 'r') as f:
-                    station_dct = json.load(f)
-                    stations = list(station_dct.keys())
-            except Exception as e:
-                station_tracker = None
-                print(e, 'error reading station tracker json')
+    try:
+        with gzip.open(f) as fp:
+            ds_ = xr.open_dataset(fp, engine='scipy')
+    except Exception as e:
+        try:
+            temp_nc_file = f.replace('.gz', '.nc')
+            with gzip.open(f, 'rb') as f_in, open(temp_nc_file, 'wb') as f_out:
+                f_out.write(f_in.read())
+            ds_ = xr.open_dataset(temp_nc_file, engine='netcdf4')
+        except Exception as e2:
+            print(f"Error writing to temporary .nc file or reading with netCDF4 for {f}: {e2}")
+            return None
+        finally:
+            if temp_nc_file and os.path.exists(temp_nc_file):
+                os.remove(temp_nc_file)
+    return ds_
+
+
+def get_station_metadata(data_directory, station_tracker):
+    if os.path.exists(station_tracker):
+        with open(station_tracker, 'r') as f:
+            station_dct = json.load(f)
+            stations = list(station_dct.keys())
+    else:
+        station_dct, stations = {}, []
+
+    file_pattern = os.path.join(data_directory, f"*.gz")
+    file_list = sorted(glob.glob(file_pattern))
+    file_list = shuffle(file_list)
+    print(f'{len(file_list)} files')
+
+    for j, filename in enumerate(file_list):
+
+        ds = open_nc(filename)
+        if ds is None:
+            continue
+
+        p = ['stationId'] + METADATA
+        valid_data = ds[p]
+        df = valid_data.to_dataframe()
+        df['stationId'] = df['stationId'].astype(str)
+        df.dropna(how='all', inplace=True)
+        new_stations = list(set([s for s in df.index if s not in stations]))
+        stations.extend(new_stations)
+
+        if len(new_stations) > 0:
+            print(f'add {len(new_stations)} new stations to {len(stations)} existing')
+            add_stn = df.copy()
+            add_stn = add_stn.loc[new_stations]
+            for i, r in add_stn.iterrows():
+                station_dct[i] = {'lat': r['latitude'],
+                                  'lon': r['longitude'],
+                                  'elev': r['elevation'],
+                                  'stype': r['stationType'].decode('utf-8'),
+                                  }
+        with open(station_tracker, 'w') as fp:
+            json.dump(station_dct, fp, indent=4)
+
+
+def read_madis_hourly(data_directory, year_mo_str, output_directory, bounds=(-125., 25., -66., 49.)):
+    """"""
 
     file_pattern = os.path.join(data_directory, f"*{year_mo_str}*.gz")
     file_list = sorted(glob.glob(file_pattern))
@@ -131,24 +184,9 @@ def read_madis_hourly(data_directory, year_mo_str, output_directory, station_tra
 
         dt_str = os.path.basename(filename).split('.')[0].replace('_', '')
 
-        temp_nc_file = None
-
-        # following exception handler reads both new-style and classic NetCDF
-        try:
-            with gzip.open(filename) as fp:
-                ds = xr.open_dataset(fp, engine='scipy')
-        except Exception as e:
-            try:
-                temp_nc_file = filename.replace('.gz', '.nc')
-                with gzip.open(filename, 'rb') as f_in, open(temp_nc_file, 'wb') as f_out:
-                    f_out.write(f_in.read())
-                ds = xr.open_dataset(temp_nc_file, engine='netcdf4')
-            except Exception as e2:
-                print(f"Error writing to temporary .nc file or reading with netCDF4 for {filename}: {e2}")
-                continue
-            finally:
-                if temp_nc_file and os.path.exists(temp_nc_file):
-                    os.remove(temp_nc_file)
+        ds = open_nc(filename)
+        if ds is None:
+            continue
 
         valid_data = ds[DESIRED_PARAMS]
         df = valid_data.to_dataframe()
@@ -158,23 +196,6 @@ def read_madis_hourly(data_directory, year_mo_str, output_directory, station_tra
         df.dropna(how='all', inplace=True)
         df.set_index('stationId', inplace=True, drop=True)
         df = df.groupby(df.index).agg(SUBHOUR_RESAMPLE_MAP)
-
-        if station_tracker:
-            new_stations = list(set([s for s in df.index if s not in stations]))
-            stations.extend(new_stations)
-
-            if len(new_stations) > 0:
-                print(f'add {len(new_stations)} new stations to metadata')
-                add_stn = df.copy()
-                add_stn = add_stn.loc[new_stations]
-                for i, r in add_stn.iterrows():
-                    station_dct[i] = {'lat': r['latitude'],
-                                      'lon': r['longitude'],
-                                      'elev': r['elevation'],
-                                      'stype': r['stationType'].decode('utf-8'),
-                                      }
-            with open(station_tracker, 'w') as fp:
-                json.dump(station_dct, fp, indent=4)
 
         df['v'] = df.apply(lambda row: [float(row[v]) for v in MET_PARAMS], axis=1)
         df.drop(columns=METADATA, inplace=True)
@@ -203,11 +224,30 @@ def read_madis_hourly(data_directory, year_mo_str, output_directory, station_tra
     print(f"Processing {len(file_list)} files took {end - start:0.4f} seconds")
 
 
+def write_stations_to_shapefile(station_tracker, shapefile_path):
+    with open(station_tracker, 'r') as f:
+        station_dct = json.load(f)
+    print(len(station_dct))
+    data = []
+    for station_id, info in station_dct.items():
+        data.append({
+            'stationId': station_id,
+            'latitude': info['lat'],
+            'longitude': info['lon'],
+            'elevation': info['elev'],
+            'stationType': info['stype'],
+            'geometry': Point(info['lon'], info['lat'])
+        })
+
+    gdf = gpd.GeoDataFrame(data, crs="EPSG:4326")
+    print(gdf.shape[0])
+    gdf.to_file(shapefile_path)
+
+
 def process_time_chunk(args):
-    time_tuple, meso_dir, out_dir, station_trcker = args
+    time_tuple, meso_dir, out_dir = args
     start_time, end_time = time_tuple
-    read_madis_hourly(meso_dir, start_time[:6], out_dir,
-                      station_tracker=station_trcker, bounds=(-180., 25., -60., 85.))
+    read_madis_hourly(meso_dir, start_time[:6], out_dir, bounds=(-180., 25., -60., 85.))
 
 
 if __name__ == "__main__":
@@ -230,21 +270,19 @@ if __name__ == "__main__":
         out_dir_ = os.path.join(mesonet_dir, 'inclusive_csv')
         print('operating on network drive data')
 
-    dt = pd.date_range('2020-01-01', '2024-12-31', freq='MS')
+    # get_station_metadata(netcdf_src, tracker_)
+    shp_ = os.path.join(mesonet_dir, 'stations_25OCT2024.shp')
+    # write_stations_to_shapefile(tracker_, shp_)
+
+    dt = pd.date_range('2001-01-01', '2009-12-31', freq='MS')
     dts = [d.strftime('%Y%m') for d in dt]
-    # transfer_list(netcdf_src, netcdf_dst, progress_json=None, yrmo_str=dts)
+    transfer_list(netcdf_src, netcdf_dst, progress_json=None, yrmo_str=dts, workers=20)
 
-    times = generate_monthly_time_tuples(2020, 2024, check_dir=out_dir_)
+    times = generate_monthly_time_tuples(2001, 2009, check_dir=out_dir_)
     [print(t) for t in times]
-    args_ = [(t, netcdf_dst, out_dir_, tracker_) for t in times]
-    # random.shuffle(args_)
-    # args_.reverse()
+    args_ = [(t, netcdf_dst, out_dir_) for t in times]
 
-    # debug
-    # for t in args_[:1]:
-    #     process_time_chunk(t)
-
-    # num_processes = 1
+    # num_processes = 5
     num_processes = 20
     with multiprocessing.Pool(processes=num_processes) as pool:
         pool.map(process_time_chunk, args_)
