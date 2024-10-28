@@ -22,10 +22,10 @@ def station_par_map(station_type):
                 'end': 'END DATE'}
 
     if station_type == 'madis':
-        return {'index': 'index',
+        return {'index': 'fid',
                 'lat': 'latitude',
                 'lon': 'longitude',
-                'elev': 'ELEV'}
+                'elev': 'elev'}
 
     if station_type == 'ghcn':
         return {'index': 'STAID',

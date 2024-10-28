@@ -7,11 +7,9 @@ import shutil
 import time
 import warnings
 from datetime import datetime, timedelta
-import geopandas as gpd
-from shapely.geometry import Point
+
 import pandas as pd
 import xarray as xr
-from sklearn.utils import shuffle
 
 warnings.filterwarnings("ignore", category=xr.SerializationWarning)
 
@@ -127,47 +125,6 @@ def open_nc(f):
     return ds_
 
 
-def get_station_metadata(data_directory, station_tracker):
-    if os.path.exists(station_tracker):
-        with open(station_tracker, 'r') as f:
-            station_dct = json.load(f)
-            stations = list(station_dct.keys())
-    else:
-        station_dct, stations = {}, []
-
-    file_pattern = os.path.join(data_directory, f"*.gz")
-    file_list = sorted(glob.glob(file_pattern))
-    file_list = shuffle(file_list)
-    print(f'{len(file_list)} files')
-
-    for j, filename in enumerate(file_list):
-
-        ds = open_nc(filename)
-        if ds is None:
-            continue
-
-        p = ['stationId'] + METADATA
-        valid_data = ds[p]
-        df = valid_data.to_dataframe()
-        df['stationId'] = df['stationId'].astype(str)
-        df.dropna(how='all', inplace=True)
-        new_stations = list(set([s for s in df.index if s not in stations]))
-        stations.extend(new_stations)
-
-        if len(new_stations) > 0:
-            print(f'add {len(new_stations)} new stations to {len(stations)} existing')
-            add_stn = df.copy()
-            add_stn = add_stn.loc[new_stations]
-            for i, r in add_stn.iterrows():
-                station_dct[i] = {'lat': r['latitude'],
-                                  'lon': r['longitude'],
-                                  'elev': r['elevation'],
-                                  'stype': r['stationType'].decode('utf-8'),
-                                  }
-        with open(station_tracker, 'w') as fp:
-            json.dump(station_dct, fp, indent=4)
-
-
 def read_madis_hourly(data_directory, year_mo_str, output_directory, bounds=(-125., 25., -66., 49.)):
     """"""
 
@@ -222,26 +179,6 @@ def read_madis_hourly(data_directory, year_mo_str, output_directory, bounds=(-12
 
     end = time.perf_counter()
     print(f"Processing {len(file_list)} files took {end - start:0.4f} seconds")
-
-
-def write_stations_to_shapefile(station_tracker, shapefile_path):
-    with open(station_tracker, 'r') as f:
-        station_dct = json.load(f)
-    print(len(station_dct))
-    data = []
-    for station_id, info in station_dct.items():
-        data.append({
-            'stationId': station_id,
-            'latitude': info['lat'],
-            'longitude': info['lon'],
-            'elevation': info['elev'],
-            'stationType': info['stype'],
-            'geometry': Point(info['lon'], info['lat'])
-        })
-
-    gdf = gpd.GeoDataFrame(data, crs="EPSG:4326")
-    print(gdf.shape[0])
-    gdf.to_file(shapefile_path)
 
 
 def process_time_chunk(args):
