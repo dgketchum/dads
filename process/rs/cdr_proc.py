@@ -30,14 +30,14 @@ HARMONIZED_VARS = ['SR1', 'SR2',
 
 
 def extract_surface_reflectance(stations, gridded_dir, incomplete_out, out_data, overwrite=False, bounds=None,
-                                num_workers=1):
+                                num_workers=1, index_col='fid'):
     if os.path.exists(incomplete_out):
         with open(incomplete_out, 'r') as f:
             incomplete = json.load(f)
     else:
         incomplete = {'missing': []}
 
-    station_list = pd.read_csv(stations, index_col='fid')
+    station_list = pd.read_csv(stations, index_col=index_col)
 
     if bounds:
         w, s, e, n = bounds
@@ -189,18 +189,16 @@ if __name__ == '__main__':
         home = os.path.expanduser('~')
         d = os.path.join(home, 'data', 'IrrigationGIS')
 
-    # pandarallel.initialize(nb_workers=6)
-
-    madis_data_dir_ = os.path.join(d, 'climate', 'madis')
-    sites = os.path.join(d, 'dads', 'met', 'stations', 'dads_stations_elev_mgrs.csv')
+    # sites = os.path.join(d, 'dads', 'met', 'stations', 'madis_mgrs_28OCT2024.csv')
+    sites = os.path.join(d, 'climate', 'ghcn', 'stations', 'ghcn_CANUSA_stations_mgrs_CDR.csv')
 
     grid_dir = os.path.join(d, 'dads', 'rs', 'cdr', 'nc')
     csv_m_dir = os.path.join(d, 'dads', 'rs', 'cdr', 'csv')
     incomp = os.path.join(d, 'dads', 'rs', 'cdr', 'incomplete_files.json')
 
     workers = 8
-    # extract_surface_reflectance(sites, grid_dir, incomp, csv_m_dir, num_workers=workers,
-    #                             overwrite=False, bounds=(-180., 25., -60., 85.))
+    extract_surface_reflectance(sites, grid_dir, incomp, csv_m_dir, num_workers=workers,
+                                overwrite=False, bounds=(-180., 25., -60., 85.), index_col='STAID')
 
     joined_dir = os.path.join(d, 'dads', 'rs', 'cdr', 'joined')
     join_station_data(csv_m_dir, joined_dir, workers, overwrite=False)

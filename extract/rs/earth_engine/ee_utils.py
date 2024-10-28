@@ -70,60 +70,32 @@ def landsat_masked(yr, roi):
     return lsSR_masked
 
 
-def landsat_composites(year, start, end, roi, append_name, composites_only=False):
+def landsat_composites(year, start, end, roi, append_name, scale=False):
     start_year = datetime.strptime(start, '%Y-%m-%d').year
     if start_year != year:
         year = start_year
 
-    def evi_(x):
-        return x.expression('2.5 * ((NIR-RED) / (NIR + 6 * RED - 7.5* BLUE +1))', {'NIR': x.select('B5'),
-                                                                                   'RED': x.select('B4'),
-                                                                                   'BLUE': x.select('B2')})
-
-    def gi_(x):
-        return x.expression('NIR / GREEN', {'NIR': x.select('B5'),
-                                            'GREEN': x.select('B3')})
-
-    bands_means = None
     lsSR_masked = landsat_masked(year, roi)
-    if not composites_only:
-        bands_means = ee.Image(lsSR_masked.filterDate(start, end).map(
-            lambda x: x.select(['B2', 'B3', 'B4', 'B5', 'B6', 'B7', 'B10'],
-                               ['B2_{}'.format(append_name),
-                                'B3_{}'.format(append_name),
-                                'B4_{}'.format(append_name),
-                                'B5_{}'.format(append_name),
-                                'B6_{}'.format(append_name),
-                                'B7_{}'.format(append_name),
-                                'B10_{}'.format(append_name)]
-                               )).mean())
+    thermal = ee.Image(lsSR_masked.filterDate(start, end).map(
+        lambda x: x.select(['B10'],
+                           ['B10_{}'.format(append_name)]
+                           )).mean())
 
-    if append_name in ['m2', 'm1', 'gs']:
-        ndvi_mx = ee.Image(lsSR_masked.filterDate(start, end).map(
-            lambda x: x.normalizedDifference(['B5', 'B4'])).max()).rename('nd_max_{}'.format(append_name))
+    bands_means = ee.Image(lsSR_masked.filterDate(start, end).map(
+        lambda x: x.select(['B2', 'B3', 'B4', 'B5', 'B6', 'B7'],
+                           ['B2_{}'.format(append_name),
+                            'B3_{}'.format(append_name),
+                            'B4_{}'.format(append_name),
+                            'B5_{}'.format(append_name),
+                            'B6_{}'.format(append_name),
+                            'B7_{}'.format(append_name)]
+                           )).mean())
+    if scale:
+        thermal = thermal.multiply(100).int()
+        bands_means = bands_means.multiply(10000).int()
 
-        ndvi_mean = ee.Image(lsSR_masked.filterDate(start, end).map(
-            lambda x: x.normalizedDifference(['B5', 'B4'])).mean()).rename('nd_mean_{}'.format(append_name))
-
-        ndvi = ndvi_mx.addBands([ndvi_mean])
-
-    else:
-        ndvi = ee.Image(lsSR_masked.filterDate(start, end).map(
-            lambda x: x.normalizedDifference(['B5', 'B4'])).max()).rename('nd_{}'.format(append_name))
-
-    ndwi = ee.Image(lsSR_masked.filterDate(start, end).map(
-        lambda x: x.normalizedDifference(['B5', 'B6'])).max()).rename('nw_{}'.format(append_name))
-    evi = ee.Image(lsSR_masked.filterDate(start, end).map(
-        lambda x: evi_(x)).max()).rename('evi_{}'.format(append_name))
-    gi = ee.Image(lsSR_masked.filterDate(start, end).map(
-        lambda x: gi_(x)).max()).rename('gi_{}'.format(append_name))
-
-    if composites_only:
-        bands = ndvi.addBands([ndwi, evi, gi])
-    else:
-        bands = bands_means.addBands([ndvi, ndwi, evi, gi])
-
-    return bands
+    bands_means = bands_means.addBands([thermal])
+    return bands_means
 
 
 def is_authorized():

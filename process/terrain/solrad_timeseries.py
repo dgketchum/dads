@@ -36,6 +36,7 @@ def extract_raster_values_by_tile(shapefile_path, raster_dir, table_out, shuffle
         points = points.sample(frac=1)
 
     tiles = points['MGRS_TILE'].unique().tolist()
+    print(f'{len(tiles)} tiles, {points.shape[0]} points')
     for tile in tiles:
 
         if tile is None:
@@ -104,10 +105,12 @@ if __name__ == '__main__':
     # '/media/research/IrrigationGIS/climate/ghcn/stations/ghcn_CANUSA_stations_mgrs_5071.shp'
     # this must be EPSG:5071 shapefile
     # shapefile_path_ = os.path.join(root, 'met', 'stations', 'dads_stations_res_elev_mgrs_5071.shp')
-    shapefile_path_ = os.path.join(root, 'climate', 'ghcn', 'stations', 'ghcn_CANUSA_stations_mgrs_5071.shp')
+    # shapefile_path_ = os.path.join(root, 'climate', 'ghcn', 'stations', 'ghcn_CANUSA_stations_mgrs_5071.shp')
+    shapefile_path_ = os.path.join(root, 'dads', 'met', 'stations', 'madis_mgrs_28OCT2024_5071.shp')
+
     raster_dir_ = os.path.join(root, 'dads', 'dem', 'rsun')
-    solrad_out = os.path.join(root, 'dads', 'dem', 'rsun_tables', 'ghcn')
+    solrad_out = os.path.join(root, 'dads', 'dem', 'rsun_tables', 'madis_27OCT2024')
     extract_raster_values_by_tile(shapefile_path_, raster_dir_, solrad_out,
-                                  shuffle=True, overwrite=False, index_col='STAID')
+                                  shuffle=True, overwrite=False, index_col='fid')
 
 # ========================= EOF ====================================================================

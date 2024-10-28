@@ -2,14 +2,13 @@ import os
 import pandas as pd
 from tqdm import tqdm
 
-TERRAIN_FEATURES = ['slope', 'aspect', 'elevation', 'tpi_1250', 'tpi_250', 'tpi_150']
 
-
-def process_landsat(stations, rs_dir, out_dir, glob=None, shuffle=False, overwrite=False, extrapolate=False):
+def process_landsat(stations, rs_dir, out_dir, glob=None, shuffle=False, overwrite=False, extrapolate=False,
+                    index_col='fid'):
     """"""
 
     stations = pd.read_csv(stations)
-    stations.index = stations['fid']
+    stations.index = stations[index_col]
     stations.sort_index(inplace=True)
 
     if shuffle:
@@ -31,7 +30,7 @@ def process_landsat(stations, rs_dir, out_dir, glob=None, shuffle=False, overwri
             print('{} not processed'.format(os.path.basename(test_file)))
             continue
 
-        complete = check_exists(rs_file=test_file, out_directory=out_dir)
+        complete = check_exists(rs_file=test_file, out_directory=out_dir, index_col=index_col)
 
         if complete == 'all' and not overwrite:
             print('\n{} complete, {} of {}\n'.format(tile, i, len(tiles)))
@@ -40,12 +39,12 @@ def process_landsat(stations, rs_dir, out_dir, glob=None, shuffle=False, overwri
         elif complete == 'partial' and extrapolate:
             print('\n{} partially complete, processing {} of {}\n'.format(tile, i, len(tiles)))
             rs_dict = build_landsat_tables(rs_directory=rs_dir, _tile=tile, glob=glob,
-                                           terrain_feats=TERRAIN_FEATURES, extrapolate=extrapolate)
+                                           extrapolate=extrapolate, index_col=index_col)
 
         else:
             print('\n{} not yet processed, {} of {}\n'.format(tile, i, len(tiles)))
             rs_dict = build_landsat_tables(rs_directory=rs_dir, _tile=tile, glob=glob,
-                                           terrain_feats=TERRAIN_FEATURES, extrapolate=extrapolate)
+                                           extrapolate=extrapolate, index_col=index_col)
 
         if rs_dict is None:
             continue
@@ -56,9 +55,9 @@ def process_landsat(stations, rs_dir, out_dir, glob=None, shuffle=False, overwri
             print('wrote', os.path.basename(out_file))
 
 
-def check_exists(rs_file, out_directory):
+def check_exists(rs_file, out_directory, index_col):
     mdf = pd.read_csv(rs_file)
-    fids = mdf['fid'].to_list()
+    fids = mdf[index_col].to_list()
     files = [os.path.join(out_directory, '{}.csv'.format(f)) for f in fids]
     if all([os.path.exists(f) for f in files]):
         return 'all'
@@ -85,7 +84,7 @@ def landsat_periods(yr):
     return periods
 
 
-def build_landsat_tables(rs_directory, _tile, glob, terrain_feats, extrapolate=False):
+def build_landsat_tables(rs_directory, _tile, glob, index_col, extrapolate=False):
     """"""
 
     rs_files = [(y, os.path.join(rs_directory, f'{glob}_500_{y}_{_tile}.csv')) for y in range(1990, 2024)]
@@ -108,7 +107,7 @@ def build_landsat_tables(rs_directory, _tile, glob, terrain_feats, extrapolate=F
 
         mdf = pd.read_csv(f)
         mdf['year'] = y
-        mdf.index = mdf['fid']
+        mdf.index = mdf[index_col]
 
         if data is None:
             data = {i: [] for i in mdf.index}
@@ -124,8 +123,6 @@ def build_landsat_tables(rs_directory, _tile, glob, terrain_feats, extrapolate=F
                 exclude.append(index)
                 continue
 
-            t = df.loc[terrain_feats].copy()
-
             df['period'] = [c.split('_')[-1] for c in df.index]
             ls_vars = [c if c.split('_')[-1] in periods.keys() else None for c in df.index]
             ls_vars = [c for c in ls_vars if c is not None]
@@ -140,9 +137,6 @@ def build_landsat_tables(rs_directory, _tile, glob, terrain_feats, extrapolate=F
             dt = pd.DatetimeIndex(pd.date_range(f'{y}-01-01', f'{y}-12-31'))
             df = df.reindex(dt)
             df = df.ffill().bfill()
-
-            for p in terrain_feats:
-                df[p] = t.loc[p, 'val']
 
             if not all(exist) and extrapolate:
                 years = range(1990, 2023)
@@ -162,17 +156,16 @@ def build_landsat_tables(rs_directory, _tile, glob, terrain_feats, extrapolate=F
 
 
 if __name__ == '__main__':
-    if __name__ == '__main__':
 
-        d = '/media/research/IrrigationGIS/dads'
-        if not os.path.exists(d):
-            d = '/home/dgketchum/data/IrrigationGIS/dads'
+    d = '/media/research/IrrigationGIS/dads'
+    if not os.path.exists(d):
+        d = '/home/dgketchum/data/IrrigationGIS/dads'
 
-        glob_ = 'dads_stations_elev_mgrs'
+    glob_ = 'ghcn_CANUSA_stations_mgrs'
 
-        fields = os.path.join(d, 'met', 'stations', '{}.csv'.format(glob_))
-        rs = os.path.join(d, 'rs', 'dads_stations', 'landsat', 'tiles')
-        out = os.path.join(d, 'rs', 'dads_stations', 'landsat', 'station_data')
-        process_landsat(fields, rs, out, glob=glob_, shuffle=True, overwrite=False, extrapolate=True)
+    fields = os.path.join(d, 'met', 'stations', 'ghcn_CANUSA_stations_mgrs.csv')
+    rs = os.path.join(d, 'rs', 'ghcn_stations', 'landsat', 'tiles')
+    out = os.path.join(d, 'rs', 'landsat', 'station_data')
+    process_landsat(fields, rs, out, glob=glob_, shuffle=True, overwrite=False, extrapolate=True, index_col='STAID')
 
 # ========================= EOF ====================================================================

@@ -14,7 +14,7 @@ sys.setrecursionlimit(2000)
 BOUNDARIES = 'users/dgketchum/boundaries'
 
 
-def request_band_extract(file_prefix, points_layer, region, years, buffer, tiles, check_dir=None):
+def request_band_extract(file_prefix, points_layer, region, years, buffer, tiles, check_dir=None, export_tif=False):
     """
 
     """
@@ -55,8 +55,28 @@ def request_band_extract(file_prefix, points_layer, region, years, buffer, tiles
                 else:
                     pass
 
-            try:
-                stack = stack_bands(yr, roi)
+            if export_tif:
+                stack = stack_bands(yr, roi, scale=True)
+                stack = stack.clip(clip.first().geometry().buffer(250))
+                task = ee.batch.Export.image.toCloudStorage(
+                    image=stack,
+                    description=desc,
+                    bucket='wudr',
+                    fileNamePrefix=desc,
+                    scale=250,
+                    crs='EPSG:5071',
+                    maxPixels=1e13)
+
+                try:
+                    task.start()
+                    print(desc)
+                except ee.ee_exception.EEException as e:
+                    print('{}, waiting on '.format(e), desc, '......')
+                    time.sleep(600)
+                    task.start()
+                    print(desc)
+            else:
+                stack = stack_bands(yr, roi, scale=False)
                 stack = stack.clip(clip.first().geometry().buffer(1000))
                 tile_pts = points.filterMetadata('MGRS_TILE', 'equals', tile)
 
@@ -71,25 +91,25 @@ def request_band_extract(file_prefix, points_layer, region, years, buffer, tiles
                     bucket='wudr',
                     fileFormat='CSV')
 
-                task.start()
-                print(desc, yr)
+                try:
+                    task.start()
+                    print(desc, yr)
 
-            except ee.ee_exception.EEException as e:
-                print('{}, waiting on '.format(e), desc, '......')
-                time.sleep(600)
-                task.start()
-                print(desc)
+                except ee.ee_exception.EEException as e:
+                    print('{}, waiting on '.format(e), desc, '......')
+                    time.sleep(600)
+                    task.start()
+                    print(desc)
 
-            except Exception as e:
-                print(tile, yr, e)
-                if tile not in failed.keys():
-                    failed[tile] = [str(yr)]
-                else:
-                    failed[tile].append(str(yr))
-                continue
+                except Exception as e:
+                    print(tile, yr, e)
+                    if tile not in failed.keys():
+                        failed[tile] = [str(yr)]
+                    else:
+                        failed[tile].append(str(yr))
 
 
-def stack_bands(yr, roi):
+def stack_bands(yr, roi, scale=False):
     """
     Create a stack of bands for the year and region of interest specified.
     :param yr:
@@ -104,61 +124,23 @@ def stack_bands(yr, roi):
     summer_s, summer_e = '{}-07-15'.format(yr), '{}-09-30'.format(yr)
     fall_s, fall_e = '{}-09-30'.format(yr), '{}-12-31'.format(yr)
 
-    prev_s, prev_e = '{}-05-01'.format(yr - 1), '{}-09-30'.format(yr - 1),
-    p_summer_s, p_summer_e = '{}-07-15'.format(yr - 1), '{}-09-30'.format(yr - 1)
-
-    pprev_s, pprev_e = '{}-05-01'.format(yr - 2), '{}-09-30'.format(yr - 2),
-    pp_summer_s, pp_summer_e = '{}-07-15'.format(yr - 2), '{}-09-30'.format(yr - 2)
-
-    periods = [('gs', spring_e, fall_s),
-               ('0', winter_s, spring_s),
+    periods = [('0', winter_s, spring_s),
                ('1', spring_s, spring_e),
                ('2', late_spring_s, late_spring_e),
                ('3', summer_s, summer_e),
-               ('4', fall_s, fall_e),
-               ('m1', prev_s, prev_e),
-               ('3_m1', p_summer_s, p_summer_e),
-               ('m2', pprev_s, pprev_e),
-               ('3_m2', pp_summer_s, pp_summer_e)]
+               ('4', fall_s, fall_e)]
 
-    first = True
+    first, input_bands, proj = True, None, None
     for name, start, end in periods:
-        prev = 'm' in name
-        bands = landsat_composites(yr, start, end, roi, name, composites_only=prev)
+        bands = landsat_composites(yr, start, end, roi, name, scale=scale)
         if first:
             input_bands = bands
-            proj = bands.select('B2_gs').projection().getInfo()
+            proj = bands.select('B2_0').projection().getInfo()
             first = False
         else:
             input_bands = input_bands.addBands(bands)
 
-    integrated_composite_bands = []
-
-    for feat in ['nd', 'gi', 'nw', 'evi']:
-        periods = [x for x in range(2, 5)]
-        # periods = [x for x in range(2, 4)]
-        c_bands = ['{}_{}'.format(feat, p) for p in periods]
-        b = input_bands.select(c_bands).reduce(ee.Reducer.sum()).rename('{}_int'.format(feat))
-
-        integrated_composite_bands.append(b)
-
-    input_bands = input_bands.addBands(integrated_composite_bands)
-
-    coords = ee.Image.pixelLonLat().rename(['lon', 'lat']).resample('bilinear').reproject(crs=proj['crs'], scale=30)
-
-    input_bands = input_bands.addBands([coords])
-
-    nlcd = ee.Image('USGS/NLCD/NLCD2011').select('landcover').reproject(crs=proj['crs'], scale=30).rename('nlcd')
-
-    cdl_cult, cdl_crop, cdl_simple = get_cdl(yr)
-
-    gsw = ee.Image('JRC/GSW1_4/GlobalSurfaceWater')
-    occ_pos = gsw.select('occurrence').gt(0)
-    water = occ_pos.unmask(0).rename('gsw')
-
-    input_bands = input_bands.addBands([nlcd, cdl_cult, cdl_crop, cdl_simple, water])
-
-    input_bands = input_bands.clip(roi)
+    input_bands = input_bands.clip(roi).reproject(crs=proj['crs'], scale=30)
 
     return input_bands
 
@@ -233,18 +215,19 @@ if __name__ == '__main__':
     # mgrs_tiles.sort()
     # mgrs_tiles.reverse()
 
-    stations = 'ghcn_CANUSA_stations_mgrs'
+    stations = 'madis_28OCT2024'
     pts = 'projects/ee-dgketchum/assets/dads/{}'.format(stations)
 
     geo = 'users/dgketchum/boundaries/western_states_expanded_union'
-    years_ = list(range(1990, 2024))
+    years_ = list(range(1990, 2023))
     years_.reverse()
 
     failed = []
-    chk = os.path.join(d, 'dads', 'rs', 'ghcn_stations', 'landsat', 'tiles')
+    chk = os.path.join(d, 'dads', 'rs', 'madis_missing', 'landsat', 'tiles')
     for buffer_ in [500]:
         file_ = '{}_{}'.format(stations, buffer_)
-        request_band_extract(file_, pts, region=geo, years=years_[1:], buffer=buffer_, check_dir=chk, tiles=w17)
+        request_band_extract(file_, pts, region=geo, years=years_, buffer=buffer_, check_dir=chk, tiles=w17,
+                             export_tif=False)
 
     # chk = os.path.join(d, 'dads', 'rs', 'dads_stations', 'modis')
     # extract_modis(stations, pts, years=years_, check_dir=chk)
