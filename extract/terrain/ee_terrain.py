@@ -76,10 +76,8 @@ def get_terrain_image():
     return img
 
 
-def export_dem(csv, check_dir=None):
+def export_dem(tiles, check_dir=None):
     """"""
-    df = pd.read_csv(csv)
-    tiles = list(df['MGRS_TILE'])
     ned = ee.Image('USGS/SRTMGL1_003').select(['elevation'])
     elev = ee.Terrain.products(ned).select(['elevation'])
     mgrs = ee.FeatureCollection('users/dgketchum/boundaries/MGRS_TILE')
@@ -125,21 +123,25 @@ if __name__ == '__main__':
 
     _bucket = 'gs://wudr'
 
-    sites = os.path.join(d, 'dads', 'dem', 'w17_tiles.csv')
-    sites = pd.read_csv(sites)['MGRS_TILE']
-    mgrs_tiles = list(set(sites))
+    # sites = os.path.join(d, 'dads', 'met', 'stations', 'dads_stations_res_elev_mgrs.csv')
+    sites = os.path.join(d, 'climate', 'ghcn', 'stations', 'ghcn_CANUSA_stations_mgrs.csv')
+    # sites = os.path.join(d, 'dads', 'met', 'stations', 'madis_mgrs_28OCT2024.csv')
+    # sites = os.path.join(d, 'dads', 'dem', 'w17_tiles.csv')
+
+    tiles = pd.read_csv(sites)['MGRS_TILE'].unique().tolist()
+    tiles = [m for m in tiles if isinstance(m, str)]
+    mgrs_tiles = list(set(tiles))
     mgrs_tiles.sort()
 
     chk = '/media/nvm/IrrigationGIS/dads/dem/dem_250'
-    mgrs = '/media/research/IrrigationGIS/dads/training/w17_tiles.csv'
-    # export_dem(mgrs, chk)
+    export_dem(mgrs_tiles, chk)
 
     pt_buffer = 100
     # stations = 'dads_stations_elev_mgrs'
     stations = 'ghcn_CANUSA_stations_mgrs'
     pts = 'projects/ee-dgketchum/assets/dads/{}'.format(stations)
     file_ = '{}_{}'.format(stations, pt_buffer)
-    export_terrain_features(file_prefix=file_, points_layer=pts, buffer_=pt_buffer,
-                            tiles=mgrs_tiles, check_dir=None)
+    # export_terrain_features(file_prefix=file_, points_layer=pts, buffer_=pt_buffer,
+    #                         tiles=mgrs_tiles, check_dir=None)
 
 # ========================= EOF ====================================================================

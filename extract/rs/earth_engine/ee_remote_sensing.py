@@ -204,29 +204,31 @@ if __name__ == '__main__':
 
     _bucket = 'gs://wudr'
 
-    w17 = os.path.join(d, 'dads', 'dem', 'w17_tiles.csv')
-    w17 = pd.read_csv(w17)['MGRS_TILE'].astype(str)
-    w17 = list(set(w17))
-
     # sites = os.path.join(d, 'dads', 'met', 'stations', 'dads_stations_res_elev_mgrs.csv')
-    # sites = pd.read_csv(sites)['MGRS_TILE'].astype(str)
-    # mgrs_tiles = list(set(sites))
-    # mgrs_tiles = [t for t in mgrs_tiles if t not in w17 and t != 'nan']
-    # mgrs_tiles.sort()
-    # mgrs_tiles.reverse()
+    sites = os.path.join(d, 'climate', 'ghcn', 'stations', 'ghcn_CANUSA_stations_mgrs.csv')
+    # sites = os.path.join(d, 'dads', 'met', 'stations', 'madis_mgrs_28OCT2024.csv')
+    # sites = os.path.join(d, 'dads', 'dem', 'w17_tiles.csv')
 
-    stations = 'madis_28OCT2024'
+    tiles = pd.read_csv(sites)['MGRS_TILE'].unique().tolist()
+    tiles = [m for m in tiles if isinstance(m, str)]
+    mgrs_tiles = list(set(tiles))
+    mgrs_tiles.sort()
+
+    # stations = 'madis_mgrs_28OCT2024'
+    stations = 'ghcn_CANUSA_stations_mgrs'
     pts = 'projects/ee-dgketchum/assets/dads/{}'.format(stations)
 
     geo = 'users/dgketchum/boundaries/western_states_expanded_union'
-    years_ = list(range(1990, 2023))
+    years_ = list(range(2023, 2024))
     years_.reverse()
 
     failed = []
-    chk = os.path.join(d, 'dads', 'rs', 'madis_missing', 'landsat', 'tiles')
+    # chk = os.path.join(d, 'dads', 'rs', 'madis_28OCT2024')
+    chk = os.path.join(d, 'dads', 'rs', 'ghcn_stations', 'landsat', 'tiles')
+
     for buffer_ in [500]:
         file_ = '{}_{}'.format(stations, buffer_)
-        request_band_extract(file_, pts, region=geo, years=years_, buffer=buffer_, check_dir=chk, tiles=w17,
+        request_band_extract(file_, pts, region=geo, years=years_, buffer=buffer_, check_dir=chk, tiles=mgrs_tiles,
                              export_tif=False)
 
     # chk = os.path.join(d, 'dads', 'rs', 'dads_stations', 'modis')

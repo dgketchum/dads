@@ -97,6 +97,7 @@ def build_landsat_tables(rs_directory, _tile, glob, index_col, extrapolate=False
         return None
 
     elif not all(exist) and extrapolate:
+        rs_files = [f for f in rs_files if os.path.exists(f[1])]
         rs_files = rs_files[-1:]
 
     dfl, data, exclude = [], None, []
@@ -161,11 +162,20 @@ if __name__ == '__main__':
     if not os.path.exists(d):
         d = '/home/dgketchum/data/IrrigationGIS/dads'
 
-    glob_ = 'ghcn_CANUSA_stations_mgrs'
-
-    fields = os.path.join(d, 'met', 'stations', 'ghcn_CANUSA_stations_mgrs.csv')
-    rs = os.path.join(d, 'rs', 'ghcn_stations', 'landsat', 'tiles')
     out = os.path.join(d, 'rs', 'landsat', 'station_data')
-    process_landsat(fields, rs, out, glob=glob_, shuffle=True, overwrite=False, extrapolate=True, index_col='STAID')
+
+    # glob_ = 'ghcn_CANUSA_stations_mgrs'
+    # fields = os.path.join(d, 'met', 'stations', 'ghcn_CANUSA_stations_mgrs.csv')
+    # rs = os.path.join(d, 'rs', 'ghcn_stations', 'landsat', 'tiles')
+
+    # glob_ = 'madis_28OCT2024'
+    # fields = os.path.join(d, 'met', 'stations', 'madis_mgrs_28OCT2024.csv')
+    # rs = os.path.join(d, 'rs', 'madis_28OCT2024')
+
+    glob_ = 'missing_madis'
+    fields = os.path.join(d, 'met', 'stations', 'madis_mgrs_28OCT2024.csv')
+    rs = os.path.join(d, 'rs', 'madis_missing', 'landsat', 'tiles')
+
+    process_landsat(fields, rs, out, glob=glob_, shuffle=True, overwrite=False, extrapolate=True, index_col='fid')
 
 # ========================= EOF ====================================================================

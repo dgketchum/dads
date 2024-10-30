@@ -7,6 +7,13 @@ import pandas as pd
 
 
 def calculate_terrain_irradiance(terrain_dir, mapset='PERMANENT', overwrite=False):
+    """remember to project DEM to EPSG:5071 and input the raster to the GRASS mapset with:
+
+    for file in /media/nvm/IrrigationGIS/dads/dem/proj/*.tif; do
+      r.in.gdal input="$file" output="$(basename "$file" .tif)"
+    done
+
+    """
     slp = os.path.join(terrain_dir, 'slope')
     asp = os.path.join(terrain_dir, 'aspect')
     d = os.path.join(terrain_dir, 'proj')
@@ -14,6 +21,7 @@ def calculate_terrain_irradiance(terrain_dir, mapset='PERMANENT', overwrite=Fals
     dem_files = sorted(os.listdir(d))
     dem_names = sorted([f.split('.')[0] for f in dem_files if f.endswith('.tif')])
     dem_files = [os.path.join(d, f) for f in dem_files]
+    print(f'{len(dem_files)} dem files to process')
 
     for dem_name, dem_file in zip(dem_names, dem_files):
 
@@ -69,6 +77,7 @@ def export_rasters(terrain_dir, out_dir, mapset='PERMANENT', overwrite=False, mg
     dem_files = sorted(os.listdir(d))
     dem_names = sorted([f.split('.')[0] for f in dem_files if f.endswith('.tif')])
     dem_files = [os.path.join(d, f) for f in dem_files]
+    print(f'{len(dem_files)} dem files to export')
 
     rsun_out = os.path.join(out_dir, 'rsun')
 
@@ -76,6 +85,7 @@ def export_rasters(terrain_dir, out_dir, mapset='PERMANENT', overwrite=False, mg
 
         tile = dem_name.split('_')[-1]
         if mgrs_list and tile not in mgrs_list:
+            print(f'{tile} exists but is not in list')
             continue
 
         print('\n', tile)
@@ -86,13 +96,16 @@ def export_rasters(terrain_dir, out_dir, mapset='PERMANENT', overwrite=False, mg
 
         subprocess.call(['g.region', f'rast=dem_{tile}@{mapset}'])
 
+        first = True
         for day in range(1, 366):
 
             irradiance_output_tif = os.path.join(tile_dir, 'irradiance_day_{0}_{1}.tif'.format(day, tile))
             irradiance_input = 'irradiance_day_{0}_{1}'.format(day, tile)
 
             if os.path.exists(irradiance_output_tif) and not overwrite:
-                print(irradiance_output_tif, 'exists')
+                if first:
+                    print(irradiance_output_tif, 'exists')
+                    first = False
                 continue
 
             subprocess.call(
@@ -128,19 +141,22 @@ def remove_rasters(terrain_dir, resolution=300):
 
 
 if __name__ == '__main__':
-    root = '/media/nvm/IrrigationGIS/dads'
-    out = '/media/research/IrrigationGIS/dads'
+    root = '/media/nvm/IrrigationGIS'
+    out = '/media/research/IrrigationGIS'
     if not os.path.exists(root):
-        root = '/home/dgketchum/data/IrrigationGIS/dads'
-        out = '/home/dgketchum/data/IrrigationGIS/dads'
+        root = '/home/dgketchum/data/IrrigationGIS'
+        out = '/home/dgketchum/data/IrrigationGIS'
 
-    dem_d = os.path.join(root, 'dem')
-    out_dem = os.path.join(out, 'dem')
+    dem_d = os.path.join(root, 'dads', 'dem')
+    out_dem = os.path.join(out, 'dads', 'dem')
 
-    # calculate_terrain_irradiance(dem_d, mapset="dads_map", overwrite=False)
+    calculate_terrain_irradiance(dem_d, mapset="dads_map", overwrite=False)
 
-    stations_out = os.path.join(out, 'met', 'stations', 'dads_stations_res_elev_mgrs.csv')
-    tiles = pd.read_csv(stations_out)['MGRS_TILE'].unique().tolist()
+    # stations_out = os.path.join(out, 'met', 'stations', 'dads_stations_res_elev_mgrs.csv')
+    tiles = os.path.join(out, 'boundaries', 'mgrs', 'mgrs_wgs.csv')
+    # stations_out = os.path.join(out, 'met', 'stations', 'madis_mgrs_28OCT2024.csv')
+
+    tiles = pd.read_csv(tiles)['MGRS_TILE'].unique().tolist()
     export_rasters(dem_d, out_dem, mapset="dads_map", overwrite=False, mgrs_list=tiles)
 
     # remove_rasters(dem_d, resolution=30)

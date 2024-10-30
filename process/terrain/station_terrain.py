@@ -15,10 +15,6 @@ def write_station_terrain(stations, tile_dir, station_out, shuffle=False, overwr
     if shuffle:
         stations = stations.sample(frac=1)
 
-    ts, ct, scaling, first, shape = None, 0, {}, True, None
-
-    scaling['stations'] = []
-
     tiles = stations['MGRS_TILE'].unique().tolist()
 
     for i, tile in enumerate(tiles, start=1):
@@ -37,13 +33,14 @@ def write_station_terrain(stations, tile_dir, station_out, shuffle=False, overwr
 
         for i, r in df.iterrows():
 
-            sf = os.path.join(station_out, f'{r['fid']}.csv')
+            sf = os.path.join(station_out, f'{r[index_col]}.csv')
 
             if os.path.exists(sf) and not overwrite:
                 continue
 
             d = r[COLS + [index_col]]
             d.to_csv(sf)
+
         print(tile)
 
 
@@ -58,19 +55,19 @@ if __name__ == '__main__':
     # fields = os.path.join(d, 'met', 'stations', 'dads_stations_res_elev_mgrs.csv')
     # ee_out = os.path.join(d, 'dem', 'terrain', 'madis_stations')
     # write_station_terrain(fields, ee_out, out, shuffle=True, overwrite=False, index_col='fid')
-    #
-    fields = os.path.join(d, 'met', 'stations', 'madis_mgrs_28OCT2024.csv')
-    ee_out = os.path.join(d, 'dem', 'terrain', 'new_madis')
-    glb = 'missing_madis_100'
-    coords_ = ['lat', 'lon']
-    write_station_terrain(fields, ee_out, out, shuffle=True, overwrite=False,
-                          index_col='fid', glob_=glb, coords=coords_)
+
+    # fields = os.path.join(d, 'met', 'stations', 'madis_mgrs_28OCT2024.csv')
+    # ee_out = os.path.join(d, 'dem', 'terrain', 'new_madis')
+    # glb = 'missing_madis_100'
+    # coords_ = ['lat', 'lon']
+    # write_station_terrain(fields, ee_out, out, shuffle=True, overwrite=False,
+    #                       index_col='fid', glob_=glb, coords=coords_)
 
     fields = os.path.join(d, 'met', 'stations', 'ghcn_CANUSA_stations_mgrs.csv')
     ee_out = os.path.join(d, 'dem', 'terrain', 'ghcn_stations')
     glb = 'ghcn_CANUSA_stations_mgrs_100'
     coords_ = ['LAT', 'LON']
     write_station_terrain(fields, ee_out, out, shuffle=True, overwrite=False,
-                          index_col='STAID', coords=coords_)
+                          index_col='STAID', coords=coords_, glob_=glb)
 
 # ========================= EOF ====================================================================
