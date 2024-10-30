@@ -14,11 +14,11 @@ from utils.qaqc_calc import calc_rso
 
 
 def read_hourly_data(stations, madis_src, madis_dst, rsun_tables, shuffle=False, bounds=None, overwrite=False,
-                     qaqc=False, plot=None):
-    kw = station_par_map('dads')
+                     qaqc=False, plot=None, stype='madis'):
+
+    kw = station_par_map(stype)
 
     station_list = pd.read_csv(stations, index_col=kw['index'])
-    station_list = station_list[station_list['source'] == 'madis']
 
     if shuffle:
         station_list = station_list.sample(frac=1)
@@ -39,6 +39,9 @@ def read_hourly_data(stations, madis_src, madis_dst, rsun_tables, shuffle=False,
 
     for i, (fid, row) in enumerate(station_list.iterrows(), start=1):
 
+        # if not fid.startswith('001'):
+        #     continue
+
         lon, lat, elv = row[kw['lon']], row[kw['lat']], row[kw['elev']]
         # print('{}: {} of {}; {:.2f}, {:.2f}'.format(fid, i, record_ct, lat, lon))
 
@@ -48,10 +51,14 @@ def read_hourly_data(stations, madis_src, madis_dst, rsun_tables, shuffle=False,
             continue
 
         station_dir = os.path.join(madis_src, fid)
+        if not os.path.isdir(station_dir):
+            print('station dir does not exist')
+            continue
+
         files_ = [os.path.join(station_dir, f) for f in os.listdir(station_dir)]
         years = [int(f.split('.')[0].split('_')[-1]) for f in files_ if '(copy)' not in f]
 
-        rsun_file = os.path.join(rsun_tables, 'tile_{}.csv'.format(row['MGRS_TILE']))
+        rsun_file = os.path.join(rsun_tables, '{}.csv'.format(fid))
         if not os.path.exists(rsun_file):
             print('rsun {} does not exist'.format(os.path.basename(rsun_file)))
             continue
@@ -291,19 +298,15 @@ if __name__ == '__main__':
         home = os.path.expanduser('~')
         d = os.path.join(home, 'data', 'IrrigationGIS')
 
-    # pandarallel.initialize(nb_workers=6)
+    # pandarallel.initialize(nb_workers=6))
 
-    sites = os.path.join(d, 'dads', 'met', 'stations', 'dads_stations_elev_mgrs.csv')
+    sites = os.path.join('/data/ssd1/madis', 'madis_shapefile_29OCT2024.csv')
+    madis_hourly_research = os.path.join('/data/ssd1/madis', 'inclusive_csv')
+    madis_daily_ = os.path.join('/data/ssd1/madis', 'madis_daily')
 
-    madis_hourly_public = os.path.join(d, 'climate', 'madis', 'LDAD_public', 'mesonet', 'csv')
-    madis_hourly_research = os.path.join(d, 'climate', 'madis', 'LDAD', 'mesonet', 'csv')
+    solrad = os.path.join(d, 'dads', 'dem', 'rsun_tables', 'station_rsun')
 
-    madis_daily_ = os.path.join(d, 'dads', 'met', 'obs', 'madis')
-    madis_plot_dir = os.path.join(d, 'dads', 'met', 'obs', 'plots', 'madis_{}')
-
-    solrad_out = os.path.join(d, 'dads', 'dem', 'rsun_tables')
-
-    read_hourly_data(sites, madis_hourly_research, madis_daily_, solrad_out, shuffle=True,
+    read_hourly_data(sites, madis_hourly_research, madis_daily_, solrad, shuffle=True, stype='madis',
                      bounds=(-125., 25., -66., 49.), overwrite=False, qaqc=True, plot=None)
 
 # ========================= EOF ====================================================================
