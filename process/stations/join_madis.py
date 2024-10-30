@@ -181,6 +181,8 @@ def write_stations_to_shapefile(station_tracker, shapefile_path):
     gdf = gpd.GeoDataFrame(data, crs="EPSG:4326")
     print(gdf.shape[0], 'shapefile')
     gdf.to_file(shapefile_path)
+    df = gdf[[c for c in gdf.columns if c != 'geometry']]
+    df.to_csv(shapefile_path.replace('.shp', '.csv'))
 
 
 def validate_entry(station_id, info):
@@ -236,14 +238,10 @@ if __name__ == '__main__':
     mesonet_dir = os.path.join(d, 'climate', 'madis', 'LDAD', 'mesonet')
     netcdf_src = os.path.join(mesonet_dir, 'netCDF')
 
-    # tracker_ = os.path.join('/data/ssd1/madis', 'stations.json')
-    tracker_ = os.path.join('/home/dgketchum/Downloads', 'stations.json')
+    tracker_ = os.path.join('/data/ssd1/madis', 'stations.json')
+    out_dir_ = os.path.join('/data/ssd1/madis', 'inclusive_csv')
 
-    # out_dir_ = os.path.join('/data/ssd1/madis', 'inclusive_csv')
-    # out_dir_ = os.path.join(mesonet_dir, 'yrmo_csv')
-
-    # shp = os.path.join('/data/ssd1/madis', 'madis_shapefile.shp')
-    shp = os.path.join('/home/dgketchum/Downloads', 'madis_shapefile_28OCT2024.shp')
+    shp = os.path.join('/data/ssd1/madis', 'madis_shapefile_29OCT2024.shp')
     # get_station_metadata(netcdf_src, out_dir_, tracker_)
     write_stations_to_shapefile(tracker_, shp)
 
@@ -256,6 +254,6 @@ if __name__ == '__main__':
     shp = os.path.join('/home/dgketchum/Downloads', 'madis_shapefile.shp')
     stations_out = os.path.join(d, 'dads', 'met', 'stations', 'dads_stations_res_elev_mgrs.shp')
     shp_out = os.path.join('/home/dgketchum/Downloads', 'madis_28OCT2024.shp')
-    write_missing(shp, stations_out, shp_out)
+    # write_missing(shp, stations_out, shp_out)
 
 # ========================= EOF ====================================================================
