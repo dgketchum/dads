@@ -267,7 +267,7 @@ if __name__ == '__main__':
     edges = os.path.join(dads, 'graph')
 
     # climate embedding
-    encoder_dir = os.path.join(training, 'autoencoder', 'checkpoints', '10171216')
+    encoder_dir = os.path.join(training, 'autoencoder', 'checkpoints', '10231635')
 
     now = datetime.now().strftime('%m%d%H%M')
     chk = os.path.join(dads, 'checkpoints', now)

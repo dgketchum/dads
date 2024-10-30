@@ -3,7 +3,8 @@ from copy import deepcopy
 from datetime import datetime as dt
 
 import numpy as np
-from pandas import read_csv, DataFrame, date_range
+import pandas as pd
+from pandas import read_csv, DataFrame, date_range, DatetimeIndex
 import requests
 from io import StringIO
 
@@ -22,7 +23,7 @@ def snotel_meteorology(csv, out_dir, overwrite=False):
 
     abbrev = {v: k for k, v in state_name_abbreviation().items()}
     station_dct, start_dates = {}, []
-    vars_ = ['swe', 'tmin', 'tmax', 'tavg', 'prec', 'rn', 'rh', 'ws']
+    vars_ = ['swe', 'rh', 'ws', 'tmin', 'tmax', 'tavg', 'prec', 'rn']
     header, data_start = None, None
 
     for _id, row in df.iterrows():
@@ -81,6 +82,8 @@ def snotel_meteorology(csv, out_dir, overwrite=False):
 
         prec = list(sta_df.loc[:, 'prec'].values)
         sta_df['prec'] = [np.nan] + [prec[i] - prec[i - 1] for i in range(1, len(prec))]
+        sta_df.index = DatetimeIndex(sta_df.index)
+        sta_df = sta_df.sort_index()
         sta_df.to_csv(file_, float_format='%.3f')
         print([(k, v) for k, v in np.isfinite(sta_df).sum(axis=0).items()])
         print('\n')

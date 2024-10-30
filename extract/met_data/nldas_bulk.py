@@ -120,5 +120,5 @@ if __name__ == '__main__':
     grid_dir = os.path.join(d, 'dads', 'met', 'gridded', 'nldas2_monthly')
     incomp = os.path.join(d, 'dads', 'met', 'gridded', 'incomplete_nldas_files.json')
 
-    extract_nldas(sites, nc_data, incomp, grid_dir, overwrite=False, bounds=None, num_workers=1, debug=True)
+    extract_nldas(sites, nc_data, incomp, grid_dir, overwrite=False, bounds=None, num_workers=20, debug=False)
 # ========================= EOF ====================================================================
