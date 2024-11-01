@@ -1,11 +1,8 @@
 import os
 
 import xarray as xr
-import apache_beam as beam
-import pandas as pd
 import zarr
 from dask.distributed import Client
-from pangeo_forge_recipes import aggregation, dynamic_target_chunks
 
 
 def process_batch_to_zarr(nc_files_batch, zarr_dir):
@@ -41,43 +38,31 @@ def convert_nc_to_zarr_in_batches(nc_dir, zarr_dir, batch_size=1000):
         else:
             print(f'Failed on batch {i // batch_size + 1}/{len(nc_files) // batch_size + 1}')
 
-def chunk_for_time(nc_dir, zarr_dir):
+def chunk_for_time(nc_dir, zarr_dir, year):
 
-    nc_files = [os.path.join(nc_dir, f) for f in os.listdir(nc_dir) if f.endswith('.nc') and '200503' in f]
+    y = str(year)
+    nc_files = [os.path.join(nc_dir, f) for f in os.listdir(nc_dir) if f.endswith('.nc') and y == f.split('.')[1][1:5]]
+    nc_files = [f for f in nc_files if os.path.getsize(f) > 0]
     nc_files.sort()
 
     print(f'{len(nc_files)} files')
     print(f'first: {os.path.basename(nc_files[0])}')
     print(f'last: {os.path.basename(nc_files[-1])}')
 
-    ds = xr.open_mfdataset(nc_files, chunks=False)
-    d = ds.to_dict(data=False)
-    schema = aggregation.XarraySchema(
-        attrs=d.get('attrs'),
-        coords=d.get('coords'),
-        data_vars=d.get('data_vars'),
-        dims=d.get('dims'),
-        chunks=d.get('chunks', {}),
-    )
-    target_chunks = dynamic_target_chunks.dynamic_target_chunks_from_schema(
-        schema,
-        target_chunk_size='100MB',
-        target_chunks_aspect_ratio={'time': -1, 'lat': 1, 'lon': 1},
-        size_tolerance=0.5
-    )
+    ds = xr.open_mfdataset(nc_files, combine='by_coords', engine='netcdf4')
 
-    ds = xr.open_mfdataset(nc_files, combine='by_coords', chunks=target_chunks)
+    ds = ds.chunk({'bnds': 2, 'lat': 112, 'lon': 232, 'time': 2000})
     ds.to_zarr(zarr_dir)
-    xr.open_zarr(zarr_dir)
 
 def main():
-    # client = Client(n_workers=64, memory_limit='256GB')
+    client = Client(n_workers=64, memory_limit='256GB')
 
     nc_dir = '/data/ssd1/nldas2'
-    zarr_dir = '/data/ssd1/nldas2_ts.zarr'
 
     # convert_nc_to_zarr_in_batches(nc_dir, zarr_dir, batch_size=300)
-    chunk_for_time(nc_dir, zarr_dir)
+    for yr in range(1990, 2024):
+        zarr_dir = '/data/ssd1/nldas2_ts_{}.zarr'.format(yr)
+        chunk_for_time(nc_dir, zarr_dir, yr)
 
 
 if __name__ == '__main__':
