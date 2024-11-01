@@ -40,26 +40,30 @@ def extract_met_data(stations, gridded_dir, overwrite=False, station_type='opene
         lon, lat, elv = row[kw['lon']], row[kw['lat']], row[kw['elev']]
         print('{}: {} of {}; {:.2f}, {:.2f}'.format(fid, i, record_ct, lat, lon))
 
-        _file = os.path.join(gridded_dir, 'nldas2_raw', '{}.csv'.format(fid))
-        if not os.path.exists(_file) or overwrite:
-            df = get_nldas(lon, lat)
-            if df is None:
-                continue
-            df.to_csv(_file)
-            print('nldas', fid)
-
-        else:
-            print('nldas {} exists'.format(fid))
-
-        if gridmet:
-            _file = os.path.join(gridded_dir, 'gridmet_raw', '{}.csv'.format(fid))
+        try:
+            _file = os.path.join(gridded_dir, 'nldas2_api_resp', '{}.csv'.format(fid))
             if not os.path.exists(_file) or overwrite:
-                df = get_gridmet(lon=lon, lat=lat)
+                df = get_nldas(lon, lat)
+                if df is None:
+                    continue
                 df.to_csv(_file)
-                print('gridmet', fid)
+                print('nldas', fid)
 
             else:
-                print('gridmet {} exists'.format(fid))
+                print('nldas {} exists'.format(fid))
+
+            if gridmet:
+                _file = os.path.join(gridded_dir, 'gridmet_raw', '{}.csv'.format(fid))
+                if not os.path.exists(_file) or overwrite:
+                    df = get_gridmet(lon=lon, lat=lat)
+                    df.to_csv(_file)
+                    print('gridmet', fid)
+
+                else:
+                    print('gridmet {} exists'.format(fid))
+
+        except pd.errors.ParserError:
+            continue
 
 
 def get_nldas(lon, lat, start='2000-01-01', end='2023-12-31'):
@@ -146,12 +150,13 @@ if __name__ == '__main__':
     # pandarallel.initialize(nb_workers=6)
 
     madis_data_dir_ = os.path.join(d, 'climate', 'madis')
-    sites = os.path.join(d, 'climate', 'ghcn', 'stations', 'ghcn_CANUSA_stations_mgrs.csv')
+    # sites = os.path.join(d, 'climate', 'ghcn', 'stations', 'ghcn_CANUSA_stations_mgrs.csv')
+    sites = os.path.join(d, 'dads', 'met', 'stations', 'madis_mgrs_28OCT2024.csv')
 
     grid_dir = os.path.join(d, 'dads', 'met', 'gridded')
 
-    extract_met_data(sites, grid_dir, overwrite=False, station_type='ghcn',
-                     shuffle=True, bounds=(-114., 42., -100., 49.), gridmet=True)
+    extract_met_data(sites, grid_dir, overwrite=False, station_type='madis',
+                     shuffle=True, bounds=None, gridmet=True)
 
     # dest_ = os.path.join(grid_dir, 'era5', 'netCDF')
     # download_era5(dest_)
