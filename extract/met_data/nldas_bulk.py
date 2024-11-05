@@ -16,20 +16,17 @@ def get_nldas(dst):
     print('earthdata access authenticated')
     results = earthaccess.search_data(
         doi='10.5067/THUF4J1RLSYG',
-        temporal=('1990-01-01', '2023-12-31'))
+        temporal=('2003-02-01', '2003-07-01'))
     earthaccess.download(results, dst)
 
 
-def extract_nldas(stations, nc_data, incomplete_out, out_data, workers=8, overwrite=False, bounds=None,
-                  index_col='fid', debug=False):
+def extract_nldas(stations, nc_data, out_data, workers=8, overwrite=False, bounds=None,
+                  debug=False):
 
-    if os.path.exists(incomplete_out):
-        with open(incomplete_out, 'r') as f:
-            incomplete = json.load(f)
-    else:
-        incomplete = {'missing': []}
-
-    station_list = pd.read_csv(stations, index_col=index_col)
+    station_list = pd.read_csv(stations)
+    if 'LAT' in station_list.columns:
+        station_list = station_list.rename(columns={'STAID': 'fid', 'LAT': 'latitude', 'LON': 'longitude'})
+    station_list.index = station_list['fid']
 
     if bounds:
         w, s, e, n = bounds
@@ -46,7 +43,9 @@ def extract_nldas(stations, nc_data, incomplete_out, out_data, workers=8, overwr
     indexer = station_list[['lat', 'lon']].to_xarray()
     fids = np.unique(indexer.fid.values).tolist()
 
-    for year in range(1990, 2024):
+    yrmo, files = [], []
+
+    for year in range(2003, 2004):
 
         for month in range(1, 13):
 
@@ -55,76 +54,67 @@ def extract_nldas(stations, nc_data, incomplete_out, out_data, workers=8, overwr
 
             nc_files = [f for f in os.listdir(nc_data) if date_string == f.split('.')[1][1:7]]
             nc_files.sort()
+            nc_files = [os.path.join(nc_data, f) for f in nc_files]
 
             if not nc_files:
                 print(f"No NetCDF files found for {year}-{month}")
                 continue
 
-            datasets, complete = [], True
-            for f in nc_files[:49]:
-                try:
-                    nc_file = os.path.join(nc_data, f)
-                    ds = xr.open_dataset(nc_file, engine='netcdf4', decode_cf=False)
-                    datasets.append(ds)
+            yrmo.append(date_string)
+            files.append(nc_files)
 
-                except Exception as exc:
-                    incomplete['missing'].append(f)
-                    print(f"Unreadable NetCDF files found for {year}-{month}")
-                    complete = False
-                    break
+    if debug:
+        for fileset, dts in zip(files, yrmo):
+            proc_time_slice(fileset, indexer.copy(), dts, fids, out_data, overwrite)
 
-            if not complete:
-                continue
+    with concurrent.futures.ProcessPoolExecutor(max_workers=workers) as executor:
+        futures = [executor.submit(proc_time_slice, fileset, indexer.copy(), dts, fids, out_data, overwrite)
+                   for fileset, dts in zip(files, yrmo)]
+        concurrent.futures.wait(futures)
 
-            ds = xr.concat(datasets, dim='time')
-            ds = ds.sel(lat=indexer.lat, lon=indexer.lon, method='nearest')
-            time_values = pd.to_datetime(ds['time'].values, unit='h', origin=pd.Timestamp('1979-01-01'))
-            ds = ds.assign_coords(time=time_values).set_index(time='time')
 
-            if debug:
-                for fid in fids:
-                    process_fid(fid, ds, date_string, out_data, overwrite)
-            else:
-                with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
-                    futures = [executor.submit(process_fid, fid, ds, date_string, out_data, overwrite) for fid in fids]
-                    concurrent.futures.wait(futures)
+def proc_time_slice(nc_files_, indexer_, date_string_, fids_, out_, overwrite_):
+    datasets, complete = [], True
+    for f in nc_files_:
+        try:
+            ds = xr.open_dataset(f, engine='netcdf4', decode_cf=False)
+            datasets.append(ds)
+        except Exception as exc:
+            return
 
-    if len(incomplete) > 0:
-        with open(incomplete_out, 'w') as fp:
-            json.dump(incomplete, fp, indent=4)
+    ds = xr.concat(datasets, dim='time')
+    ds = ds.sel(lat=indexer_.lat, lon=indexer_.lon, method='nearest')
+    time_values = pd.to_datetime(ds['time'].values, unit='h', origin=pd.Timestamp('1979-01-01'))
+    ds = ds.assign_coords(time=time_values).set_index(time='time')
+    print(date_string_)
 
-def process_fid(fid, ds, yearmo, out_data, overwrite):
-    dst_dir = os.path.join(out_data, fid)
-    if not os.path.exists(dst_dir):
-        os.mkdir(dst_dir)
-    _file = os.path.join(dst_dir, '{}_{}.csv'.format(fid, yearmo))
+    for fid in fids_:
+        dst_dir = os.path.join(out_, fid)
+        if not os.path.exists(dst_dir):
+            os.mkdir(dst_dir)
+        _file = os.path.join(dst_dir, '{}_{}.csv'.format(fid, date_string_))
 
-    if not os.path.exists(_file) or overwrite:
-        df_station = ds.sel(fid=fid).to_dataframe()
-        df_station = df_station.groupby(df_station.index.get_level_values('time')).first()
-        df_station['dt'] = [i.strftime('%Y%m%d%H') for i in df_station.index]
-        df_station.to_csv(_file, index=False)
-        print(_file)
+        if not os.path.exists(_file) or overwrite_:
+            df_station = ds.sel(fid=fid).to_dataframe()
+            df_station = df_station.groupby(df_station.index.get_level_values('time')).first()
+            df_station['dt'] = [i.strftime('%Y%m%d%H') for i in df_station.index]
+            df_station.to_csv(_file, index=False)
 
 
 def main():
-
     d = '/media/research/IrrigationGIS'
     if not os.path.isdir(d):
         home = os.path.expanduser('~')
         d = os.path.join(home, 'data', 'IrrigationGIS')
 
-    nc_data_ = '/data/ssd1/nldas2'
-    # get_nldas(nc_data)
+    nc_data_ = '/data/ssd1/nldas2/netcdf'
+    # get_nldas(nc_data_)
 
     # sites = os.path.join(d, 'climate', 'ghcn', 'stations', 'ghcn_CANUSA_stations_mgrs.csv')
     sites = os.path.join(d, 'dads', 'met', 'stations', 'madis_mgrs_28OCT2024.csv')
-    grid_dir = '/data/ssd1/nldas_raw/'
+    out_files = '/data/ssd1/nldas2/station_data/'
 
-    incomp = os.path.join(d, 'dads', 'met', 'gridded', 'incomplete_files_nldas.json')
-
-    extract_nldas(sites, nc_data_, incomp, grid_dir, workers=20,
-                  overwrite=False, bounds=None, debug=True)
+    extract_nldas(sites, nc_data_, out_files, workers=10, overwrite=False, bounds=None, debug=False)
 
 
 if __name__ == '__main__':
