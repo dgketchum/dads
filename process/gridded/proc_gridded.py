@@ -36,18 +36,12 @@ def extract_met_data(stations, gridded_dir, overwrite=False, station_type='opene
         station_list = station_list[(station_list['latitude'] < n) & (station_list['latitude'] >= s)]
         station_list = station_list[(station_list['longitude'] < e) & (station_list['longitude'] >= w)]
 
-    record_ct = station_list.shape[0]
     for i, (fid, row) in enumerate(station_list.iterrows(), start=1):
-
-        # if fid != 'TMPF7':
-        #     continue
 
         lon, lat, elv = row[kw['lon']], row[kw['lat']], row[kw['elev']]
         if np.isnan(elv):
             print('{} has nan elevation'.format(fid))
             continue
-
-        # print('{}: {} of {}; {:.2f}, {:.2f}'.format(fid, i, record_ct, lat, lon))
 
         in_file_ = os.path.join(gridded_dir, 'nldas2_raw', '{}.csv'.format(fid))
         if not os.path.exists(in_file_):
@@ -79,7 +73,6 @@ def extract_met_data(stations, gridded_dir, overwrite=False, station_type='opene
                 proc_gridmet(in_csv=in_file_gm, lat=lat, elev=elv, out_csv=out_file_gm)
                 print('gridmet', fid)
             else:
-                # print('gridmet {} exists'.format(fid))
                 pass
 
 
@@ -170,11 +163,11 @@ if __name__ == '__main__':
 
     pandarallel.initialize(nb_workers=4)
 
-    sites = os.path.join(d, 'dads', 'met', 'stations', 'dads_stations_res_elev_mgrs.csv')
+    sites = os.path.join(d, 'met', 'stations', 'madis_mgrs_28OCT2024.csv')
 
     grid_dir = os.path.join(d, 'dads', 'met', 'gridded')
 
     extract_met_data(sites, grid_dir, overwrite=False, station_type='dads',  shuffle=True,
-                     bounds=(-125., 25., -66., 49.), gridmet=True, hourly=False)
+                     bounds=None, gridmet=True, hourly=False)
 
 # ========================= EOF ====================================================================
