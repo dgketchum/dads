@@ -45,7 +45,10 @@ def extract_nldas(stations, nc_data, out_data, workers=8, overwrite=False, bound
 
     yrmo, files = [], []
 
-    for year in range(2003, 2004):
+    for year in range(1990, 2024):
+
+        if year == 2003:
+            continue
 
         for month in range(1, 13):
 
@@ -86,8 +89,7 @@ def proc_time_slice(nc_files_, indexer_, date_string_, fids_, out_, overwrite_):
     ds = ds.sel(lat=indexer_.lat, lon=indexer_.lon, method='nearest')
     time_values = pd.to_datetime(ds['time'].values, unit='h', origin=pd.Timestamp('1979-01-01'))
     ds = ds.assign_coords(time=time_values).set_index(time='time')
-    print(date_string_)
-
+    ct = 0
     for fid in fids_:
         dst_dir = os.path.join(out_, fid)
         if not os.path.exists(dst_dir):
@@ -99,6 +101,8 @@ def proc_time_slice(nc_files_, indexer_, date_string_, fids_, out_, overwrite_):
             df_station = df_station.groupby(df_station.index.get_level_values('time')).first()
             df_station['dt'] = [i.strftime('%Y%m%d%H') for i in df_station.index]
             df_station.to_csv(_file, index=False)
+            ct += 1
+    print(f'wrote {ct} for {date_string_}')
 
 
 def main():
@@ -110,11 +114,11 @@ def main():
     nc_data_ = '/data/ssd1/nldas2/netcdf'
     # get_nldas(nc_data_)
 
-    # sites = os.path.join(d, 'climate', 'ghcn', 'stations', 'ghcn_CANUSA_stations_mgrs.csv')
-    sites = os.path.join(d, 'dads', 'met', 'stations', 'madis_mgrs_28OCT2024.csv')
+    sites = os.path.join(d, 'climate', 'ghcn', 'stations', 'ghcn_CANUSA_stations_mgrs.csv')
+    # sites = os.path.join(d, 'dads', 'met', 'stations', 'madis_29OCT2024.csv')
     out_files = '/data/ssd1/nldas2/station_data/'
 
-    extract_nldas(sites, nc_data_, out_files, workers=10, overwrite=False, bounds=None, debug=False)
+    extract_nldas(sites, nc_data_, out_files, workers=20, overwrite=False, bounds=None, debug=False)
 
 
 if __name__ == '__main__':
