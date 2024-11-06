@@ -51,6 +51,7 @@ def extract_surface_reflectance(stations, gridded_dir, incomplete_out, out_data,
         print('dropped {} stations outside NLDAS-2 extent'.format(ln - station_list.shape[0]))
 
     start, end = datetime(2000, 1, 1), datetime(2024, 8, 1)
+    indexer = station_list[['latitude', 'longitude']].to_xarray()
 
     for year in range(start.year, end.year + 1):
 
@@ -92,7 +93,6 @@ def extract_surface_reflectance(stations, gridded_dir, incomplete_out, out_data,
             time_values = pd.to_datetime(ds['time'].values, unit='D', origin=pd.Timestamp('1981-01-01'))
             ds = ds.assign_coords(time=time_values).set_index(time='time')
 
-            indexer = station_list[['latitude', 'longitude']].to_xarray()
             ds = ds.sel(latitude=indexer.latitude, longitude=indexer.longitude, method='nearest')
 
             # TODO: consider making use of zenith, overpass time and QA data

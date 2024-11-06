@@ -241,7 +241,7 @@ if __name__ == '__main__':
     tracker_ = os.path.join('/data/ssd1/madis', 'stations.json')
     out_dir_ = os.path.join('/data/ssd1/madis', 'inclusive_csv')
 
-    shp = os.path.join('/data/ssd1/madis', 'madis_shapefile_29OCT2024.shp')
+    shp = os.path.join('/data/ssd1/madis', 'madis_shapefile_05NOV2024.shp')
     # get_station_metadata(netcdf_src, out_dir_, tracker_)
     write_stations_to_shapefile(tracker_, shp)
 
