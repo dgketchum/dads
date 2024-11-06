@@ -22,7 +22,6 @@ def get_nldas(dst):
 
 def extract_nldas(stations, nc_data, out_data, workers=8, overwrite=False, bounds=None,
                   debug=False):
-
     station_list = pd.read_csv(stations)
     if 'LAT' in station_list.columns:
         station_list = station_list.rename(columns={'STAID': 'fid', 'LAT': 'latitude', 'LON': 'longitude'})
@@ -45,12 +44,12 @@ def extract_nldas(stations, nc_data, out_data, workers=8, overwrite=False, bound
 
     yrmo, files = [], []
 
-    for year in range(1990, 2024):
-
-        if year == 2003:
-            continue
+    for year in range(2008, 2024):
 
         for month in range(1, 13):
+
+            if year == 2008 and month <= 8:
+                continue
 
             month_start = datetime(year, month, 1)
             date_string = month_start.strftime('%Y%m')
