@@ -11,17 +11,17 @@ import xarray as xr
 from dask.distributed import Client
 
 
-def get_nldas(dst):
+def get_daymet(dst):
     earthaccess.login()
     print('earthdata access authenticated')
     results = earthaccess.search_data(
-        doi='10.5067/THUF4J1RLSYG',
-        temporal=('2003-02-01', '2003-07-01'))
+        doi='10.3334/ORNLDAAC/2129',
+        temporal=('1990-01-01', '1990-01-03'))
     earthaccess.download(results, dst)
 
 
-def extract_nldas(stations, nc_data, out_data, workers=8, overwrite=False, bounds=None,
-                  debug=False):
+def extract_daymet(stations, nc_data, out_data, workers=8, overwrite=False, bounds=None,
+                   debug=False):
     station_list = pd.read_csv(stations)
     if 'LAT' in station_list.columns:
         station_list = station_list.rename(columns={'STAID': 'fid', 'LAT': 'latitude', 'LON': 'longitude'})
@@ -31,14 +31,6 @@ def extract_nldas(stations, nc_data, out_data, workers=8, overwrite=False, bound
         w, s, e, n = bounds
         station_list = station_list[(station_list['latitude'] < n) & (station_list['latitude'] >= s)]
         station_list = station_list[(station_list['longitude'] < e) & (station_list['longitude'] >= w)]
-    else:
-        ln = station_list.shape[0]
-        w, s, e, n = (-125.0, 25.0, -67.0, 53.0)
-        station_list = station_list[(station_list['latitude'] < n) & (station_list['latitude'] >= s)]
-        station_list = station_list[(station_list['longitude'] < e) & (station_list['longitude'] >= w)]
-        print('dropped {} stations outside NLDAS-2 extent'.format(ln - station_list.shape[0]))
-
-    print(f'{len(station_list)} stations to write')
 
     station_list = station_list.rename(columns={'latitude': 'lat', 'longitude': 'lon'})
     indexer = station_list[['lat', 'lon']].to_xarray()
@@ -46,37 +38,26 @@ def extract_nldas(stations, nc_data, out_data, workers=8, overwrite=False, bound
 
     yrmo, files = [], []
 
-    for year in range(1996, 2002):
-    # for year in range(2010, 2016):
+    for year in range(1990, 1991):
 
-        for month in range(1, 13):
+        all_files = [f for f in os.listdir(nc_data) if f.split('.')[-2][-4:] == str(year)]
+        all_files.sort()
+        nc_files = []
+        for file in all_files:
+            split = file.split('_')
+            region, param = split[3], split[4]
+            if param in ['tmax', 'tmin', 'vp', 'prcp', 'srad'] and region == 'na':
+                nc_files.append(os.path.join(nc_data, file))
 
-            # if year == 2015 and month >= 6:
-            #     continue
+        if not nc_files:
+            print(f"No NetCDF files found for {year}")
+            continue
 
-            if year == 1996 and month <= 3:
-                continue
+        yrmo.append(year)
+        files.append(nc_files)
 
-            if year == 2001 and month >= 6:
-                continue
-
-            month_start = datetime(year, month, 1)
-            date_string = month_start.strftime('%Y%m')
-
-            nc_files = [f for f in os.listdir(nc_data) if date_string == f.split('.')[1][1:7]]
-            nc_files.sort()
-            nc_files = [os.path.join(nc_data, f) for f in nc_files]
-
-            if not nc_files:
-                print(f"No NetCDF files found for {year}-{month}")
-                continue
-
-            yrmo.append(date_string)
-            files.append(nc_files)
-
-    print(f'{len(yrmo)} months to write')
+    print(f'{len(yrmo)} years to write')
     file_packs = [(yrmo[i], len(files[i])) for i in range(0, len(yrmo))]
-    [print(fp) for fp in file_packs]
 
     if debug:
         for fileset, dts in zip(files, yrmo):
@@ -95,23 +76,18 @@ def proc_time_slice(nc_files_, indexer_, date_string_, fids_, out_, overwrite_):
             ds = xr.open_dataset(f, engine='netcdf4', decode_cf=False)
             datasets.append(ds)
         except Exception as exc:
-            print(f'{exc} on {f}')
             return
 
     ds = xr.concat(datasets, dim='time')
     ds = ds.sel(lat=indexer_.lat, lon=indexer_.lon, method='nearest')
     time_values = pd.to_datetime(ds['time'].values, unit='h', origin=pd.Timestamp('1979-01-01'))
     ds = ds.assign_coords(time=time_values).set_index(time='time')
-    ct, skip = 0, 0
-    print(f'prepare to write {date_string_}')
+    ct = 0
     for fid in fids_:
         dst_dir = os.path.join(out_, fid)
         if not os.path.exists(dst_dir):
             os.mkdir(dst_dir)
         _file = os.path.join(dst_dir, '{}_{}.csv'.format(fid, date_string_))
-
-        if os.path.exists(_file) and os.path.getsize(_file) == 0:
-            os.remove(_file)
 
         if not os.path.exists(_file) or overwrite_:
             df_station = ds.sel(fid=fid).to_dataframe()
@@ -119,24 +95,24 @@ def proc_time_slice(nc_files_, indexer_, date_string_, fids_, out_, overwrite_):
             df_station['dt'] = [i.strftime('%Y%m%d%H') for i in df_station.index]
             df_station.to_csv(_file, index=False)
             ct += 1
-        else:
-            skip += 1
-    print(f'wrote {ct} for {date_string_}, skipped {skip}')
+    print(f'wrote {ct} for {date_string_}')
 
 
 def main():
     d = '/media/research/IrrigationGIS'
     if not os.path.isdir(d):
-        d = os.path.join('/home', 'dgketchum', 'data', 'IrrigationGIS')
+        home = os.path.expanduser('~')
+        d = os.path.join(home, 'data', 'IrrigationGIS')
 
-    nc_data_ = '/data/ssd1/nldas2/netcdf'
-    # get_nldas(nc_data_)
+    nc_data_ = '/data/ssd2/daymet/netcdf'
+    # nc_data_ = '/home/dgketchum/Downloads/daymet/netcdf'
+    get_daymet(nc_data_)
 
-    sites = os.path.join(d, 'climate', 'ghcn', 'stations', 'ghcn_CANUSA_stations_mgrs.csv')
-    # sites = os.path.join(d, 'dads', 'met', 'stations', 'madis_29OCT2024.csv')
-    out_files = '/data/ssd2/nldas2/station_data/'
+    # sites = os.path.join(d, 'climate', 'ghcn', 'stations', 'ghcn_CANUSA_stations_mgrs.csv')
+    sites = os.path.join(d, 'dads', 'met', 'stations', 'madis_29OCT2024.csv')
+    out_files = '/data/ssd2/daymet/station_data/'
 
-    extract_nldas(sites, nc_data_, out_files, workers=12, overwrite=False, bounds=None, debug=False)
+    # extract_daymet(sites, nc_data_, out_files, workers=20, overwrite=False, bounds=None, debug=False)
 
 
 if __name__ == '__main__':
