@@ -244,6 +244,9 @@ if __name__ == '__main__':
     if not os.path.isdir(d):
         d = os.path.join('/home', 'ec2-user', 'data', 'IrrigationGIS')
 
+    if not os.path.isdir(d):
+        d = os.path.join('/home', 'dketchum', 'data', 'IrrigationGIS')
+
     # nc_data_ = '/data/ssd1/nldas2/netcdf'
     nc_data_ = None
     # get_nldas(nc_data_)
