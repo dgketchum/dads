@@ -95,8 +95,8 @@ def proc_time_slice(nc_files_, indexer_, date_string_, fids_, out_, overwrite_, 
         if isinstance(nc_files_[0], DataGranule):
             tmpdir = tempfile.gettempdir()
             ges_files = earthaccess.download(nc_files_, tmpdir, threads=4)
-            # [print(f) for f in ges_files]
             ds = xr.open_mfdataset(ges_files, engine='netcdf4')
+            [os.remove(f) for f in ges_files]
         else:
             ds = xr.open_mfdataset(nc_files_, engine='netcdf4')
 
@@ -247,15 +247,15 @@ if __name__ == '__main__':
     if not os.path.isdir(d):
         d = os.path.join('/home', 'dketchum', 'data', 'IrrigationGIS')
 
-    # nc_data_ = '/data/ssd1/nldas2/netcdf'
-    nc_data_ = None
+    nc_data_ = '/data/ssd1/nldas2/netcdf'
+    # nc_data_ = None
     # get_nldas(nc_data_)
 
-    sites = os.path.join(d, 'climate', 'ghcn', 'stations', 'ghcn_CANUSA_stations_mgrs.csv')
-    # sites = os.path.join(d, 'dads', 'met', 'stations', 'madis_29OCT2024.csv')
+    # sites = os.path.join(d, 'climate', 'ghcn', 'stations', 'ghcn_CANUSA_stations_mgrs.csv')
+    sites = os.path.join(d, 'dads', 'met', 'stations', 'madis_29OCT2024.csv')
 
-    # csv_files = '/data/ssd2/nldas2/station_data/'
-    csv_files = os.path.join(d, 'dads', 'met', 'gridded', 'nldas2', 'station_data')
+    csv_files = '/data/ssd2/nldas2/station_data/'
+    # csv_files = os.path.join(d, 'dads', 'met', 'gridded', 'nldas2', 'station_data')
 
     p_files = os.path.join(d, 'dads', 'met', 'gridded', 'nldas2_parquet')
 
@@ -263,10 +263,10 @@ if __name__ == '__main__':
         earthaccess.login()
         print('earthdata access authenticated')
     
-    extract_nldas(sites, csv_files, nc_data=None, workers=16, overwrite=False, bounds=None,
-                  debug=False, parquet_check=p_files)
+    # extract_nldas(sites, csv_files, nc_data=None, workers=16, overwrite=False, bounds=None,
+    #               debug=False, parquet_check=p_files)
 
-    # process_and_concat_csv(sites, csv_files, start_date='1990-01-01', end_date='2023-12-31', outdir=p_files,
-    #                        workers=10, alt_dir='/data/ssd1/nldas2/station_data/')
+    process_and_concat_csv(sites, csv_files, start_date='1990-01-01', end_date='2023-12-31', outdir=p_files,
+                           workers=1, alt_dir='/data/ssd1/nldas2/station_data/')
 
 # ========================= EOF ====================================================================
