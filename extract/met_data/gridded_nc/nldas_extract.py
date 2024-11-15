@@ -1,17 +1,15 @@
 import calendar
-import os
-import gc
-import tempfile
-import shutil
-import calendar
 import concurrent.futures
+import gc
+import os
+import tempfile
 from datetime import datetime
 
 import earthaccess
-from earthaccess.results import DataGranule
 import numpy as np
 import pandas as pd
 import xarray as xr
+from earthaccess.results import DataGranule
 
 
 def get_nldas(start_date, end_date, down_dst=None):
