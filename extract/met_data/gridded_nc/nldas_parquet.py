@@ -24,6 +24,7 @@ def process_and_concat_csv(stations, root, start_date, end_date, outdir, workers
 
     station_list = station_list.sample(frac=1)
     subdirs = station_list['fid'].to_list()
+    # subdirs.sort()
 
     if missing_file:
         for sd in subdirs:
@@ -38,9 +39,10 @@ def process_and_concat_csv(stations, root, start_date, end_date, outdir, workers
 
 def process_parquet(root_, subdir_, required_months_, expected_index_, strdt_, outdir_, write_missing=None):
     subdir_path = os.path.join(root_, subdir_)
+    out_file = os.path.join(outdir_, f'{subdir_}.parquet.gzip')
+
     if os.path.isdir(subdir_path):
 
-        out_file = os.path.join(outdir_, f'{subdir_}.parquet.gzip')
         csv_files_ = [f for f in os.listdir(subdir_path) if f.endswith('.csv')]
 
         if os.path.exists(out_file) and csv_files_:
@@ -67,7 +69,7 @@ def process_parquet(root_, subdir_, required_months_, expected_index_, strdt_, o
         df = df.drop(columns=['fid', 'time_bnds'])
 
         missing = len(expected_index_) - df.shape[0]
-        if missing > 10:
+        if missing > 15:
             counts, missing_list = {}, []
             missing_idx = [i for i in expected_index_ if i not in df.index]
             for midx in missing_idx:
@@ -83,7 +85,7 @@ def process_parquet(root_, subdir_, required_months_, expected_index_, strdt_, o
 
 
             print(f'{subdir_} is missing {missing} rows')
-            [print(k, v) for k, v in counts.items()]
+            # [print(k, v) for k, v in counts.items()]
 
             counts = {k: v for k, v in counts.items() if v > 1}
 
@@ -106,7 +108,10 @@ def process_parquet(root_, subdir_, required_months_, expected_index_, strdt_, o
               f' {datetime.strftime(datetime.now(), '%Y%m%d %H:%M')}')
         return
     else:
-        print(f'{subdir_} not found')
+        if os.path.exists(out_file):
+            print(f'{os.path.basename(out_file)} exists, skipping')
+        else:
+            print(f'{subdir_} not found')
         return
 
 

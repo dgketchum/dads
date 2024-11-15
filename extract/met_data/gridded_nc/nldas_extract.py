@@ -24,7 +24,7 @@ def get_nldas(start_date, end_date, down_dst=None):
 
 
 def extract_nldas(stations, out_data, nc_data=None, workers=8, overwrite=False, bounds=None, debug=False,
-                  parquet_check=None, missing_list=None):
+                  parquet_check=None, missing_list=None, tmpd=None):
     station_list = pd.read_csv(stations)
     if 'LAT' in station_list.columns:
         station_list = station_list.rename(columns={'STAID': 'fid', 'LAT': 'latitude', 'LON': 'longitude'})
@@ -85,19 +85,20 @@ def extract_nldas(stations, out_data, nc_data=None, workers=8, overwrite=False, 
 
     if debug:
         for fileset, dts in zip(files, yrmo):
-            proc_time_slice(fileset, indexer, dts, fids, out_data, overwrite, parquet_check)
+            proc_time_slice(fileset, indexer, dts, fids, out_data, overwrite, par_check=parquet_check, tmpdir=tmpd)
 
     with concurrent.futures.ProcessPoolExecutor(max_workers=workers) as executor:
-        futures = [executor.submit(proc_time_slice, fileset, indexer, dts, fids, out_data, overwrite)
+        futures = [executor.submit(proc_time_slice, fileset, indexer, dts, fids, out_data, overwrite, tmpdir=tmpd)
                    for fileset, dts in zip(files, yrmo)]
         concurrent.futures.wait(futures)
 
 
-def proc_time_slice(nc_files_, indexer_, date_string_, fids_, out_, overwrite_, par_check=None):
+def proc_time_slice(nc_files_, indexer_, date_string_, fids_, out_, overwrite_, par_check=None, tmpdir=None):
     """"""
     try:
         if isinstance(nc_files_[0], DataGranule):
-            tmpdir = tempfile.gettempdir()
+            if not tmpdir:
+                tmpdir = tempfile.gettempdir()
             ges_files = earthaccess.download(nc_files_, tmpdir, threads=4)
             ds = xr.open_mfdataset(ges_files, engine='netcdf4')
             [os.remove(f) for f in ges_files]
@@ -180,12 +181,14 @@ def get_quadrants(b):
 if __name__ == '__main__':
 
     d = '/media/research/IrrigationGIS'
+    temp_directory = None
 
     if not os.path.isdir(d):
         d = os.path.join('/home', 'dgketchum', 'data', 'IrrigationGIS')
 
     if not os.path.isdir(d):
-        d = os.path.join('/home', 'ec2-user', 'data', 'IrrigationGIS')
+        d = os.path.join('/data', 'IrrigationGIS')
+        temp_directory = os.path.join('/data', 'temp')
 
     if not os.path.isdir(d):
         d = os.path.join('/home', 'dketchum', 'data', 'IrrigationGIS')
@@ -206,12 +209,6 @@ if __name__ == '__main__':
         print('earthdata access authenticated')
 
     bounds = (-125.0, 25.0, -67.0, 53.0)
-    quadrants = get_quadrants(bounds)
-
-    for e, quad in enumerate(quadrants, start=1):
-
-        print(f'\n\n\n\n Quadrant {e} \n\n\n\n')
-
-        extract_nldas(sites, csv_files, nc_data=nc_data_, workers=7, overwrite=True, missing_list=missing_dt,
-                      bounds=bounds, debug=False, parquet_check=p_files)
+    extract_nldas(sites, csv_files, nc_data=nc_data_, workers=20, overwrite=False, missing_list=None,
+                  bounds=bounds, debug=False, parquet_check=p_files, tmpd=temp_directory)
 # ========================= EOF ====================================================================
