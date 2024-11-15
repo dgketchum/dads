@@ -3,6 +3,7 @@ import concurrent.futures
 import gc
 import os
 import tempfile
+import json
 from datetime import datetime
 
 import earthaccess
@@ -23,7 +24,7 @@ def get_nldas(start_date, end_date, down_dst=None):
 
 
 def extract_nldas(stations, out_data, nc_data=None, workers=8, overwrite=False, bounds=None, debug=False,
-                  parquet_check=None):
+                  parquet_check=None, missing_list=None):
     station_list = pd.read_csv(stations)
     if 'LAT' in station_list.columns:
         station_list = station_list.rename(columns={'STAID': 'fid', 'LAT': 'latitude', 'LON': 'longitude'})
@@ -52,12 +53,15 @@ def extract_nldas(stations, out_data, nc_data=None, workers=8, overwrite=False, 
 
     yrmo, files = [], []
 
-    for year in range(2007, 2008):
+    for year in range(1990, 2024):
 
-        for month in range(6, 7):
+        for month in range(1, 13):
 
             month_start = datetime(year, month, 1)
             date_string = month_start.strftime('%Y%m')
+
+            if missing_list and date_string not in missing_list:
+                continue
 
             if nc_data:
                 nc_files = [f for f in os.listdir(nc_data) if date_string == f.split('.')[1][1:7]]
@@ -186,15 +190,16 @@ if __name__ == '__main__':
     if not os.path.isdir(d):
         d = os.path.join('/home', 'dketchum', 'data', 'IrrigationGIS')
 
-    nc_data_ = '/data/ssd1/nldas2/netcdf'
-    # nc_data_ = None
+    # nc_data_ = '/data/ssd1/nldas2/netcdf'
+    nc_data_ = None
     # get_nldas(nc_data_)
 
-    # sites = os.path.join(d, 'climate', 'ghcn', 'stations', 'ghcn_CANUSA_stations_mgrs.csv')
-    sites = os.path.join(d, 'dads', 'met', 'stations', 'madis_29OCT2024.csv')
+    sites = os.path.join(d, 'climate', 'ghcn', 'stations', 'ghcn_CANUSA_stations_mgrs.csv')
+    # sites = os.path.join(d, 'dads', 'met', 'stations', 'madis_29OCT2024.csv')
 
-    csv_files = '/data/ssd1/nldas2/station_data/'
-    # csv_files = os.path.join(d, 'dads', 'met', 'gridded', 'nldas2', 'station_data')
+    # csv_files = '/data/ssd1/nldas2/station_data/'
+    csv_files = os.path.join(d, 'dads', 'met', 'gridded', 'nldas2', 'station_data')
+    p_files = os.path.join(d, 'dads', 'met', 'gridded', 'nldas2_parquet')
 
     if not nc_data_:
         earthaccess.login()
@@ -203,9 +208,10 @@ if __name__ == '__main__':
     bounds = (-125.0, 25.0, -67.0, 53.0)
     quadrants = get_quadrants(bounds)
 
-    # for e, quad in enumerate(quadrants, start=1):
+    for e, quad in enumerate(quadrants, start=1):
 
-    # print(f'\n\n\n\n Quadrant {e} \n\n\n\n')
-    # extract_nldas(sites, csv_files, nc_data=nc_data_, workers=1, overwrite=False, bounds=bounds,
-    #               debug=False, parquet_check=p_files)
+        print(f'\n\n\n\n Quadrant {e} \n\n\n\n')
+
+        extract_nldas(sites, csv_files, nc_data=nc_data_, workers=7, overwrite=True, missing_list=missing_dt,
+                      bounds=bounds, debug=False, parquet_check=p_files)
 # ========================= EOF ====================================================================

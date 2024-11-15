@@ -1,20 +1,13 @@
-import calendar
-import os
-import gc
-import tempfile
-import shutil
-import calendar
 import concurrent.futures
+import os
+import json
+import shutil
 from datetime import datetime
 
-import earthaccess
-from earthaccess.results import DataGranule
-import numpy as np
 import pandas as pd
-import xarray as xr
 
 
-def process_and_concat_csv(stations, root, start_date, end_date, outdir, workers):
+def process_and_concat_csv(stations, root, start_date, end_date, outdir, workers, missing_file=None):
     start = pd.to_datetime(start_date)
     end = pd.to_datetime(end_date)
     required_months = pd.date_range(start=start, end=end, freq='MS').strftime('%Y%m').tolist()
@@ -32,6 +25,10 @@ def process_and_concat_csv(stations, root, start_date, end_date, outdir, workers
     station_list = station_list.sample(frac=1)
     subdirs = station_list['fid'].to_list()
 
+    if missing_file:
+        for sd in subdirs:
+            process_parquet(root, sd, required_months, expected_index, strdt, outdir, missing_file)
+
     with concurrent.futures.ProcessPoolExecutor(max_workers=workers) as executor:
         executor.map(process_parquet, [root] * len(subdirs), subdirs,
                      [required_months] * len(subdirs),
@@ -39,7 +36,7 @@ def process_and_concat_csv(stations, root, start_date, end_date, outdir, workers
                      [outdir] * len(subdirs))
 
 
-def process_parquet(root_, subdir_, required_months_, expected_index_, strdt_, outdir_):
+def process_parquet(root_, subdir_, required_months_, expected_index_, strdt_, outdir_, write_missing=None):
     subdir_path = os.path.join(root_, subdir_)
     if os.path.isdir(subdir_path):
 
@@ -71,17 +68,30 @@ def process_parquet(root_, subdir_, required_months_, expected_index_, strdt_, o
 
         missing = len(expected_index_) - df.shape[0]
         if missing > 10:
-            counts = {}
+            counts, missing_list = {}, []
             missing_idx = [i for i in expected_index_ if i not in df.index]
             for midx in missing_idx:
-                dt = f'{midx.year}-{midx.month:02}'
+                dt = f'{midx.year}{midx.month:02}'
                 if dt not in counts.keys():
                     counts[dt] = 1
                 else:
                     counts[dt] += 1
+                p = f'NLDAS_FORA0125_H.A{midx.year}{midx.month:02}{midx.day:02}.{midx.hour}00.020.nc'
+                f = os.path.join('/data/ssd1/nldas2/netcdf', p)
+                if os.path.exists(f):
+                    missing_list.append(1)
+
 
             print(f'{subdir_} is missing {missing} rows')
             [print(k, v) for k, v in counts.items()]
+
+            counts = {k: v for k, v in counts.items() if v > 1}
+
+            if write_missing:
+                with open(write_missing, 'w') as fp:
+                    json.dump({'missing': list(counts.keys())}, fp, indent=4)
+                print(f'wrote missing dates to {write_missing}, exiting')
+                exit()
             return
 
         elif missing > 0:
@@ -98,17 +108,6 @@ def process_parquet(root_, subdir_, required_months_, expected_index_, strdt_, o
     else:
         print(f'{subdir_} not found')
         return
-
-
-def get_quadrants(b):
-    mid_longitude = (b[0] + b[2]) / 2
-    mid_latitude = (b[1] + b[3]) / 2
-    quadrant_nw = (b[0], mid_latitude, mid_longitude, b[3])
-    quadrant_ne = (mid_longitude, mid_latitude, b[2], b[3])
-    quadrant_sw = (b[0], b[1], mid_longitude, mid_latitude)
-    quadrant_se = (mid_longitude, b[1], b[2], mid_latitude)
-    quadrants = [quadrant_nw, quadrant_ne, quadrant_sw, quadrant_se]
-    return quadrants
 
 
 if __name__ == '__main__':
@@ -132,7 +131,8 @@ if __name__ == '__main__':
 
     p_files = os.path.join(d, 'dads', 'met', 'gridded', 'nldas2_parquet')
 
+    missing_file_ = '/data/ssd1/nldas2/missing_madis_{}.json'.format(datetime.now().strftime('%Y%m%d%H%M'))
     process_and_concat_csv(sites, csv_files, start_date='1990-01-01', end_date='2023-12-31', outdir=p_files,
-                           workers=1)
+                           workers=1, missing_file=None)
 
 # ========================= EOF ====================================================================
