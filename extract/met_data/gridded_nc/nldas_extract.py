@@ -42,18 +42,21 @@ def extract_nldas(stations, out_data, nc_data=None, workers=8, overwrite=False, 
         station_list = station_list[(station_list['longitude'] < e) & (station_list['longitude'] >= w)]
         print('dropped {} stations outside NLDAS-2 extent'.format(ln - station_list.shape[0]))
 
-    station_list = station_list.head(n=100)
     print(f'{len(station_list)} stations to write')
 
+    station_list = station_list.sample(frac=1)
     station_list = station_list.rename(columns={'latitude': 'lat', 'longitude': 'lon'})
+
+    # exist = [sbd for sbd in os.listdir(out_data) if os.path.exists(os.path.join(out_data, sbd))]
+
     indexer = station_list[['lat', 'lon']].to_xarray()
     fids = np.unique(indexer.fid.values).tolist()
 
     yrmo, files = [], []
 
-    for year in range(2023, 2024):
+    for year in range(2007, 2008):
 
-        for month in range(1, 13):
+        for month in range(6, 7):
 
             month_start = datetime(year, month, 1)
             date_string = month_start.strftime('%Y%m')
@@ -76,7 +79,6 @@ def extract_nldas(stations, out_data, nc_data=None, workers=8, overwrite=False, 
 
     print(f'{len(yrmo)} months to write')
     file_packs = [(yrmo[i], len(files[i])) for i in range(0, len(yrmo))]
-    file_packs.reverse()
     [print(fp) for fp in file_packs]
 
     if debug:
@@ -84,7 +86,7 @@ def extract_nldas(stations, out_data, nc_data=None, workers=8, overwrite=False, 
             proc_time_slice(fileset, indexer, dts, fids, out_data, overwrite, parquet_check)
 
     with concurrent.futures.ProcessPoolExecutor(max_workers=workers) as executor:
-        futures = [executor.submit(proc_time_slice, fileset, indexer.copy(), dts, fids, out_data, overwrite)
+        futures = [executor.submit(proc_time_slice, fileset, indexer, dts, fids, out_data, overwrite)
                    for fileset, dts in zip(files, yrmo)]
         concurrent.futures.wait(futures)
 
@@ -98,7 +100,19 @@ def proc_time_slice(nc_files_, indexer_, date_string_, fids_, out_, overwrite_, 
             ds = xr.open_mfdataset(ges_files, engine='netcdf4')
             [os.remove(f) for f in ges_files]
         else:
-            ds = xr.open_mfdataset(nc_files_, engine='netcdf4')
+            # could not find a way to get a good file for NLDAS_FORA0125_H.A20030622.0900.020.nc
+            if date_string_ == '200306':
+                dataset = []
+                for f in nc_files_:
+                    try:
+                        sds = xr.open_dataset(f, engine='netcdf4')
+                    except Exception as exc:
+                        print(exc, os.path.basename(f))
+                        pass
+                    dataset.append(sds)
+                ds = xr.concat(dataset, dim='time')
+            else:
+                ds = xr.open_mfdataset(nc_files_, engine='netcdf4')
 
         ds = ds.chunk({'time': len(nc_files_), 'lat': 28, 'lon': 29})
 
@@ -128,8 +142,6 @@ def proc_time_slice(nc_files_, indexer_, date_string_, fids_, out_, overwrite_, 
                 os.mkdir(dst_dir)
 
             _file = os.path.join(dst_dir, '{}_{}.csv'.format(fid, date_string_))
-            if os.path.exists(_file.replace('ssd2', 'ssd1')):
-                continue
 
             if os.path.exists(_file) and os.path.getsize(_file) == 0:
                 os.remove(_file)
@@ -146,96 +158,25 @@ def proc_time_slice(nc_files_, indexer_, date_string_, fids_, out_, overwrite_, 
         except Exception as exc:
             print(f'{exc} on {fid}')
             return
+
     del ds, df_all
     gc.collect()
     print(f'wrote {ct} for {date_string_}, skipped {skip}, {datetime.strftime(datetime.now(), '%Y%m%d %H:%M')}')
 
 
-def process_and_concat_csv(stations, root, start_date, end_date, outdir, workers, alt_dir):
-    start = pd.to_datetime(start_date)
-    end = pd.to_datetime(end_date)
-    required_months = pd.date_range(start=start, end=end, freq='MS').strftime('%Y%m').tolist()
-    expected_index = pd.date_range(start=start, end=end, freq='h')
-    strdt = [d.strftime('%Y%m%d%H') for d in expected_index]
-
-    station_list = pd.read_csv(stations)
-    if 'LAT' in station_list.columns:
-        station_list = station_list.rename(columns={'STAID': 'fid', 'LAT': 'latitude', 'LON': 'longitude'})
-
-    station_list = station_list.sample(frac=1)
-    subdirs = station_list['fid'].to_list()
-
-    with concurrent.futures.ProcessPoolExecutor(max_workers=workers) as executor:
-        executor.map(process_parquet, [root] * len(subdirs), subdirs,
-                     [required_months] * len(subdirs),
-                     [expected_index] * len(subdirs), [strdt] * len(subdirs),
-                     [outdir] * len(subdirs), [alt_dir] * len(subdirs))
-
-
-def process_parquet(root_, subdir_, required_months_, expected_index_, strdt_, outdir_, alt_dir_):
-    subdir_path = os.path.join(root_, subdir_)
-    if os.path.isdir(subdir_path):
-
-        csv_files = [f for f in os.listdir(subdir_path) if f.endswith('.csv')]
-        dtimes = [f.split('_')[-1].replace('.csv', '') for f in csv_files]
-        rm_files = csv_files.copy()
-
-        if len(dtimes) < len(required_months_):
-
-            alt_subdir = os.path.join(alt_dir_, subdir_)
-            if not os.path.exists(alt_subdir):
-                return
-            alt_csv_files = [os.path.join(alt_subdir, f) for f in os.listdir(alt_subdir) if f.endswith('.csv')]
-            alt_dtimes = [f.split('_')[-1].replace('.csv', '') for f in alt_csv_files]
-
-            for acf, adt in zip(alt_csv_files, alt_dtimes):
-                if adt in required_months_ and adt not in dtimes:
-                    csv_files.append(acf)
-                    dtimes.append(adt)
-
-                rm_files.append(acf)
-
-            missing = [m for m in required_months_ if m not in dtimes]
-            if len(missing) > 0:
-                print(f'{subdir_} missing {len(missing)} months: {missing}')
-                return
-        else:
-            alt_subdir = None
-
-        dfs = []
-        for file in csv_files:
-            c = pd.read_csv(os.path.join(subdir_path, file), parse_dates=['dt'],
-                            date_format='%Y%m%d%H')
-            dfs.append(c)
-        df = pd.concat(dfs)
-
-        df = df.set_index('dt').sort_index()
-        df = df.drop(columns=['fid', 'time_bnds'])
-
-        missing = len(expected_index_) - df.shape[0]
-        if missing > 100:
-            print(f'{subdir_} is missing {missing} rows')
-            return
-
-        elif missing > 0:
-            df = df.reindex(expected_index_)
-            df = df.interpolate(method='linear')
-
-        df['dt'] = strdt_
-        out_file = os.path.join(outdir_, f'{subdir_}.parquet.gzip')
-        df.to_parquet(out_file, compression='gzip')
-        shutil.rmtree(subdir_path)
-        if alt_subdir:
-            shutil.rmtree(alt_subdir)
-        print(f'wrote {subdir_}, removed {len(rm_files)} .csv files,'
-              f' {datetime.strftime(datetime.now(), '%Y%m%d %H:%M')}')
-        return
-    else:
-        print(f'{subdir_} not found')
-        return
+def get_quadrants(b):
+    mid_longitude = (b[0] + b[2]) / 2
+    mid_latitude = (b[1] + b[3]) / 2
+    quadrant_nw = (b[0], mid_latitude, mid_longitude, b[3])
+    quadrant_ne = (mid_longitude, mid_latitude, b[2], b[3])
+    quadrant_sw = (b[0], b[1], mid_longitude, mid_latitude)
+    quadrant_se = (mid_longitude, b[1], b[2], mid_latitude)
+    quadrants = [quadrant_nw, quadrant_ne, quadrant_sw, quadrant_se]
+    return quadrants
 
 
 if __name__ == '__main__':
+
     d = '/media/research/IrrigationGIS'
 
     if not os.path.isdir(d):
@@ -254,19 +195,19 @@ if __name__ == '__main__':
     # sites = os.path.join(d, 'climate', 'ghcn', 'stations', 'ghcn_CANUSA_stations_mgrs.csv')
     sites = os.path.join(d, 'dads', 'met', 'stations', 'madis_29OCT2024.csv')
 
-    csv_files = '/data/ssd2/nldas2/station_data/'
+    csv_files = '/data/ssd1/nldas2/station_data/'
     # csv_files = os.path.join(d, 'dads', 'met', 'gridded', 'nldas2', 'station_data')
-
-    p_files = os.path.join(d, 'dads', 'met', 'gridded', 'nldas2_parquet')
 
     if not nc_data_:
         earthaccess.login()
         print('earthdata access authenticated')
-    
-    # extract_nldas(sites, csv_files, nc_data=None, workers=16, overwrite=False, bounds=None,
+
+    bounds = (-125.0, 25.0, -67.0, 53.0)
+    quadrants = get_quadrants(bounds)
+
+    # for e, quad in enumerate(quadrants, start=1):
+
+    # print(f'\n\n\n\n Quadrant {e} \n\n\n\n')
+    # extract_nldas(sites, csv_files, nc_data=nc_data_, workers=1, overwrite=False, bounds=bounds,
     #               debug=False, parquet_check=p_files)
-
-    process_and_concat_csv(sites, csv_files, start_date='1990-01-01', end_date='2023-12-31', outdir=p_files,
-                           workers=1, alt_dir='/data/ssd1/nldas2/station_data/')
-
 # ========================= EOF ====================================================================
