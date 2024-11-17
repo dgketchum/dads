@@ -1,21 +1,13 @@
-import calendar
 import concurrent.futures
-import gc
 import os
-import tempfile
-import json
-from datetime import datetime
-import concurrent.futures
 
 import earthaccess
 import numpy as np
 import pandas as pd
 import xarray as xr
-from earthaccess.results import DataGranule
 
 
 def get_daymet(start_date, end_date, down_dst=None):
-    print('earthdata access authenticated')
     results = earthaccess.search_data(
         doi='10.3334/ORNLDAAC/2129',
         temporal=(start_date, end_date))
@@ -26,7 +18,7 @@ def get_daymet(start_date, end_date, down_dst=None):
 
 
 def extract_daymet(stations, out_data, nc_data=None, workers=8, overwrite=False, bounds=None, debug=False,
-                   parquet_check=None, missing_list=None, tmpd=None):
+                   parquet_check=None, missing_list=None, nc_dir=None):
     station_list = pd.read_csv(stations)
     if 'LAT' in station_list.columns:
         station_list = station_list.rename(columns={'STAID': 'fid', 'LAT': 'latitude', 'LON': 'longitude'})
@@ -50,45 +42,41 @@ def extract_daymet(stations, out_data, nc_data=None, workers=8, overwrite=False,
     indexer = station_list[['lat', 'lon']].to_xarray()
     fids = np.unique(indexer.fid.values).tolist()
 
-    yrmo, files = [], []
+    years, files = [], []
 
-    for year in range(1990, 2024):
+    for year in range(1990, 1991):
         nc_files = []
-        all_files = get_daymet(f'{year}-01-01', f'{year}-12-31')
-        for file in all_files:
-            split = file.split('_')
-            region, param = split[3], split[4]
-            if param in ['tmax', 'tmin', 'vp', 'prcp', 'srad'] and region == 'na':
-                nc_files.append(os.path.join(nc_data, file))
+        granules = get_daymet(f'{year}-01-01', f'{year}-01-31')
+        for granule in granules:
+            split = granule['meta']['native-id'].split('_')
+            region, param = split[5], split[6]
+            # 'tmin', 'vp', 'prcp', 'srad'
+            if param in ['tmax'] and region == 'na':
+                nc_files.append(granule)
 
         if not nc_files:
             print(f"No NetCDF files found for {year}")
             continue
 
-        yrmo.append(year)
+        years.append(year)
         files.append(nc_files)
 
-    print(f'{len(yrmo)} years to write')
-    file_packs = [(yrmo[i], len(files[i])) for i in range(0, len(yrmo))]
-    [print(fp) for fp in file_packs]
+    print(f'{len(years)} years to write')
 
     if debug:
-        for fileset, dts in zip(files, yrmo):
-            proc_time_slice(fileset, indexer, dts, fids, out_data, overwrite, par_check=parquet_check, tmpdir=tmpd)
+        for fileset, dts in zip(files, years):
+            proc_time_slice(fileset, indexer, dts, fids, out_data, overwrite, par_check=parquet_check, nc_dir_=nc_dir)
 
     with concurrent.futures.ProcessPoolExecutor(max_workers=workers) as executor:
-        futures = [executor.submit(proc_time_slice, fileset, indexer, dts, fids, out_data, overwrite, tmpdir=tmpd)
-                   for fileset, dts in zip(files, yrmo)]
+        futures = [executor.submit(proc_time_slice, fileset, indexer, dts, fids, out_data, overwrite, tmpdir=nc_dir)
+                   for fileset, dts in zip(files, years)]
         concurrent.futures.wait(futures)
 
 
-def proc_time_slice(nc_files_, indexer_, date_string_, fids_, out_, overwrite_, par_check=None, tmpdir=None):
+def proc_time_slice(granules_, indexer_, date_string_, fids_, out_, overwrite_, par_check=None, nc_dir_=None):
     try:
-        if not tmpdir:
-            tmpdir = tempfile.gettempdir()
-        ges_files = earthaccess.download(nc_files_, tmpdir, threads=4)
+        ges_files = earthaccess.download(granules_, nc_dir_, threads=4)
         ds = xr.open_mfdataset(ges_files, engine='netcdf4')
-        [os.remove(f) for f in ges_files]
     except Exception as exc:
         return
 
@@ -113,18 +101,22 @@ def proc_time_slice(nc_files_, indexer_, date_string_, fids_, out_, overwrite_, 
 
 if __name__ == '__main__':
 
-    d = '/media/research/IrrigationGIS'
+    d = os.path.join('/home', 'ubuntu', 'data', 'IrrigationGIS')
+    daymet = os.path.join('/home', 'ubuntu', 'data', 'daymet')
+
     if not os.path.isdir(d):
-        home = os.path.expanduser('~')
-        d = os.path.join(home, 'data', 'IrrigationGIS')
+        d = os.path.join('/data', 'IrrigationGIS')
+        daymet = os.path.join('/data', 'daymet')
 
     earthaccess.login()
     print('earthdata access authenticated')
 
     # sites = os.path.join(d, 'climate', 'ghcn', 'stations', 'ghcn_CANUSA_stations_mgrs.csv')
     sites = os.path.join(d, 'dads', 'met', 'stations', 'madis_29OCT2024.csv')
-    out_files = '/data/ssd2/daymet/station_data/'
 
-    # extract_daymet(sites, nc_data_, out_files, workers=20, overwrite=False, bounds=None, debug=False)
+    out_files = os.path.join(daymet, 'station_data')
+    nc_files = os.path.join(daymet, 'netcdf')
+
+    extract_daymet(sites, out_files, workers=14, overwrite=False, bounds=None, debug=True, nc_dir=nc_files)
 
 # ========================= EOF ====================================================================
