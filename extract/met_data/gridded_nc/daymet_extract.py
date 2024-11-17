@@ -30,6 +30,12 @@ def extract_daymet(stations, out_data, nc_data=None, workers=8, overwrite=False,
         w, s, e, n = bounds
         station_list = station_list[(station_list['latitude'] < n) & (station_list['latitude'] >= s)]
         station_list = station_list[(station_list['longitude'] < e) & (station_list['longitude'] >= w)]
+    else:
+        ln = station_list.shape[0]
+        w, s, e, n = (-178.1333, 14.0749, -53.0567, 82.9143)
+        station_list = station_list[(station_list['latitude'] < n) & (station_list['latitude'] >= s)]
+        station_list = station_list[(station_list['longitude'] < e) & (station_list['longitude'] >= w)]
+        print('dropped {} stations outside DAYMET NA extent'.format(ln - station_list.shape[0]))
 
     print(f'{len(station_list)} stations to write')
 
@@ -41,7 +47,7 @@ def extract_daymet(stations, out_data, nc_data=None, workers=8, overwrite=False,
 
     years, files = [], []
 
-    for year in range(1990, 1991):
+    for year in range(1990, 2024):
         nc_files = []
         granules = get_daymet(f'{year}-01-01', f'{year}-01-31')
         for granule in granules:
@@ -49,7 +55,7 @@ def extract_daymet(stations, out_data, nc_data=None, workers=8, overwrite=False,
             split = nc_id.split('_')
             region, param = split[5], split[6]
             file_name = '.'.join(nc_id.split('.')[1:])
-            if param in ['tmax', 'tmin', 'vp', 'prcp', 'srad'] and region == 'pr':
+            if param in ['tmax', 'tmin', 'vp', 'prcp', 'srad'] and region == 'na':
                 target_file = os.path.join(nc_dir, file_name)
                 nc_files.append((target_file, granule))
 
@@ -97,6 +103,7 @@ def proc_time_slice(fileset_, indexer_, date_string_, fids_, out_, overwrite_, p
             df_station['dt'] = [i.strftime('%Y%m%d') for i in df_station.index]
             df_station.to_csv(_file, index=False)
             ct += 1
+            print(_file)
     print(f'wrote {ct} for {date_string_}')
 
 
@@ -113,6 +120,7 @@ def projected_coords(row):
 
     x, y = transformer.transform(row['lat'], row['lon'])
     return x, y
+
 
 if __name__ == '__main__':
 
@@ -131,8 +139,8 @@ if __name__ == '__main__':
 
     out_files = os.path.join(daymet, 'station_data')
     nc_files = os.path.join(daymet, 'netcdf')
-    bounds = (-68.0, 17.0, -64.0, 20.0)
+    # bounds = (-68.0, 17.0, -64.0, 20.0)
 
-    extract_daymet(sites, out_files, workers=14, overwrite=False, bounds=bounds, debug=True, nc_dir=nc_files)
+    extract_daymet(sites, out_files, workers=32, overwrite=False, bounds=None, debug=False, nc_dir=nc_files)
 
 # ========================= EOF ====================================================================
