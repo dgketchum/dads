@@ -12,6 +12,8 @@ import pandas as pd
 import xarray as xr
 from earthaccess.results import DataGranule
 
+from extract.met_data.gridded_nc.nldas_parquet import process_and_concat_csv
+
 
 def get_nldas(start_date, end_date, down_dst=None):
     results = earthaccess.search_data(
@@ -193,15 +195,15 @@ if __name__ == '__main__':
     if not os.path.isdir(d):
         d = os.path.join('/home', 'dketchum', 'data', 'IrrigationGIS')
 
-    # nc_data_ = '/data/ssd1/nldas2/netcdf'
-    nc_data_ = None
+    nc_data_ = '/data/ssd1/nldas2/netcdf'
+    # nc_data_ = None
     # get_nldas(nc_data_)
 
     sites = os.path.join(d, 'climate', 'ghcn', 'stations', 'ghcn_CANUSA_stations_mgrs.csv')
     # sites = os.path.join(d, 'dads', 'met', 'stations', 'madis_29OCT2024.csv')
 
-    # csv_files = '/data/ssd1/nldas2/station_data/'
-    csv_files = os.path.join(d, 'dads', 'met', 'gridded', 'nldas2', 'station_data')
+    csv_files = '/data/ssd1/nldas2/station_data/'
+    # csv_files = os.path.join(d, 'dads', 'met', 'gridded', 'nldas2', 'station_data')
     p_files = os.path.join(d, 'dads', 'met', 'gridded', 'nldas2_parquet')
 
     if not nc_data_:
@@ -209,6 +211,16 @@ if __name__ == '__main__':
         print('earthdata access authenticated')
 
     bounds = (-125.0, 25.0, -67.0, 53.0)
-    extract_nldas(sites, csv_files, nc_data=nc_data_, workers=20, overwrite=False, missing_list=None,
-                  bounds=bounds, debug=False, parquet_check=p_files, tmpd=temp_directory)
+    quadrants = get_quadrants(bounds)
+
+    # missing_ = '/data/ssd1/nldas2/missing_madis_202411160931.json'
+    # with open(missing_, 'r') as f:
+    #     missing_ = json.load(f)['missing']
+
+    extract_nldas(sites, csv_files, nc_data=nc_data_, workers=16, overwrite=False, missing_list=None,
+                 bounds=bounds, debug=False, parquet_check=p_files)
+
+    # missing_file_ = '/data/ssd1/nldas2/missing_madis_{}.json'.format(datetime.now().strftime('%Y%m%d%H%M'))
+    process_and_concat_csv(sites, csv_files, start_date='1990-01-01', end_date='2023-12-31', outdir=p_files,
+                           workers=16, missing_file=None)
 # ========================= EOF ====================================================================
