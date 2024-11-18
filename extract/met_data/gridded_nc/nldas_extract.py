@@ -169,17 +169,6 @@ def proc_time_slice(nc_files_, indexer_, date_string_, fids_, out_, overwrite_, 
     print(f'wrote {ct} for {date_string_}, skipped {skip}, {datetime.strftime(datetime.now(), '%Y%m%d %H:%M')}')
 
 
-def get_quadrants(b):
-    mid_longitude = (b[0] + b[2]) / 2
-    mid_latitude = (b[1] + b[3]) / 2
-    quadrant_nw = (b[0], mid_latitude, mid_longitude, b[3])
-    quadrant_ne = (mid_longitude, mid_latitude, b[2], b[3])
-    quadrant_sw = (b[0], b[1], mid_longitude, mid_latitude)
-    quadrant_se = (mid_longitude, b[1], b[2], mid_latitude)
-    quadrants = [quadrant_nw, quadrant_ne, quadrant_sw, quadrant_se]
-    return quadrants
-
-
 if __name__ == '__main__':
 
     d = '/media/research/IrrigationGIS'
@@ -218,7 +207,7 @@ if __name__ == '__main__':
     #     missing_ = json.load(f)['missing']
 
     extract_nldas(sites, csv_files, nc_data=nc_data_, workers=16, overwrite=False, missing_list=None,
-                 bounds=bounds, debug=False, parquet_check=p_files)
+                  bounds=bounds, debug=False, parquet_check=p_files)
 
     # missing_file_ = '/data/ssd1/nldas2/missing_madis_{}.json'.format(datetime.now().strftime('%Y%m%d%H%M'))
     process_and_concat_csv(sites, csv_files, start_date='1990-01-01', end_date='2023-12-31', outdir=p_files,
