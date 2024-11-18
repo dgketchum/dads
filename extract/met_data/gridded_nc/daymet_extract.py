@@ -19,8 +19,8 @@ def get_daymet(start_date, end_date, down_dst=None):
         return results
 
 
-def extract_daymet(stations, out_data, nc_data=None, workers=8, overwrite=False, bounds=None, debug=False,
-                   parquet_check=None, missing_list=None, nc_dir=None):
+def extract_daymet(stations, out_data, nc_dir=None, workers=8, overwrite=False, bounds=None, debug=False,
+                   parquet_check=None):
     station_list = pd.read_csv(stations)
     if 'LAT' in station_list.columns:
         station_list = station_list.rename(columns={'STAID': 'fid', 'LAT': 'latitude', 'LON': 'longitude'})
@@ -30,7 +30,11 @@ def extract_daymet(stations, out_data, nc_data=None, workers=8, overwrite=False,
         w, s, e, n = bounds
         station_list = station_list[(station_list['latitude'] < n) & (station_list['latitude'] >= s)]
         station_list = station_list[(station_list['longitude'] < e) & (station_list['longitude'] >= w)]
+        w, s = projected_coords({'lon': w, 'lat': s})
+        e, n = projected_coords({'lon': e, 'lat': n})
+        proj_bounds = w, s, e, n
     else:
+        proj_bounds = None
         ln = station_list.shape[0]
         w, s, e, n = (-178.1333, 14.0749, -53.0567, 82.9143)
         station_list = station_list[(station_list['latitude'] < n) & (station_list['latitude'] >= s)]
@@ -70,15 +74,17 @@ def extract_daymet(stations, out_data, nc_data=None, workers=8, overwrite=False,
 
     if debug:
         for fileset, dts in zip(files, years):
-            proc_time_slice(fileset, indexer, dts, fids, out_data, overwrite, par_check=parquet_check, nc_dir_=nc_dir)
+            proc_time_slice(fileset, indexer, dts, fids, out_data, overwrite, nc_dir_=nc_dir,
+                            bounds_=proj_bounds)
 
     with concurrent.futures.ProcessPoolExecutor(max_workers=workers) as executor:
-        futures = [executor.submit(proc_time_slice, fileset, indexer, dts, fids, out_data, overwrite, tmpdir=nc_dir)
+        futures = [executor.submit(proc_time_slice, fileset, indexer, dts, fids, out_data, overwrite, tmpdir=nc_dir,
+                                   bounds_=proj_bounds)
                    for fileset, dts in zip(files, years)]
         concurrent.futures.wait(futures)
 
 
-def proc_time_slice(fileset_, indexer_, date_string_, fids_, out_, overwrite_, par_check=None, nc_dir_=None):
+def proc_time_slice(fileset_, indexer_, date_string_, fids_, out_, overwrite_, nc_dir_=None, bounds_=None):
     local_files, granules = [f[0] for f in fileset_], [f[1] for f in fileset_]
     try:
         if not all([os.path.exists(f) for f in local_files]):
@@ -89,6 +95,9 @@ def proc_time_slice(fileset_, indexer_, date_string_, fids_, out_, overwrite_, p
         return
 
     ds = ds.chunk({'time': len(ds.time.values)})
+    if bounds_ is not None:
+        ds = ds.sel(y=slice(bounds_[1], bounds_[3]),
+                    x=slice(bounds_[0], bounds_[2]))
     ds = ds.sel(y=indexer_.y, x=indexer_.x, method='nearest')
     df_all = ds.to_dataframe()
     ct = 0
@@ -154,18 +163,17 @@ if __name__ == '__main__':
     sites = os.path.join(d, 'dads', 'met', 'stations', 'madis_29OCT2024.csv')
 
     out_files = os.path.join(daymet, 'station_data')
-    nc_files = os.path.join(daymet, 'netcdf')
+    nc_files_ = os.path.join(daymet, 'netcdf')
     # bounds = (-68.0, 17.0, -64.0, 20.0)
     bounds = (-178.1333, 14.0749, -53.0567, 82.9143)
     quadrants = get_quadrants(bounds)
     sixteens = [get_quadrants(q) for q in quadrants]
     sixteens = [x for xs in sixteens for x in xs]
-    f = 'C://Users//dketchum//data//IrrigationGIS//dads//met//stations//madis_29OCT2024.csv'
 
     for e, sector in enumerate(sixteens, start=1):
 
         print(f'\n\n\n\n Sector {e} of {len(sixteens)} \n\n\n\n')
 
-        extract_daymet(sites, out_files, workers=32, overwrite=False, bounds=sector, debug=False, nc_dir=nc_files)
+        extract_daymet(sites, out_files, nc_dir=nc_files_, workers=32, overwrite=False, bounds=sector, debug=False)
 
 # ========================= EOF ====================================================================
