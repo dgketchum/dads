@@ -14,7 +14,13 @@ def get_daymet(start_date, end_date, down_dst=None):
         doi='10.3334/ORNLDAAC/2129',
         temporal=(start_date, end_date))
     if down_dst:
-        earthaccess.download(results, down_dst)
+        for granule in results:
+            nc_id = granule['meta']['native-id']
+            split = nc_id.split('_')
+            region, param = split[5], split[6]
+            file_name = '.'.join(nc_id.split('.')[1:])
+            if param in ['tmax', 'tmin', 'vp', 'prcp', 'srad'] and region == 'na':
+                earthaccess.download(results, down_dst)
     else:
         return results
 
@@ -161,6 +167,9 @@ if __name__ == '__main__':
     quadrants = get_quadrants(bounds)
     sixteens = [get_quadrants(q) for q in quadrants]
     sixteens = [x for xs in sixteens for x in xs]
+
+    for year in range(1990, 2024):
+        get_daymet(f'{year}-01-01', f'{year}-01-31')
 
     for e, sector in enumerate(sixteens, start=1):
 
