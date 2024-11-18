@@ -74,25 +74,20 @@ def extract_daymet(stations, out_data, nc_dir=None, workers=8, overwrite=False, 
 
     if debug:
         for fileset, dts in zip(files, years):
-            proc_time_slice(fileset, indexer, dts, fids, out_data, overwrite, nc_dir_=nc_dir,
-                            bounds_=proj_bounds)
+            proc_time_slice(fileset, indexer, dts, fids, out_data, overwrite, nc_dir_=nc_dir, bounds_=proj_bounds)
 
     with concurrent.futures.ProcessPoolExecutor(max_workers=workers) as executor:
         futures = [executor.submit(proc_time_slice, fileset, indexer, dts, fids, out_data, overwrite, tmpdir=nc_dir,
-                                   bounds_=proj_bounds)
-                   for fileset, dts in zip(files, years)]
+                                   bounds_=proj_bounds) for fileset, dts in zip(files, years)]
         concurrent.futures.wait(futures)
 
 
 def proc_time_slice(fileset_, indexer_, date_string_, fids_, out_, overwrite_, nc_dir_=None, bounds_=None):
     local_files, granules = [f[0] for f in fileset_], [f[1] for f in fileset_]
-    try:
-        if not all([os.path.exists(f) for f in local_files]):
-            local_files = earthaccess.download(granules, nc_dir_, threads=4)
-        ds = xr.open_mfdataset(local_files, engine='netcdf4')
-    except Exception as exc:
-        print(f'{exc}')
-        return
+    if not all([os.path.exists(f) for f in local_files]):
+        print(f'downloading {date_string_}')
+        local_files = earthaccess.download(granules, nc_dir_, threads=4)
+    ds = xr.open_mfdataset(local_files, engine='netcdf4')
 
     ds = ds.chunk({'time': len(ds.time.values)})
     if bounds_ is not None:
@@ -100,24 +95,21 @@ def proc_time_slice(fileset_, indexer_, date_string_, fids_, out_, overwrite_, n
                     x=slice(bounds_[0], bounds_[2]))
     ds = ds.sel(y=indexer_.y, x=indexer_.x, method='nearest')
     df_all = ds.to_dataframe()
-    ct = 0
-    try:
-        for fid in fids_:
-            dst_dir = os.path.join(out_, fid)
-            if not os.path.exists(dst_dir):
-                os.mkdir(dst_dir)
-            _file = os.path.join(dst_dir, '{}_{}.csv'.format(fid, date_string_))
 
-            if not os.path.exists(_file) or overwrite_:
-                df_station = df_all.loc[(fid, slice(None), 0)].copy()
-                df_station['dt'] = [i.strftime('%Y%m%d') for i in df_station.index]
-                df_station.to_csv(_file, index=False)
-                ct += 1
-            if ct % 1000 == 0.:
-                print(f'{ct} of {len(fids_)} for {date_string_}')
-    except Exception as exc:
-        print(f'{exc} on {fid}')
-        return
+    ct = 0
+    for fid in fids_:
+        dst_dir = os.path.join(out_, fid)
+        if not os.path.exists(dst_dir):
+            os.mkdir(dst_dir)
+        _file = os.path.join(dst_dir, '{}_{}.csv'.format(fid, date_string_))
+
+        if not os.path.exists(_file) or overwrite_:
+            df_station = df_all.loc[(fid, slice(None), 0)].copy()
+            df_station['dt'] = [i.strftime('%Y%m%d') for i in df_station.index]
+            df_station.to_csv(_file, index=False)
+            ct += 1
+        if ct % 100 == 0.:
+            print(f'{ct} of {len(fids_)} for {date_string_}')
     print(f'wrote {ct} for {date_string_}')
 
 
