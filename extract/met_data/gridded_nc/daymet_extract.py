@@ -14,19 +14,22 @@ def get_daymet(start_date, end_date, down_dst=None):
         doi='10.3334/ORNLDAAC/2129',
         temporal=(start_date, end_date))
     if down_dst:
+        print(f'downloading netcdf')
         for granule in results:
             nc_id = granule['meta']['native-id']
             split = nc_id.split('_')
             region, param = split[5], split[6]
             file_name = '.'.join(nc_id.split('.')[1:])
-            if param in ['tmax', 'tmin', 'vp', 'prcp', 'srad'] and region == 'na':
-                earthaccess.download(results, down_dst)
+            # 'vp', 'prcp', 'srad'
+            if param in ['tmax', 'tmin'] and region == 'na':
+                earthaccess.download(granule, down_dst)
+                print(f'downloaded {file_name}')
     else:
         return results
 
 
 def extract_daymet(stations, out_data, nc_dir=None, workers=8, overwrite=False, bounds=None, debug=False,
-                   parquet_check=None):
+                   start_yr=1990, end_yr=1991):
     station_list = pd.read_csv(stations)
     if 'LAT' in station_list.columns:
         station_list = station_list.rename(columns={'STAID': 'fid', 'LAT': 'latitude', 'LON': 'longitude'})
@@ -39,6 +42,10 @@ def extract_daymet(stations, out_data, nc_dir=None, workers=8, overwrite=False, 
         w, s = projected_coords({'lon': w, 'lat': s})
         e, n = projected_coords({'lon': e, 'lat': n})
         proj_bounds = w, s, e, n
+        if w >= e or s >= n:
+            raise ValueError(f'Invalid projected bounds: {proj_bounds}')
+        else:
+            print(f'Bounds Extent: x({w}, {e}), ({s}, {n})')
     else:
         proj_bounds = None
         ln = station_list.shape[0]
@@ -55,47 +62,30 @@ def extract_daymet(stations, out_data, nc_dir=None, workers=8, overwrite=False, 
     indexer = station_list[['x', 'y']].to_xarray()
     fids = np.unique(indexer.fid.values).tolist()
 
-    years, files = [], []
+    vars_list = ['tmax', 'tmin']  # 'vp', 'prcp', 'srad'
+    target_file_fmt = 'daymet_v4_daily_{}_{}_{}.nc'
+    target_files = [[os.path.join(nc_dir, target_file_fmt.format('na', var_, year)) for var_ in vars_list]
+                    for year in range(start_yr, end_yr)]
+    years = list(range(start_yr, end_yr))
 
-    for year in range(1990, 2024):
-        nc_files = []
-        granules = get_daymet(f'{year}-01-01', f'{year}-01-31')
-        for granule in granules:
-            nc_id = granule['meta']['native-id']
-            split = nc_id.split('_')
-            region, param = split[5], split[6]
-            file_name = '.'.join(nc_id.split('.')[1:])
-            if param in ['tmax', 'tmin', 'vp', 'prcp', 'srad'] and region == 'na':
-                target_file = os.path.join(nc_dir, file_name)
-                nc_files.append((target_file, granule))
-
-        if not nc_files:
-            print(f"No NetCDF files found for {year}")
-            continue
-
-        years.append(year)
-        files.append(nc_files)
-
-    print(f'{len(years)} years to write')
+    if not all([os.path.exists(tp) for l in target_files for tp in l]):
+        raise NotImplementedError('Missing files')
 
     if debug:
-        for fileset, dts in zip(files, years):
-            proc_time_slice(fileset, indexer, dts, fids, out_data, overwrite, nc_dir_=nc_dir, bounds_=proj_bounds)
+        for fileset, dts in zip(target_files, years):
+            proc_time_slice(fileset, indexer, dts, fids, out_data, overwrite, bounds_=proj_bounds)
 
     with concurrent.futures.ProcessPoolExecutor(max_workers=workers) as executor:
-        futures = [executor.submit(proc_time_slice, fileset, indexer, dts, fids, out_data, overwrite, tmpdir=nc_dir,
-                                   bounds_=proj_bounds) for fileset, dts in zip(files, years)]
+        futures = [executor.submit(proc_time_slice, fileset, indexer, dts, fids, out_data, overwrite,
+                                   bounds_=proj_bounds) for fileset, dts in zip(target_files, years)]
         concurrent.futures.wait(futures)
 
 
-def proc_time_slice(fileset_, indexer_, date_string_, fids_, out_, overwrite_, nc_dir_=None, bounds_=None):
-    local_files, granules = [f[0] for f in fileset_], [f[1] for f in fileset_]
-    if not all([os.path.exists(f) for f in local_files]):
-        print(f'downloading {date_string_}')
-        local_files = earthaccess.download(granules, nc_dir_, threads=4)
-    ds = xr.open_mfdataset(local_files, engine='netcdf4')
-
+def proc_time_slice(fileset_, indexer_, date_string_, fids_, out_, overwrite_, bounds_=None):
+    ds = xr.open_mfdataset(fileset_, engine='netcdf4')
     ds = ds.chunk({'time': len(ds.time.values)})
+    print(f'Dataset Extent: x({ds.x.min().values}, {ds.x.max().values}), '
+          f'y({ds.y.min().values}, {ds.y.max().values})')
     if bounds_ is not None:
         ds = ds.sel(y=slice(bounds_[1], bounds_[3]),
                     x=slice(bounds_[0], bounds_[2]))
@@ -120,17 +110,18 @@ def proc_time_slice(fileset_, indexer_, date_string_, fids_, out_, overwrite_, n
 
 
 def projected_coords(row):
-    globe = ccrs.Globe(ellipse='sphere', semimajor_axis=6370000, semiminor_axis=6370000)
-    lcc = ccrs.LambertConformal(globe=globe,
-                                central_longitude=-100,
-                                central_latitude=42.5,
-                                standard_parallels=(25, 60))
-
-    lcc_wkt = lcc.to_wkt()
+    lcc = ccrs.LambertConformal(
+        central_longitude=-100,
+        central_latitude=42.5,
+        standard_parallels=(25, 60),
+        false_easting=0,
+        false_northing=0,
+        globe=ccrs.Globe(ellipse='WGS84')
+    )
     source_crs = 'epsg:4326'
-    transformer = pyproj.Transformer.from_crs(source_crs, lcc_wkt)
-
-    x, y = transformer.transform(row['lat'], row['lon'])
+    target_crs = lcc.proj4_init
+    transformer = pyproj.Transformer.from_crs(source_crs, target_crs, always_xy=True)
+    x, y = transformer.transform(row['lon'], row['lat'])
     return x, y
 
 
@@ -163,18 +154,17 @@ if __name__ == '__main__':
     out_files = os.path.join(daymet, 'station_data')
     nc_files_ = os.path.join(daymet, 'netcdf')
     # bounds = (-68.0, 17.0, -64.0, 20.0)
-    bounds = (-178.1333, 14.0749, -53.0567, 82.9143)
+    bounds = (-178., 7., -53., 83.)
     quadrants = get_quadrants(bounds)
     sixteens = [get_quadrants(q) for q in quadrants]
     sixteens = [x for xs in sixteens for x in xs]
 
-    for year in range(1990, 2024):
-        get_daymet(f'{year}-01-01', f'{year}-01-31')
+    # get_daymet(f'{1990}-01-01', f'{1990}-01-31', nc_files_)
 
     for e, sector in enumerate(sixteens, start=1):
-
         print(f'\n\n\n\n Sector {e} of {len(sixteens)} \n\n\n\n')
 
-        extract_daymet(sites, out_files, nc_dir=nc_files_, workers=32, overwrite=False, bounds=sector, debug=False)
+        extract_daymet(sites, out_files, nc_dir=nc_files_, workers=32, overwrite=False,
+                       bounds=sector, debug=True)
 
 # ========================= EOF ====================================================================
