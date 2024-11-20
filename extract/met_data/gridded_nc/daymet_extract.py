@@ -20,8 +20,8 @@ def get_daymet(start_date, end_date, down_dst=None):
             split = nc_id.split('_')
             region, param = split[5], split[6]
             file_name = '.'.join(nc_id.split('.')[1:])
-            # 'vp', 'prcp', 'srad'
-            if param in ['tmax', 'tmin'] and region == 'na':
+            +36666
+            if param in ['tmax', 'tmin', 'vp', 'prcp', 'srad'] and region == 'na':
                 earthaccess.download(granule, down_dst)
                 print(f'downloaded {file_name}')
     else:
@@ -62,7 +62,7 @@ def extract_daymet(stations, out_data, nc_dir=None, workers=8, overwrite=False, 
     indexer = station_list[['x', 'y']].to_xarray()
     fids = np.unique(indexer.fid.values).tolist()
 
-    vars_list = ['tmax', 'tmin']  # 'vp', 'prcp', 'srad'
+    vars_list = ['tmax', 'tmin', 'vp', 'prcp', 'srad']
     target_file_fmt = 'daymet_v4_daily_{}_{}_{}.nc'
     target_files = [[os.path.join(nc_dir, target_file_fmt.format('na', var_, year)) for var_ in vars_list]
                     for year in range(start_yr, end_yr)]
@@ -84,11 +84,8 @@ def extract_daymet(stations, out_data, nc_dir=None, workers=8, overwrite=False, 
 def proc_time_slice(fileset_, indexer_, date_string_, fids_, out_, overwrite_, bounds_=None):
     ds = xr.open_mfdataset(fileset_, engine='netcdf4')
     ds = ds.chunk({'time': len(ds.time.values)})
-    print(f'Dataset Extent: x({ds.x.min().values}, {ds.x.max().values}), '
-          f'y({ds.y.min().values}, {ds.y.max().values})')
     if bounds_ is not None:
-        ds = ds.sel(y=slice(bounds_[1], bounds_[3]),
-                    x=slice(bounds_[0], bounds_[2]))
+        ds = ds.sel(y=slice(bounds_[3], bounds_[1]), x=slice(bounds_[0], bounds_[2]))
     ds = ds.sel(y=indexer_.y, x=indexer_.x, method='nearest')
     df_all = ds.to_dataframe()
 
@@ -104,7 +101,7 @@ def proc_time_slice(fileset_, indexer_, date_string_, fids_, out_, overwrite_, b
             df_station['dt'] = [i.strftime('%Y%m%d') for i in df_station.index]
             df_station.to_csv(_file, index=False)
             ct += 1
-        if ct % 100 == 0.:
+        if ct % 1000 == 0.:
             print(f'{ct} of {len(fids_)} for {date_string_}')
     print(f'wrote {ct} for {date_string_}')
 
@@ -153,8 +150,11 @@ if __name__ == '__main__':
 
     out_files = os.path.join(daymet, 'station_data')
     nc_files_ = os.path.join(daymet, 'netcdf')
-    # bounds = (-68.0, 17.0, -64.0, 20.0)
-    bounds = (-178., 7., -53., 83.)
+    bounds = (-125., 25., -66., 49.)
+    w, s = projected_coords({'lon': bounds[0], 'lat': bounds[1]})
+    e, n = projected_coords({'lon': bounds[2], 'lat': bounds[3]})
+    print(f'Overall Bounds: x({w}, {e}), ({s}, {n})')
+
     quadrants = get_quadrants(bounds)
     sixteens = [get_quadrants(q) for q in quadrants]
     sixteens = [x for xs in sixteens for x in xs]
