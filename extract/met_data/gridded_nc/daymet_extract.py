@@ -20,7 +20,6 @@ def get_daymet(start_date, end_date, down_dst=None):
             split = nc_id.split('_')
             region, param = split[5], split[6]
             file_name = '.'.join(nc_id.split('.')[1:])
-            +36666
             if param in ['tmax', 'tmin', 'vp', 'prcp', 'srad'] and region == 'na':
                 earthaccess.download(granule, down_dst)
                 print(f'downloaded {file_name}')
@@ -150,11 +149,8 @@ if __name__ == '__main__':
 
     out_files = os.path.join(daymet, 'station_data')
     nc_files_ = os.path.join(daymet, 'netcdf')
-    bounds = (-125., 25., -66., 49.)
-    w, s = projected_coords({'lon': bounds[0], 'lat': bounds[1]})
-    e, n = projected_coords({'lon': bounds[2], 'lat': bounds[3]})
-    print(f'Overall Bounds: x({w}, {e}), ({s}, {n})')
-
+    # bounds = (-68.0, 17.0, -64.0, 20.0)
+    bounds = (-178., 7., -53., 83.)
     quadrants = get_quadrants(bounds)
     sixteens = [get_quadrants(q) for q in quadrants]
     sixteens = [x for xs in sixteens for x in xs]
