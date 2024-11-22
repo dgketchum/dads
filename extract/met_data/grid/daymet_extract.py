@@ -28,7 +28,7 @@ def get_daymet(start_date, end_date, down_dst=None):
 
 
 def extract_daymet(stations, out_data, nc_dir=None, workers=8, overwrite=False, bounds=None, debug=False,
-                   start_yr=1990, end_yr=1991):
+                   start_yr=1990, end_yr=2024):
     station_list = pd.read_csv(stations)
     if 'LAT' in station_list.columns:
         station_list = station_list.rename(columns={'STAID': 'fid', 'LAT': 'latitude', 'LON': 'longitude'})
