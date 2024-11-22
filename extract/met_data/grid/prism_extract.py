@@ -118,9 +118,6 @@ def proc_time_slice(urls_, indexer_, fids_, nc_dir_, out_, overwrite_):
     ct, skip = 0, 0
     for fid in fids_:
 
-        if fid not in ['COVM', 'SPAQ8']:
-            continue
-
         try:
             dst_dir = os.path.join(out_, fid)
             _file = os.path.join(dst_dir, '{}_{}.csv'.format(fid, year_str))
