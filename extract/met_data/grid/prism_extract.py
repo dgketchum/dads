@@ -16,7 +16,7 @@ import xarray as xr
 PRISM_VARIABLES = ['ppt', 'tmin', 'tmax', 'tdmean', 'vpdmax', 'vpdmin', 'tmean']
 
 
-def process_prism_data(stations, nc_dir, out_data, start_year=1990, end_year=2023, workers=32,
+def process_prism_data(stations, nc_dir, out_data, tmp_dir, start_year=1990, end_year=2023, workers=32,
                        overwrite=False, bounds=None, debug=True):
     """"""
     station_list = pd.read_csv(stations)
@@ -47,18 +47,18 @@ def process_prism_data(stations, nc_dir, out_data, start_year=1990, end_year=202
 
     if debug:
         for url_set in urls:
-            proc_time_slice(url_set, indexer, fids, nc_dir, out_data, overwrite)
+            proc_time_slice(url_set, indexer, fids, nc_dir, out_data, tmp_dir, overwrite)
 
     with concurrent.futures.ProcessPoolExecutor(max_workers=workers) as executor:
-        futures = [executor.submit(proc_time_slice, url_set, indexer, fids,  nc_dir, out_data, overwrite)
+        futures = [executor.submit(proc_time_slice, url_set, indexer, fids,  nc_dir, out_data, tmp_dir, overwrite)
                    for url_set in urls]
         concurrent.futures.wait(futures)
 
 
-def proc_time_slice(urls_, indexer_, fids_, nc_dir_, out_, overwrite_):
+def proc_time_slice(urls_, indexer_, fids_, nc_dir_, out_, temp, overwrite_):
 
     year_str = os.path.basename(urls_[0]).split('_')[4][:4]
-    nc_path = os.path.join(nc_dir_, f"prism_{year_str}.nc")
+    nc_path = os.path.join(nc_dir_, f'prism_{year_str}.nc')
 
     if not os.path.exists(nc_path):
         print(f'netcdf {os.path.basename(nc_path)} does not exist, building')
@@ -66,10 +66,10 @@ def proc_time_slice(urls_, indexer_, fids_, nc_dir_, out_, overwrite_):
         var_dct = {k: [] for k in PRISM_VARIABLES}
         for url in urls_:
             try:
-                temp_zip = "temp.zip"
+                temp_zip = os.path.join(temp, 'temp.zip')
                 urllib.request.urlretrieve(url, temp_zip)
                 with zipfile.ZipFile(temp_zip, 'r') as zip_ref:
-                    zip_ref.extractall(".")
+                    zip_ref.extractall('.')
                     bil_file = zip_ref.namelist()[0]
 
                 split = bil_file.split('_')
@@ -80,17 +80,17 @@ def proc_time_slice(urls_, indexer_, fids_, nc_dir_, out_, overwrite_):
                 if dt not in time_coords:
                     time_coords.append(dt)
 
-                da = rxr.open_rasterio(bil_file, masked=True, crs="EPSG:4269")
+                da = rxr.open_rasterio(bil_file, masked=True, crs='EPSG:4269')
                 da = da.squeeze('band', drop=True)
                 da.attrs['crs'] = da.rio.crs.to_wkt()
                 da = da.expand_dims(time=[dt])
                 var_dct[variable].append(da)
 
                 os.remove(temp_zip)
-                os.remove(bil_file)
+                [os.remove(f) for f in zip_ref.namelist()]
 
             except Exception as e:
-                print(f"Error processing {url}: {e}")
+                print(f'Error processing {url}: {e}')
 
         monthly_datasets = {var: [] for var in PRISM_VARIABLES}
         for var in PRISM_VARIABLES:
@@ -154,15 +154,15 @@ def proc_time_slice(urls_, indexer_, fids_, nc_dir_, out_, overwrite_):
 
 def create_url_list(year):
     url_list = []
-    base_url = "https://ftp.prism.oregonstate.edu/daily"
+    base_url = 'https://ftp.prism.oregonstate.edu/daily'
 
     start_date = date(year, 1, 1)
     end_date = date(year, 12, 31)
 
     for dt in rrule(DAILY, dtstart=start_date, until=end_date):
-        date_str = dt.strftime("%Y%m%d")
+        date_str = dt.strftime('%Y%m%d')
         for var in PRISM_VARIABLES:
-            url = f"{base_url}/{var}/{dt.year}/PRISM_{var}_stable_4kmD2_{date_str}_bil.zip"
+            url = f'{base_url}/{var}/{dt.year}/PRISM_{var}_stable_4kmD2_{date_str}_bil.zip'
             url_list.append(url)
     return url_list
 
@@ -181,8 +181,9 @@ if __name__ == '__main__':
 
     out_files = os.path.join(prism, 'station_data')
     nc_files_ = os.path.join(prism, 'netcdf')
+    temp_ = os.path.join(prism, 'temp')
 
-    process_prism_data(sites, nc_files_, out_files, workers=32, overwrite=False,
+    process_prism_data(sites, nc_files_, out_files, temp_, start_year=1990, workers=32, overwrite=False,
                        bounds=None, debug=True)
 
 # ========================= EOF ====================================================================
