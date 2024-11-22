@@ -85,7 +85,7 @@ def proc_time_slice(fileset_, indexer_, date_string_, fids_, out_, overwrite_, b
     ds = ds.chunk({'time': len(ds.time.values)})
     if bounds_ is not None:
         ds = ds.sel(y=slice(bounds_[3], bounds_[1]), x=slice(bounds_[0], bounds_[2]))
-    ds = ds.sel(y=indexer_.y, x=indexer_.x, method='nearest')
+    ds = ds.sel(y=indexer_.y, x=indexer_.x, method='nearest', tolerance=1000)
     df_all = ds.to_dataframe()
 
     ct = 0
