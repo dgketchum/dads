@@ -12,7 +12,6 @@ import pandas as pd
 import rioxarray as rxr
 import xarray as xr
 
-
 PRISM_VARIABLES = ['ppt', 'tmin', 'tmax', 'tdmean', 'vpdmax', 'vpdmin', 'tmean']
 
 
@@ -50,13 +49,12 @@ def process_prism_data(stations, nc_dir, out_data, tmp_dir, start_year=1990, end
             proc_time_slice(url_set, indexer, fids, nc_dir, out_data, tmp_dir, overwrite)
 
     with concurrent.futures.ProcessPoolExecutor(max_workers=workers) as executor:
-        futures = [executor.submit(proc_time_slice, url_set, indexer, fids,  nc_dir, out_data, tmp_dir, overwrite)
+        futures = [executor.submit(proc_time_slice, url_set, indexer, fids, nc_dir, out_data, tmp_dir, overwrite)
                    for url_set in urls]
         concurrent.futures.wait(futures)
 
 
 def proc_time_slice(urls_, indexer_, fids_, nc_dir_, out_, temp, overwrite_):
-
     year_str = os.path.basename(urls_[0]).split('_')[4][:4]
     nc_path = os.path.join(nc_dir_, f'prism_{year_str}.nc')
 
@@ -69,8 +67,8 @@ def proc_time_slice(urls_, indexer_, fids_, nc_dir_, out_, temp, overwrite_):
                 temp_zip = os.path.join(temp, 'temp.zip')
                 urllib.request.urlretrieve(url, temp_zip)
                 with zipfile.ZipFile(temp_zip, 'r') as zip_ref:
-                    zip_ref.extractall('.')
-                    bil_file = zip_ref.namelist()[0]
+                    zip_ref.extractall(temp)
+                    bil_file = os.path.join(temp, zip_ref.namelist()[0])
 
                 split = bil_file.split('_')
                 date_str = split[4]
@@ -87,7 +85,7 @@ def proc_time_slice(urls_, indexer_, fids_, nc_dir_, out_, temp, overwrite_):
                 var_dct[variable].append(da)
 
                 os.remove(temp_zip)
-                [os.remove(f) for f in zip_ref.namelist()]
+                [os.remove(os.path.join(temp, f)) for f in zip_ref.namelist()]
 
             except Exception as e:
                 print(f'Error processing {url}: {e}')
@@ -177,7 +175,7 @@ if __name__ == '__main__':
     if not os.path.isdir(d):
         h = os.path.expanduser('~')
         d = os.path.join(h, 'data', 'IrrigationGIS')
-        gridmet = os.path.join(h, 'data', 'gridmet')
+        prism = os.path.join(h, 'data', 'prism')
 
     # sites = os.path.join(d, 'climate', 'ghcn', 'stations', 'ghcn_CANUSA_stations_mgrs.csv')
     sites = os.path.join(d, 'dads', 'met', 'stations', 'madis_29OCT2024.csv')
@@ -186,7 +184,11 @@ if __name__ == '__main__':
     nc_files_ = os.path.join(prism, 'netcdf')
     temp_ = os.path.join(prism, 'temp')
 
+    print(f'{temp_} exists: {os.path.exists(temp_)}')
+    print(f'{out_files} exists: {os.path.exists(out_files)}')
+    print(f'{nc_files_} exists: {os.path.exists(nc_files_)}')
+
     process_prism_data(sites, nc_files_, out_files, temp_, start_year=1991, workers=16, overwrite=False,
-                       bounds=None, debug=False)
+                       bounds=None)
 
 # ========================= EOF ====================================================================
