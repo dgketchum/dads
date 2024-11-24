@@ -128,7 +128,6 @@ def proc_time_slice(urls_, indexer_, fids_, nc_dir_, out_, temp, overwrite_):
             if not os.path.exists(_file) or overwrite_:
                 df_station = df_all[df_all['fid'] == fid].copy()
                 if np.isnan(df_station[PRISM_VARIABLES].values.sum()) > 0:
-                    print(f'skipping {fid}')
                     skip += 1
                     continue
                 df_station['dt'] = [dt.strftime('%Y%m%d%H') for dt in df_station['time']]
@@ -145,7 +144,6 @@ def proc_time_slice(urls_, indexer_, fids_, nc_dir_, out_, temp, overwrite_):
                 skip += 1
         except Exception as exc:
             print(f'{exc} on {fid}')
-            return
 
     del ds, df_all
     gc.collect()
@@ -176,6 +174,11 @@ if __name__ == '__main__':
         d = os.path.join('/data', 'IrrigationGIS')
         prism = os.path.join('/data', 'prism')
 
+    if not os.path.isdir(d):
+        h = os.path.expanduser('~')
+        d = os.path.join(h, 'data', 'IrrigationGIS')
+        gridmet = os.path.join(h, 'data', 'gridmet')
+
     # sites = os.path.join(d, 'climate', 'ghcn', 'stations', 'ghcn_CANUSA_stations_mgrs.csv')
     sites = os.path.join(d, 'dads', 'met', 'stations', 'madis_29OCT2024.csv')
 
@@ -183,7 +186,7 @@ if __name__ == '__main__':
     nc_files_ = os.path.join(prism, 'netcdf')
     temp_ = os.path.join(prism, 'temp')
 
-    process_prism_data(sites, nc_files_, out_files, temp_, start_year=1990, workers=32, overwrite=False,
-                       bounds=None, debug=True)
+    process_prism_data(sites, nc_files_, out_files, temp_, start_year=1991, workers=16, overwrite=False,
+                       bounds=None, debug=False)
 
 # ========================= EOF ====================================================================

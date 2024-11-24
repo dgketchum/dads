@@ -33,7 +33,7 @@ def extract_daymet(stations, out_data, nc_dir=None, workers=8, overwrite=False, 
         station_list = station_list[(station_list['longitude'] < e) & (station_list['longitude'] >= w)]
     else:
         ln = station_list.shape[0]
-        w, s, e, n = (-178.1333, 14.0749, -53.0567, 82.9143)
+        w, s, e, n = (-125.0, 25.0, -67.0, 49.1)
         station_list = station_list[(station_list['latitude'] < n) & (station_list['latitude'] >= s)]
         station_list = station_list[(station_list['longitude'] < e) & (station_list['longitude'] >= w)]
         print('dropped {} stations outside DAYMET NA extent'.format(ln - station_list.shape[0]))
@@ -143,7 +143,7 @@ if __name__ == '__main__':
     out_files = os.path.join(gridmet, 'station_data')
     nc_files_ = os.path.join(gridmet, 'netcdf')
     bounds = (-125.0, 25.0, -67.0, 49.1)
-    extract_daymet(sites, out_files, nc_dir=nc_files_, workers=8, overwrite=False,
-                   bounds=bounds, debug=True, start_yr=1990, end_yr=1991)
+    extract_daymet(sites, out_files, nc_dir=nc_files_, workers=14, overwrite=False,
+                   bounds=bounds)
 
 # ========================= EOF ====================================================================
