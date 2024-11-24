@@ -4,6 +4,7 @@ import os
 import numpy as np
 import pandas as pd
 import xarray as xr
+import requests
 
 VARIABLES = {
     'tmmn': 'air_temperature',
@@ -17,6 +18,7 @@ VARIABLES = {
     'rmax': 'relative_humidity',
     'pr': 'precipitation_amount'
 }
+
 
 def extract_daymet(stations, out_data, nc_dir=None, workers=8, overwrite=False, bounds=None, debug=False,
                    start_yr=1990, end_yr=2024):
@@ -49,6 +51,15 @@ def extract_daymet(stations, out_data, nc_dir=None, workers=8, overwrite=False, 
                     for year in range(start_yr, end_yr)]
     years = list(range(start_yr, end_yr))
 
+    base_url = 'https://www.northwestknowledge.net/metdata/data/'
+    for year_files in target_files:
+        for file_path in year_files:
+            if not os.path.exists(file_path):
+                filename = os.path.basename(file_path)
+                url = os.path.join(base_url, filename)
+                print(f"Downloading {filename} from {url}")
+                download_file(url, file_path)
+
     if not all([os.path.exists(tp) for l in target_files for tp in l]):
         raise NotImplementedError('Missing files')
 
@@ -79,21 +90,37 @@ def proc_time_slice(fileset_, indexer_, date_string_, fids_, out_, overwrite_, b
     ds = ds.sel(lat=indexer_.lat, lon=indexer_.lon, method='nearest', tolerance=4000)
     df_all = ds.to_dataframe()
 
-    ct = 0
+    ct, skip = 0, 0
     for fid in fids_:
         dst_dir = os.path.join(out_, fid)
-        if not os.path.exists(dst_dir):
-            os.mkdir(dst_dir)
         _file = os.path.join(dst_dir, '{}_{}.csv'.format(fid, date_string_))
 
         if not os.path.exists(_file) or overwrite_:
-            df_station = df_all.loc[(fid, slice(None))].copy()
+
+            df_station = df_all.loc[(fid, slice(None), 3)].copy()
+
+            if np.isnan(df_station[VARIABLES.keys()].values.sum()) > 0:
+                skip += 1
+                continue
+
+            if not os.path.exists(dst_dir):
+                os.mkdir(dst_dir)
+
             df_station['dt'] = [i.strftime('%Y%m%d') for i in df_station.index]
             df_station.to_csv(_file, index=False)
             ct += 1
         if ct % 1000 == 0.:
             print(f'{ct} of {len(fids_)} for {date_string_}')
-    print(f'wrote {ct} for {date_string_}')
+    print(f'wrote {ct} for {date_string_}, skipped {skip}')
+
+
+def download_file(url, local_filename):
+    with requests.get(url, stream=True) as r:
+        r.raise_for_status()
+        with open(local_filename, 'wb') as f:
+            for chunk in r.iter_content(chunk_size=8192):
+                f.write(chunk)
+    return local_filename
 
 
 if __name__ == '__main__':
@@ -115,7 +142,7 @@ if __name__ == '__main__':
 
     out_files = os.path.join(gridmet, 'station_data')
     nc_files_ = os.path.join(gridmet, 'netcdf')
-    bounds = (-125.0, 25.0, -67.0, 53.0)
+    bounds = (-125.0, 25.0, -67.0, 49.1)
     extract_daymet(sites, out_files, nc_dir=nc_files_, workers=8, overwrite=False,
                    bounds=bounds, debug=True, start_yr=1990, end_yr=1991)
 
