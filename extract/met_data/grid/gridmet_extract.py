@@ -142,6 +142,10 @@ if __name__ == '__main__':
 
     out_files = os.path.join(gridmet, 'station_data')
     nc_files_ = os.path.join(gridmet, 'netcdf')
+
+    print(f'{out_files} exists: {os.path.exists(out_files)}')
+    print(f'{nc_files_} exists: {os.path.exists(nc_files_)}')
+
     bounds = (-125.0, 25.0, -67.0, 49.1)
     extract_daymet(sites, out_files, nc_dir=nc_files_, workers=14, overwrite=False,
                    bounds=bounds)
