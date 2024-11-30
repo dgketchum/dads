@@ -118,11 +118,7 @@ if __name__ == '__main__':
     d = os.path.join('/home', 'dgketchum', 'data', 'IrrigationGIS')
 
     if not os.path.isdir(d):
-        d = os.path.join('/data', 'IrrigationGIS')
-        temp_directory = os.path.join('/data', 'temp')
-
-    if not os.path.isdir(d):
-        d = os.path.join('/home', 'dketchum', 'data', 'IrrigationGIS')
+        d = os.path.join('/data', 'era5', 'netcdf')
 
     nc_dir = os.path.join(d)
 
