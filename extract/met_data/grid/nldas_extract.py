@@ -3,7 +3,6 @@ import concurrent.futures
 import gc
 import os
 import tempfile
-import json
 from datetime import datetime
 
 import earthaccess
@@ -12,7 +11,7 @@ import pandas as pd
 import xarray as xr
 from earthaccess.results import DataGranule
 
-from extract.met_data.gridded_nc.nldas_parquet import process_and_concat_csv
+from extract.met_data.grid.nldas_parquet import process_and_concat_csv
 
 
 def get_nldas(start_date, end_date, down_dst=None):
@@ -27,6 +26,7 @@ def get_nldas(start_date, end_date, down_dst=None):
 
 def extract_nldas(stations, out_data, nc_data=None, workers=8, overwrite=False, bounds=None, debug=False,
                   parquet_check=None, missing_list=None, tmpd=None):
+    """"""
     station_list = pd.read_csv(stations)
     if 'LAT' in station_list.columns:
         station_list = station_list.rename(columns={'STAID': 'fid', 'LAT': 'latitude', 'LON': 'longitude'})
@@ -47,6 +47,9 @@ def extract_nldas(stations, out_data, nc_data=None, workers=8, overwrite=False, 
 
     station_list = station_list.sample(frac=1)
     station_list = station_list.rename(columns={'latitude': 'lat', 'longitude': 'lon'})
+    if 'END' in station_list.columns:
+        station_list['end_dt'] = [pd.to_datetime(r['END']) for i, r in station_list.iterrows()]
+        station_list = station_list[station_list['end_dt'] > pd.to_datetime('1990-01-01')]
 
     # exist = [sbd for sbd in os.listdir(out_data) if os.path.exists(os.path.join(out_data, sbd))]
 
@@ -128,7 +131,9 @@ def proc_time_slice(nc_files_, indexer_, date_string_, fids_, out_, overwrite_, 
         ds = ds.sel(lat=indexer_.lat, lon=indexer_.lon, method='nearest')
         df_all = ds.to_dataframe()
         ct, skip = 0, 0
-        print(f'prepare to write {date_string_}: {datetime.strftime(datetime.now(), '%Y%m%d %H:%M')}')
+        now = datetime.strftime(datetime.now(), '%Y%m%d %H:%M')
+
+        print(f'prepare to write {date_string_}: {now}')
     except Exception as exc:
         print(f'{exc} on {date_string_}')
         return
@@ -166,7 +171,8 @@ def proc_time_slice(nc_files_, indexer_, date_string_, fids_, out_, overwrite_, 
 
     del ds, df_all
     gc.collect()
-    print(f'wrote {ct} for {date_string_}, skipped {skip}, {datetime.strftime(datetime.now(), '%Y%m%d %H:%M')}')
+    now = datetime.strftime(datetime.now(), '%Y%m%d %H:%M')
+    print(f'wrote {ct} for {date_string_}, skipped {skip}, {now}')
 
 
 def get_quadrants(b):
