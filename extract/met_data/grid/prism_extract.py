@@ -1,4 +1,6 @@
 import calendar
+import random
+import string
 import os
 import gc
 from datetime import datetime, date
@@ -62,33 +64,32 @@ def proc_time_slice(urls_, indexer_, fids_, nc_dir_, out_, temp, overwrite_):
         print(f'netcdf {os.path.basename(nc_path)} does not exist, building')
         time_coords = []
         var_dct = {k: [] for k in PRISM_VARIABLES}
-        for url in urls_:
-            try:
-                temp_zip = os.path.join(temp, 'temp.zip')
-                urllib.request.urlretrieve(url, temp_zip)
-                with zipfile.ZipFile(temp_zip, 'r') as zip_ref:
-                    zip_ref.extractall(temp)
-                    bil_file = os.path.join(temp, zip_ref.namelist()[0])
+        for i, url in enumerate(urls_, start=1):
+            random_string = ''.join(random.choices(string.ascii_letters + string.digits, k=6))
+            temp_zip = f"temp_{random_string}.zip"
+            urllib.request.urlretrieve(url, temp_zip)
+            with zipfile.ZipFile(temp_zip, 'r') as zip_ref:
+                zip_ref.extractall(temp)
+                bil_file = os.path.join(temp, zip_ref.namelist()[0])
 
-                split = bil_file.split('_')
-                date_str = split[4]
-                variable = split[1]
-                year, month, day = int(date_str[:4]), int(date_str[4:6]), int(date_str[6:])
-                dt = datetime(year, month, day)
-                if dt not in time_coords:
-                    time_coords.append(dt)
+            split = bil_file.split('_')
+            date_str = split[4]
+            variable = split[1]
+            year, month, day = int(date_str[:4]), int(date_str[4:6]), int(date_str[6:])
+            dt = datetime(year, month, day)
+            if dt not in time_coords:
+                time_coords.append(dt)
 
-                da = rxr.open_rasterio(bil_file, masked=True, crs='EPSG:4269')
-                da = da.squeeze('band', drop=True)
-                da.attrs['crs'] = da.rio.crs.to_wkt()
-                da = da.expand_dims(time=[dt])
-                var_dct[variable].append(da)
+            da = rxr.open_rasterio(bil_file, masked=True, crs='EPSG:4269')
+            da = da.squeeze('band', drop=True)
+            da.attrs['crs'] = da.rio.crs.to_wkt()
+            da = da.expand_dims(time=[dt])
+            var_dct[variable].append(da)
 
-                os.remove(temp_zip)
-                [os.remove(os.path.join(temp, f)) for f in zip_ref.namelist()]
-
-            except Exception as e:
-                print(f'Error processing {url}: {e}')
+            os.remove(temp_zip)
+            [os.remove(os.path.join(temp, f)) for f in zip_ref.namelist()]
+            if i % 1000 == 0:
+                print(f'{i} of {len(urls_)} rasters for {year_str}')
 
         monthly_datasets = {var: [] for var in PRISM_VARIABLES}
         for var in PRISM_VARIABLES:
@@ -107,6 +108,7 @@ def proc_time_slice(urls_, indexer_, fids_, nc_dir_, out_, temp, overwrite_):
         ds = ds.rename({'x': 'lon', 'y': 'lat'})
         ds = ds.chunk({'time': len(time_coords), 'lat': 100, 'lon': 100})
         ds.to_netcdf(nc_path)
+        print(f'wrote {nc_path}')
     else:
         ds = xr.open_dataset(nc_path, chunks={'time': -1, 'lat': 100, 'lon': 100})
 
@@ -189,6 +191,6 @@ if __name__ == '__main__':
     print(f'{nc_files_} exists: {os.path.exists(nc_files_)}')
 
     process_prism_data(sites, nc_files_, out_files, temp_, start_year=1991, workers=16, overwrite=False,
-                       bounds=None)
+                       bounds=None, debug=False)
 
 # ========================= EOF ====================================================================
