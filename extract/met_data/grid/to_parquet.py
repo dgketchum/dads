@@ -138,7 +138,7 @@ def gridmet_parquet(root_, subdir_, required_years_, expected_index_, strdt_, ou
 
     if os.path.isdir(subdir_path):
         csv_files_ = [f for f in os.listdir(subdir_path) if f.endswith('.csv')]
-        print(f'found {len(csv_files)} csv files')
+        print(f'{subdir_} found {len(csv_files)} csv files')
         # if os.path.exists(out_file) and csv_files_:
         #     shutil.rmtree(subdir_path)
         #     print(f'{os.path.basename(out_file)} exists, removing {len(csv_files)} csv files')
@@ -163,26 +163,24 @@ def gridmet_parquet(root_, subdir_, required_years_, expected_index_, strdt_, ou
         df = pd.concat(dfs)
         df = df.drop_duplicates(subset='dt', keep='first')
         df = df.set_index('dt').sort_index()
-        print('df', df.shape)
         missing = len(expected_index_) - df.shape[0]
         if missing > 15:
             print(f'{subdir_} is missing {missing} records')
 
-        df['dt'] = strdt_
+        df['dt'] = df.index
 
         df.to_parquet(out_file, compression='gzip')
         # shutil.rmtree(subdir_path)
         print(f'wrote {subdir_},'
               # f' removed {len(rm_files)} .csv files,'
               f' {datetime.strftime(datetime.now(), '%Y%m%d %H:%M')}')
-        return
+
     else:
         if os.path.exists(out_file):
             print(f'{os.path.basename(out_file)} exists, skipping')
         else:
-            # print(f'{subdir_path} not found')
-            pass
-        return
+            print(f'{subdir_} not found')
+
 
 if __name__ == '__main__':
 
@@ -201,10 +199,10 @@ if __name__ == '__main__':
     source = 'gridmet'
 
     if source == 'gridmet':
-        csv_files = '/data/gridmet/station_data'
-        p_files = '/data/gridmet/parquet'
-        # csv_files = os.path.join(d, 'dads', 'met', 'gridded', 'gridmet', 'station_data')
-        # p_files = os.path.join(d, 'dads', 'met', 'gridded', 'gridmet', 'parquet')
+        # csv_files = '/data/gridmet/station_data'
+        # p_files = '/data/gridmet/parquet'
+        csv_files = os.path.join(d, 'dads', 'met', 'gridded', 'gridmet', 'station_data')
+        p_files = os.path.join(d, 'dads', 'met', 'gridded', 'gridmet', 'parquet')
 
     elif source == 'nldas2':
         csv_files = '/data/ssd1/nldas2/station_data/'
