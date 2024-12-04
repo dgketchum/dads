@@ -13,7 +13,7 @@ def process_and_concat_csv(stations, root, source, start_date, end_date, outdir,
     end = pd.to_datetime(end_date)
 
     required_months = pd.date_range(start=start, end=end, freq='MS').strftime('%Y%m').tolist()
-    required_years = pd.date_range(start=start, end=end, freq='Y').strftime('%Y').tolist()
+    required_years = pd.date_range(start=start, end=end, freq='YE').strftime('%Y').tolist()
 
     if source == 'gridmet':
         expected_index = pd.date_range(start=start, end=end, freq='d')
