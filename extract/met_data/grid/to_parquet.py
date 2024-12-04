@@ -50,7 +50,8 @@ def process_and_concat_csv(stations, root, source, start_date, end_date, outdir,
         if source == 'gridmet':
             executor.map(gridmet_parquet, [root] * len(subdirs), subdirs,
                          [required_years] * len(subdirs),
-                         [expected_index] * len(subdirs), [strdt] * len(subdirs))
+                         [expected_index] * len(subdirs), [strdt] * len(subdirs),
+                         [outdir] * len(subdirs))
 
 def nldas2_parquet(root_, subdir_, required_months_, expected_index_, strdt_, outdir_, write_missing=None):
     subdir_path = os.path.join(root_, subdir_)
@@ -135,9 +136,8 @@ def gridmet_parquet(root_, subdir_, required_years_, expected_index_, strdt_, ou
     out_file = os.path.join(outdir_, f'{subdir_}.parquet.gzip')
 
     if os.path.isdir(subdir_path):
-
         csv_files_ = [f for f in os.listdir(subdir_path) if f.endswith('.csv')]
-
+        print(f'found {len(csv_files)} csv files')
         # if os.path.exists(out_file) and csv_files_:
         #     shutil.rmtree(subdir_path)
         #     print(f'{os.path.basename(out_file)} exists, removing {len(csv_files)} csv files')
@@ -152,6 +152,8 @@ def gridmet_parquet(root_, subdir_, required_years_, expected_index_, strdt_, ou
                 print(f'{subdir_} missing {len(missing)} months: {np.random.choice(missing, size=5, replace=False)}')
                 return
 
+            print(f'missing {len(missing)}')
+
         dfs = []
         for file in csv_files_:
             c = pd.read_csv(os.path.join(subdir_path, file), parse_dates=['dt'],
@@ -160,7 +162,7 @@ def gridmet_parquet(root_, subdir_, required_years_, expected_index_, strdt_, ou
         df = pd.concat(dfs)
         df = df.drop_duplicates(subset='dt', keep='first')
         df = df.set_index('dt').sort_index()
-
+        print('df', df.shape)
         missing = len(expected_index_) - df.shape[0]
         if missing > 15:
             print(f'{subdir_} is missing {missing} records')
@@ -177,7 +179,8 @@ def gridmet_parquet(root_, subdir_, required_years_, expected_index_, strdt_, ou
         if os.path.exists(out_file):
             print(f'{os.path.basename(out_file)} exists, skipping')
         else:
-            print(f'{subdir_} not found')
+            # print(f'{subdir_path} not found')
+            pass
         return
 
 if __name__ == '__main__':
