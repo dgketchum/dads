@@ -31,6 +31,7 @@ def process_and_concat_csv(stations, root, source, start_date, end_date, outdir,
 
     station_list = station_list.sample(frac=1)
     subdirs = station_list['fid'].to_list()
+    subdirs = [s for s in subdirs if s in ['COVM', '1896P']]
     # subdirs.sort()
 
     print(f'{len(subdirs)} directories to check')
@@ -50,7 +51,8 @@ def process_and_concat_csv(stations, root, source, start_date, end_date, outdir,
         if source == 'gridmet':
             executor.map(gridmet_parquet, [root] * len(subdirs), subdirs,
                          [required_years] * len(subdirs),
-                         [expected_index] * len(subdirs), [strdt] * len(subdirs))
+                         [expected_index] * len(subdirs), [strdt] * len(subdirs),
+                         [outdir] * len(subdirs))
 
 def nldas2_parquet(root_, subdir_, required_months_, expected_index_, strdt_, outdir_, write_missing=None):
     subdir_path = os.path.join(root_, subdir_)
@@ -199,6 +201,8 @@ if __name__ == '__main__':
     if source == 'gridmet':
         csv_files = '/data/gridmet/station_data'
         p_files = '/data/gridmet/parquet'
+        # csv_files = os.path.join(d, 'dads', 'met', 'gridded', 'gridmet', 'station_data')
+        # p_files = os.path.join(d, 'dads', 'met', 'gridded', 'gridmet', 'parquet')
 
     elif source == 'nldas2':
         csv_files = '/data/ssd1/nldas2/station_data/'
