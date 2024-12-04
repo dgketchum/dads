@@ -298,10 +298,10 @@ if __name__ == '__main__':
         home = os.path.expanduser('~')
         d = os.path.join(home, 'data', 'IrrigationGIS')
 
-    # pandarallel.initialize(nb_workers=6))
+    # pandarallel.initialize(nb_workers=6)
 
     sites = os.path.join('/data/ssd1/madis', 'madis_shapefile_29OCT2024.csv')
-    madis_hourly_research = os.path.join('/data/ssd1/madis', 'inclusive_csv')
+    madis_hourly_research = os.path.join(d, 'climate', 'madis', 'LDAD', 'mesonet', 'inclusive_csv')
     madis_daily_ = os.path.join('/data/ssd1/madis', 'madis_daily')
 
     solrad = os.path.join(d, 'dads', 'dem', 'rsun_tables', 'station_rsun')
