@@ -166,7 +166,7 @@ def gridmet_parquet(root_, subdir_, required_years_, expected_index_, strdt_, ou
         df['dt'] = strdt_
 
         df.to_parquet(out_file, compression='gzip')
-        shutil.rmtree(subdir_path)
+        # shutil.rmtree(subdir_path)
         print(f'wrote {subdir_}, removed {len(rm_files)} .csv files,'
               f' {datetime.strftime(datetime.now(), '%Y%m%d %H:%M')}')
         return
