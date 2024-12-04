@@ -33,6 +33,8 @@ def process_and_concat_csv(stations, root, source, start_date, end_date, outdir,
     subdirs = station_list['fid'].to_list()
     # subdirs.sort()
 
+    print(f'{len(subdirs)} directories to check')
+
     if missing_file:
         for sd in subdirs:
             if source == 'nldas2':
@@ -167,7 +169,8 @@ def gridmet_parquet(root_, subdir_, required_years_, expected_index_, strdt_, ou
 
         df.to_parquet(out_file, compression='gzip')
         # shutil.rmtree(subdir_path)
-        print(f'wrote {subdir_}, removed {len(rm_files)} .csv files,'
+        print(f'wrote {subdir_},'
+              # f' removed {len(rm_files)} .csv files,'
               f' {datetime.strftime(datetime.now(), '%Y%m%d %H:%M')}')
         return
     else:
