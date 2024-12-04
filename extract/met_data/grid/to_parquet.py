@@ -137,10 +137,10 @@ def gridmet_parquet(root_, subdir_, required_years_, expected_index_, strdt_, ou
 
         csv_files_ = [f for f in os.listdir(subdir_path) if f.endswith('.csv')]
 
-        if os.path.exists(out_file) and csv_files_:
-            shutil.rmtree(subdir_path)
-            print(f'{os.path.basename(out_file)} exists, removing {len(csv_files)} csv files')
-            return
+        # if os.path.exists(out_file) and csv_files_:
+        #     shutil.rmtree(subdir_path)
+        #     print(f'{os.path.basename(out_file)} exists, removing {len(csv_files)} csv files')
+        #     return
 
         dtimes = [f.split('_')[-1].replace('.csv', '') for f in csv_files_]
         rm_files = csv_files_.copy()
@@ -195,8 +195,8 @@ if __name__ == '__main__':
     source = 'gridmet'
 
     if source == 'gridmet':
-        csv_files = os.path.join(d, 'dads', 'met', 'gridded', 'gridmet', 'station_data')
-        p_files = os.path.join(d, 'dads', 'met', 'gridded', 'gridmet', 'parquet')
+        csv_files = '/data/gridmet/station_data'
+        p_files = '/data/gridmet/parquet'
 
     elif source == 'nldas2':
         csv_files = '/data/ssd1/nldas2/station_data/'
