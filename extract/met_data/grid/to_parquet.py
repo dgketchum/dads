@@ -31,7 +31,6 @@ def process_and_concat_csv(stations, root, source, start_date, end_date, outdir,
 
     station_list = station_list.sample(frac=1)
     subdirs = station_list['fid'].to_list()
-    subdirs = [s for s in subdirs if s in ['COVM', '1896P']]
     # subdirs.sort()
 
     if missing_file:
