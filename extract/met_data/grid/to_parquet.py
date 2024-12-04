@@ -8,11 +8,18 @@ import pandas as pd
 import numpy as np
 
 
-def process_and_concat_csv(stations, root, start_date, end_date, outdir, workers, missing_file=None):
+def process_and_concat_csv(stations, root, source, start_date, end_date, outdir, workers, missing_file=None):
     start = pd.to_datetime(start_date)
     end = pd.to_datetime(end_date)
+
     required_months = pd.date_range(start=start, end=end, freq='MS').strftime('%Y%m').tolist()
-    expected_index = pd.date_range(start=start, end=end, freq='h')
+    required_years = pd.date_range(start=start, end=end, freq='Y').strftime('%Y').tolist()
+
+    if source == 'gridmet':
+        expected_index = pd.date_range(start=start, end=end, freq='d')
+    elif source == 'nldas2':
+        expected_index = pd.date_range(start=start, end=end, freq='h')
+
     strdt = [d.strftime('%Y%m%d%H') for d in expected_index]
 
     station_list = pd.read_csv(stations)
@@ -24,20 +31,27 @@ def process_and_concat_csv(stations, root, start_date, end_date, outdir, workers
 
     station_list = station_list.sample(frac=1)
     subdirs = station_list['fid'].to_list()
+    subdirs = [s for s in subdirs if s in ['COVM', '1896P']]
     # subdirs.sort()
 
     if missing_file:
         for sd in subdirs:
-            process_parquet(root, sd, required_months, expected_index, strdt, outdir, missing_file)
+            if source == 'nldas2':
+                nldas2_parquet(root, sd, required_months, expected_index, strdt, outdir, missing_file)
 
     with concurrent.futures.ProcessPoolExecutor(max_workers=workers) as executor:
-        executor.map(process_parquet, [root] * len(subdirs), subdirs,
-                     [required_months] * len(subdirs),
-                     [expected_index] * len(subdirs), [strdt] * len(subdirs),
-                     [outdir] * len(subdirs))
+        if source == 'nldas2':
+            executor.map(nldas2_parquet, [root] * len(subdirs), subdirs,
+                         [required_months] * len(subdirs),
+                         [expected_index] * len(subdirs), [strdt] * len(subdirs),
+                         [outdir] * len(subdirs))
 
+        if source == 'gridmet':
+            executor.map(gridmet_parquet, [root] * len(subdirs), subdirs,
+                         [required_years] * len(subdirs),
+                         [expected_index] * len(subdirs), [strdt] * len(subdirs))
 
-def process_parquet(root_, subdir_, required_months_, expected_index_, strdt_, outdir_, write_missing=None):
+def nldas2_parquet(root_, subdir_, required_months_, expected_index_, strdt_, outdir_, write_missing=None):
     subdir_path = os.path.join(root_, subdir_)
     out_file = os.path.join(outdir_, f'{subdir_}.parquet.gzip')
 
@@ -115,29 +129,80 @@ def process_parquet(root_, subdir_, required_months_, expected_index_, strdt_, o
         return
 
 
+def gridmet_parquet(root_, subdir_, required_years_, expected_index_, strdt_, outdir_):
+    subdir_path = os.path.join(root_, subdir_)
+    out_file = os.path.join(outdir_, f'{subdir_}.parquet.gzip')
+
+    if os.path.isdir(subdir_path):
+
+        csv_files_ = [f for f in os.listdir(subdir_path) if f.endswith('.csv')]
+
+        if os.path.exists(out_file) and csv_files_:
+            shutil.rmtree(subdir_path)
+            print(f'{os.path.basename(out_file)} exists, removing {len(csv_files)} csv files')
+            return
+
+        dtimes = [f.split('_')[-1].replace('.csv', '') for f in csv_files_]
+        rm_files = csv_files_.copy()
+
+        if len(dtimes) < len(required_years_):
+            missing = [m for m in required_years_ if m not in dtimes]
+            if len(missing) > 0:
+                print(f'{subdir_} missing {len(missing)} months: {np.random.choice(missing, size=5, replace=False)}')
+                return
+
+        dfs = []
+        for file in csv_files_:
+            c = pd.read_csv(os.path.join(subdir_path, file), parse_dates=['dt'],
+                            date_format='%Y%m%d%H')
+            dfs.append(c)
+        df = pd.concat(dfs)
+        df = df.drop_duplicates(subset='dt', keep='first')
+        df = df.set_index('dt').sort_index()
+
+        missing = len(expected_index_) - df.shape[0]
+        if missing > 15:
+            print(f'{subdir_} is missing {missing} records')
+
+        df['dt'] = strdt_
+
+        df.to_parquet(out_file, compression='gzip')
+        shutil.rmtree(subdir_path)
+        print(f'wrote {subdir_}, removed {len(rm_files)} .csv files,'
+              f' {datetime.strftime(datetime.now(), '%Y%m%d %H:%M')}')
+        return
+    else:
+        if os.path.exists(out_file):
+            print(f'{os.path.basename(out_file)} exists, skipping')
+        else:
+            print(f'{subdir_} not found')
+        return
+
 if __name__ == '__main__':
 
     d = '/media/research/IrrigationGIS'
+    home = os.path.expanduser('~')
 
     if not os.path.isdir(d):
-        d = os.path.join('/home', 'dgketchum', 'data', 'IrrigationGIS')
+        d = os.path.join(home, 'data', 'IrrigationGIS')
 
     if not os.path.isdir(d):
-        d = os.path.join('/home', 'ec2-user', 'data', 'IrrigationGIS')
+        d = os.path.join('/data', 'IrrigationGIS')
 
-    if not os.path.isdir(d):
-        d = os.path.join('/home', 'dketchum', 'data', 'IrrigationGIS')
+    sites = os.path.join(d, 'dads', 'met', 'stations', 'madis_29OCT2024.csv')
+    # sites = os.path.join(d, 'climate', 'ghcn', 'stations', 'ghcn_CANUSA_stations_mgrs.csv')
 
-    sites = os.path.join(d, 'climate', 'ghcn', 'stations', 'ghcn_CANUSA_stations_mgrs.csv')
-    # sites = os.path.join(d, 'dads', 'met', 'stations', 'madis_29OCT2024.csv')
+    source = 'gridmet'
 
-    csv_files = '/data/ssd1/nldas2/station_data/'
-    # csv_files = os.path.join(d, 'dads', 'met', 'gridded', 'nldas2', 'station_data')
+    if source == 'gridmet':
+        csv_files = os.path.join(d, 'dads', 'met', 'gridded', 'gridmet', 'station_data')
+        p_files = os.path.join(d, 'dads', 'met', 'gridded', 'gridmet', 'parquet')
 
-    p_files = os.path.join(d, 'dads', 'met', 'gridded', 'nldas2_parquet')
+    elif source == 'nldas2':
+        csv_files = '/data/ssd1/nldas2/station_data/'
+        p_files = os.path.join(d, 'dads', 'met', 'gridded', 'nldas2_parquet')
 
-    missing_file_ = '/data/ssd1/nldas2/missing_madis_{}.json'.format(datetime.now().strftime('%Y%m%d%H%M'))
-    process_and_concat_csv(sites, csv_files, start_date='1990-01-01', end_date='2023-12-31', outdir=p_files,
-                           workers=10, missing_file=None)
+    process_and_concat_csv(sites, csv_files, source, start_date='1992-01-01', end_date='2023-12-31', outdir=p_files,
+                           workers=1, missing_file=None)
 
 # ========================= EOF ====================================================================
