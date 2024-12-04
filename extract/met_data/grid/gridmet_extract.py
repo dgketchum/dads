@@ -148,6 +148,6 @@ if __name__ == '__main__':
 
     bounds = (-125.0, 25.0, -67.0, 49.1)
     extract_daymet(sites, out_files, nc_dir=nc_files_, workers=14, overwrite=False,
-                   bounds=bounds)
+                   bounds=bounds, start_yr=1990, end_yr=1992)
 
 # ========================= EOF ====================================================================
