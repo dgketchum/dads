@@ -4,9 +4,8 @@ import os
 import earthaccess
 import numpy as np
 import pandas as pd
-import xarray as xr
 import pyproj
-import cartopy.crs as ccrs
+import xarray as xr
 
 
 def get_daymet(start_date, end_date, down_dst=None):
@@ -27,38 +26,41 @@ def get_daymet(start_date, end_date, down_dst=None):
         return results
 
 
-def extract_daymet(stations, out_data, nc_dir=None, workers=8, overwrite=False, bounds=None, debug=False,
+def extract_daymet(stations, out_data, nc_dir, bounds, workers=8, overwrite=False, debug=False,
                    start_yr=1990, end_yr=2024):
     station_list = pd.read_csv(stations)
     if 'LAT' in station_list.columns:
         station_list = station_list.rename(columns={'STAID': 'fid', 'LAT': 'latitude', 'LON': 'longitude'})
     station_list.index = station_list['fid']
 
-    if bounds:
-        w, s, e, n = bounds
-        station_list = station_list[(station_list['latitude'] < n) & (station_list['latitude'] >= s)]
-        station_list = station_list[(station_list['longitude'] < e) & (station_list['longitude'] >= w)]
-        w, s = projected_coords({'lon': w, 'lat': s})
-        e, n = projected_coords({'lon': e, 'lat': n})
-        proj_bounds = w, s, e, n
-        if w >= e or s >= n:
-            raise ValueError(f'Invalid projected bounds: {proj_bounds}')
-        else:
-            print(f'Bounds Extent: x({w}, {e}), ({s}, {n})')
+    w, s, e, n = bounds
+    print(f'Geo Bounds Extent: x ({w}, {e}), y ({s}, {n})')
+
+    station_list = station_list[(station_list['latitude'] < n) & (station_list['latitude'] >= s)]
+    station_list = station_list[(station_list['longitude'] < e) & (station_list['longitude'] >= w)]
+
+    station_list['distance_to_sw'] = station_list.apply(
+        lambda row: haversine_distance(s, w, row['latitude'], row['longitude']), axis=1)
+    nearest_station = station_list.loc[station_list['distance_to_sw'].idxmin()]
+    print(f"Nearest station to SW corner: {nearest_station}")
+
+    w, s = projected_coords({'lon': w, 'lat': s})
+    e, n = projected_coords({'lon': e, 'lat': n})
+    proj_bounds = w, s, e, n
+
+    if w >= e or s >= n:
+        raise ValueError(f'Invalid projected bounds: {proj_bounds}')
     else:
-        proj_bounds = None
-        ln = station_list.shape[0]
-        w, s, e, n = (-178.1333, 14.0749, -53.0567, 82.9143)
-        station_list = station_list[(station_list['latitude'] < n) & (station_list['latitude'] >= s)]
-        station_list = station_list[(station_list['longitude'] < e) & (station_list['longitude'] >= w)]
-        print('dropped {} stations outside DAYMET NA extent'.format(ln - station_list.shape[0]))
+        print(f'Proj Bounds Extent: x ({w:.2f}, {e:.2f}), y ({s:.2f}, {n:.2f})')
 
     print(f'{len(station_list)} stations to write')
 
     station_list = station_list.sample(frac=1)
     station_list = station_list.rename(columns={'latitude': 'lat', 'longitude': 'lon'})
     station_list[['x', 'y']] = station_list.apply(projected_coords, axis=1, result_type='expand')
-    indexer = station_list[['x', 'y']].to_xarray()
+    print(station_list.loc[station_list['distance_to_sw'].idxmin()])
+    station_list = station_list.rename(columns={'lat': 'slat', 'lon': 'slon'})
+    indexer = station_list[['x', 'y', 'slat', 'slon']].to_xarray()
     fids = np.unique(indexer.fid.values).tolist()
 
     vars_list = ['tmax', 'tmin', 'vp', 'prcp', 'srad']
@@ -71,12 +73,12 @@ def extract_daymet(stations, out_data, nc_dir=None, workers=8, overwrite=False, 
         raise NotImplementedError('Missing files')
 
     if debug:
-        for fileset, dts in zip(target_files, years):
-            proc_time_slice(fileset, indexer, dts, fids, out_data, overwrite, bounds_=proj_bounds)
+        for fileset, dts in zip(target_files[:1], years[:1]):
+            proc_time_slice(fileset, indexer, dts, fids, out_data, overwrite, bounds_=None)
 
     with concurrent.futures.ProcessPoolExecutor(max_workers=workers) as executor:
         futures = [executor.submit(proc_time_slice, fileset, indexer, dts, fids, out_data, overwrite,
-                                   bounds_=proj_bounds) for fileset, dts in zip(target_files, years)]
+                                   bounds_=None) for fileset, dts in zip(target_files, years)]
         concurrent.futures.wait(futures)
 
 
@@ -84,8 +86,15 @@ def proc_time_slice(fileset_, indexer_, date_string_, fids_, out_, overwrite_, b
     ds = xr.open_mfdataset(fileset_, engine='netcdf4')
     ds = ds.chunk({'time': len(ds.time.values)})
     if bounds_ is not None:
-        ds = ds.sel(y=slice(bounds_[3], bounds_[1]), x=slice(bounds_[0], bounds_[2]))
-    ds = ds.sel(y=indexer_.y, x=indexer_.x, method='nearest', tolerance=1000)
+        # have not figured out why this filters out all y, and thus all data!
+        ds = ds.sel(y=slice(bounds_[1], bounds_[3]), x=slice(bounds_[0], bounds_[2]))
+    try:
+        ds = ds.sel(y=indexer_.y, x=indexer_.x, method='nearest', tolerance=1000)
+    except KeyError as exc:
+        print(f"KeyError: {exc}")
+        print("Problematic y values:", np.array(indexer_.y)[~np.isin(indexer_.y, ds.y)])
+        return
+
     df_all = ds.to_dataframe()
 
     ct = 0
@@ -97,6 +106,9 @@ def proc_time_slice(fileset_, indexer_, date_string_, fids_, out_, overwrite_, b
 
         if not os.path.exists(_file) or overwrite_:
             df_station = df_all.loc[(fid, slice(None), 0)].copy()
+            # write station lat/lon to ensure proximity given uncertain projection setup
+            df_station['slat'] = indexer_['slat'].sel(fid=fid).values
+            df_station['slon'] = indexer_['slon'].sel(fid=fid).values
             df_station['dt'] = [i.strftime('%Y%m%d') for i in df_station.index]
             df_station.to_csv(_file, index=False)
             ct += 1
@@ -106,18 +118,11 @@ def proc_time_slice(fileset_, indexer_, date_string_, fids_, out_, overwrite_, b
 
 
 def projected_coords(row):
-    lcc = ccrs.LambertConformal(
-        central_longitude=-100,
-        central_latitude=42.5,
-        standard_parallels=(25, 60),
-        false_easting=0,
-        false_northing=0,
-        globe=ccrs.Globe(ellipse='WGS84')
-    )
     source_crs = 'epsg:4326'
-    target_crs = lcc.proj4_init
-    transformer = pyproj.Transformer.from_crs(source_crs, target_crs, always_xy=True)
-    x, y = transformer.transform(row['lon'], row['lat'])
+    target_crs = ('+proj=lcc +lat_0=42.5 +lon_0=-100 +lat_1=25 +lat_2=60 +x_0=0 '
+                  '+y_0=0 +ellps=WGS84')
+    transformer = pyproj.Transformer.from_crs(source_crs, target_crs)
+    x, y = transformer.transform(yy=row['lon'], xx=row['lat'])
     return x, y
 
 
@@ -132,24 +137,39 @@ def get_quadrants(b):
     return quadrants
 
 
+def haversine_distance(lat1, lon1, lat2, lon2):
+    R = 6371
+    dlat = np.radians(lat2 - lat1)
+    dlon = np.radians(lon2 - lon1)
+    a = np.sin(dlat / 2) * np.sin(dlat / 2) + \
+        np.cos(np.radians(lat1)) * np.cos(np.radians(lat2)) * \
+        np.sin(dlon / 2) * np.sin(dlon / 2)
+    c = 2 * np.arctan2(np.sqrt(a), np.sqrt(1 - a))
+    distance = R * c
+    return distance
+
+
 if __name__ == '__main__':
 
-    d = os.path.join('/home', 'ubuntu', 'data', 'IrrigationGIS')
-    daymet = os.path.join('/home', 'ubuntu', 'data', 'daymet')
+    home = os.path.expanduser('~')
+    d = os.path.join(home, 'data', 'IrrigationGIS')
+    daymet = os.path.join(home, 'data', 'daymet')
+
+    if not os.path.isdir(d):
+        d = os.path.join(home, 'data', 'IrrigationGIS')
+        daymet = os.path.join(home, 'data', 'daymet')
 
     if not os.path.isdir(d):
         d = os.path.join('/data', 'IrrigationGIS')
         daymet = os.path.join('/data', 'daymet')
 
-    earthaccess.login()
+    # earthaccess.login()
     print('earthdata access authenticated')
 
-    # sites = os.path.join(d, 'climate', 'ghcn', 'stations', 'ghcn_CANUSA_stations_mgrs.csv')
-    sites = os.path.join(d, 'dads', 'met', 'stations', 'madis_29OCT2024.csv')
 
     out_files = os.path.join(daymet, 'station_data')
     nc_files_ = os.path.join(daymet, 'netcdf')
-    # bounds = (-68.0, 17.0, -64.0, 20.0)
+
     bounds = (-178., 7., -53., 83.)
     quadrants = get_quadrants(bounds)
     sixteens = [get_quadrants(q) for q in quadrants]
@@ -157,10 +177,14 @@ if __name__ == '__main__':
 
     # get_daymet(f'{1990}-01-01', f'{1990}-01-31', nc_files_)
 
-    for e, sector in enumerate(sixteens, start=1):
-        print(f'\n\n\n\n Sector {e} of {len(sixteens)} \n\n\n\n')
+    for enum_, sector in enumerate(sixteens, start=1):
+        print(f'\n\n\n\n Sector {enum_} of {len(sixteens)} \n\n\n\n')
 
-        extract_daymet(sites, out_files, nc_dir=nc_files_, workers=32, overwrite=False,
-                       bounds=sector, debug=True)
+        sites = os.path.join(d, 'dads', 'met', 'stations', 'madis_29OCT2024.csv')
+        extract_daymet(sites, out_files, nc_dir=nc_files_, bounds=sector, workers=14,
+                       overwrite=True, debug=False, start_yr=1990, end_yr=2024)
+        sites = os.path.join(d, 'climate', 'ghcn', 'stations', 'ghcn_CANUSA_stations_mgrs.csv')
+        extract_daymet(sites, out_files, nc_dir=nc_files_, bounds=sector, workers=14,
+                       overwrite=True, debug=False, start_yr=1990, end_yr=2024)
 
 # ========================= EOF ====================================================================
