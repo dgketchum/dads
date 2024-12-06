@@ -20,8 +20,8 @@ VARIABLES = {
 }
 
 
-def extract_daymet(stations, out_data, nc_dir=None, workers=8, overwrite=False, bounds=None, debug=False,
-                   start_yr=1990, end_yr=2024):
+def extract_gridmet(stations, out_data, nc_dir=None, workers=8, overwrite=False, bounds=None, debug=False,
+                    start_yr=1990, end_yr=2024):
     station_list = pd.read_csv(stations)
     if 'LAT' in station_list.columns:
         station_list = station_list.rename(columns={'STAID': 'fid', 'LAT': 'latitude', 'LON': 'longitude'})
@@ -147,7 +147,7 @@ if __name__ == '__main__':
     print(f'{nc_files_} exists: {os.path.exists(nc_files_)}')
 
     bounds = (-125.0, 25.0, -67.0, 49.1)
-    extract_daymet(sites, out_files, nc_dir=nc_files_, workers=14, overwrite=False,
-                   bounds=bounds, start_yr=1990, end_yr=1992)
+    extract_gridmet(sites, out_files, nc_dir=nc_files_, workers=14, overwrite=False,
+                    bounds=bounds, start_yr=1990, end_yr=1992)
 
 # ========================= EOF ====================================================================
