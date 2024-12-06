@@ -59,18 +59,22 @@ def process_prism_data(stations, nc_dir, out_data, tmp_dir, start_year=1990, end
 def proc_time_slice(urls_, indexer_, fids_, nc_dir_, out_, temp, overwrite_):
     year_str = os.path.basename(urls_[0]).split('_')[4][:4]
     nc_path = os.path.join(nc_dir_, f'prism_{year_str}.nc')
-
     if not os.path.exists(nc_path):
         print(f'netcdf {os.path.basename(nc_path)} does not exist, building')
         time_coords = []
         var_dct = {k: [] for k in PRISM_VARIABLES}
         for i, url in enumerate(urls_, start=1):
-            random_string = ''.join(random.choices(string.ascii_letters + string.digits, k=6))
-            temp_zip = f"temp_{random_string}.zip"
-            urllib.request.urlretrieve(url, temp_zip)
-            with zipfile.ZipFile(temp_zip, 'r') as zip_ref:
-                zip_ref.extractall(temp)
-                bil_file = os.path.join(temp, zip_ref.namelist()[0])
+            file_ = url.split('/')[-1]
+            bil_file = os.path.join(temp, file_).replace('.zip', '.bil')
+            if os.path.exists(bil_file):
+                pass
+            else:
+                random_string = ''.join(random.choices(string.ascii_letters + string.digits, k=6))
+                temp_zip = f"temp_{random_string}.zip"
+                urllib.request.urlretrieve(url, temp_zip)
+                with zipfile.ZipFile(temp_zip, 'r') as zip_ref:
+                    zip_ref.extractall(temp)
+                    bil_file = os.path.join(temp, zip_ref.namelist()[0])
 
             split = bil_file.split('_')
             date_str = split[4]
@@ -92,11 +96,30 @@ def proc_time_slice(urls_, indexer_, fids_, nc_dir_, out_, temp, overwrite_):
                 print(f'{i} of {len(urls_)} rasters for {year_str}')
 
         monthly_datasets = {var: [] for var in PRISM_VARIABLES}
+        first_da, x_first, y_first = None, None, None
+
+        # somewhere in this stack are a couple rasters that have a very slight difference in coordinate values
         for var in PRISM_VARIABLES:
             daily_data = []
             for dt in time_coords:
                 for da in var_dct[var]:
                     if da.time.values[0].astype('datetime64[D]') == np.datetime64(dt, 'D'):
+                        if da.shape != (1,621, 1405):
+                            raise ValueError(f"Unexpected shape in daily_data: {da.shape}")
+
+                        if first_da is None:
+                            first_da = da
+                            x_first = da.x.values
+                            y_first = da.y.values
+                        else:
+                            if not np.array_equal(da.x.values, x_first):
+                                print(f"Warning: Mismatched x coordinates for {var}, {dt}. Reassigning.")
+                                da = da.assign_coords(x=x_first)
+
+                            if not np.array_equal(da.y.values, y_first):
+                                print(f"Warning: Mismatched y coordinates for {var}, {dt}. Reassigning.")
+                                da = da.assign_coords(y=y_first)
+
                         daily_data.append(da)
                         break
 
@@ -190,7 +213,7 @@ if __name__ == '__main__':
     print(f'{out_files} exists: {os.path.exists(out_files)}')
     print(f'{nc_files_} exists: {os.path.exists(nc_files_)}')
 
-    process_prism_data(sites, nc_files_, out_files, temp_, start_year=1991, workers=16, overwrite=False,
-                       bounds=None, debug=False)
+    process_prism_data(sites, nc_files_, out_files, temp_, start_year=1995, end_year=1997, workers=16,
+                       overwrite=False, bounds=None, debug=False)
 
 # ========================= EOF ====================================================================
