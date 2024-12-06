@@ -1,5 +1,6 @@
 import calendar
 import random
+import shutil
 import string
 import os
 import gc
@@ -70,11 +71,13 @@ def proc_time_slice(urls_, indexer_, fids_, nc_dir_, out_, temp, overwrite_):
                 pass
             else:
                 random_string = ''.join(random.choices(string.ascii_letters + string.digits, k=6))
-                temp_zip = f"temp_{random_string}.zip"
+                temp_subdir = os.path.join(temp, random_string)
+                temp_zip = os.path.join(temp_subdir, f"temp_{random_string}.zip")
                 urllib.request.urlretrieve(url, temp_zip)
                 with zipfile.ZipFile(temp_zip, 'r') as zip_ref:
                     zip_ref.extractall(temp)
                     bil_file = os.path.join(temp, zip_ref.namelist()[0])
+                shutil.rmtree(temp_subdir)
 
             split = bil_file.split('_')
             date_str = split[4]
@@ -85,13 +88,13 @@ def proc_time_slice(urls_, indexer_, fids_, nc_dir_, out_, temp, overwrite_):
                 time_coords.append(dt)
 
             da = rxr.open_rasterio(bil_file, masked=True, crs='EPSG:4269')
+            if os.path.exists(bil_file):
+                os.remove(bil_file)
             da = da.squeeze('band', drop=True)
             da.attrs['crs'] = da.rio.crs.to_wkt()
             da = da.expand_dims(time=[dt])
             var_dct[variable].append(da)
 
-            os.remove(temp_zip)
-            [os.remove(os.path.join(temp, f)) for f in zip_ref.namelist()]
             if i % 1000 == 0:
                 print(f'{i} of {len(urls_)} rasters for {year_str}')
 

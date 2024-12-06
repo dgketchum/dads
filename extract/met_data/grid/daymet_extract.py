@@ -39,26 +39,15 @@ def extract_daymet(stations, out_data, nc_dir, bounds, workers=8, overwrite=Fals
     station_list = station_list[(station_list['latitude'] < n) & (station_list['latitude'] >= s)]
     station_list = station_list[(station_list['longitude'] < e) & (station_list['longitude'] >= w)]
 
-    station_list['distance_to_sw'] = station_list.apply(
-        lambda row: haversine_distance(s, w, row['latitude'], row['longitude']), axis=1)
-    nearest_station = station_list.loc[station_list['distance_to_sw'].idxmin()]
-    print(f"Nearest station to SW corner: {nearest_station}")
-
-    w, s = projected_coords({'lon': w, 'lat': s})
-    e, n = projected_coords({'lon': e, 'lat': n})
-    proj_bounds = w, s, e, n
-
-    if w >= e or s >= n:
-        raise ValueError(f'Invalid projected bounds: {proj_bounds}')
-    else:
-        print(f'Proj Bounds Extent: x ({w:.2f}, {e:.2f}), y ({s:.2f}, {n:.2f})')
+    if len(station_list) < 1:
+        print('No stations found in this area')
+        return
 
     print(f'{len(station_list)} stations to write')
 
     station_list = station_list.sample(frac=1)
     station_list = station_list.rename(columns={'latitude': 'lat', 'longitude': 'lon'})
     station_list[['x', 'y']] = station_list.apply(projected_coords, axis=1, result_type='expand')
-    print(station_list.loc[station_list['distance_to_sw'].idxmin()])
     station_list = station_list.rename(columns={'lat': 'slat', 'lon': 'slon'})
     indexer = station_list[['x', 'y', 'slat', 'slon']].to_xarray()
     fids = np.unique(indexer.fid.values).tolist()
@@ -137,18 +126,6 @@ def get_quadrants(b):
     return quadrants
 
 
-def haversine_distance(lat1, lon1, lat2, lon2):
-    R = 6371
-    dlat = np.radians(lat2 - lat1)
-    dlon = np.radians(lon2 - lon1)
-    a = np.sin(dlat / 2) * np.sin(dlat / 2) + \
-        np.cos(np.radians(lat1)) * np.cos(np.radians(lat2)) * \
-        np.sin(dlon / 2) * np.sin(dlon / 2)
-    c = 2 * np.arctan2(np.sqrt(a), np.sqrt(1 - a))
-    distance = R * c
-    return distance
-
-
 if __name__ == '__main__':
 
     home = os.path.expanduser('~')
@@ -178,7 +155,11 @@ if __name__ == '__main__':
     # get_daymet(f'{1990}-01-01', f'{1990}-01-31', nc_files_)
 
     for enum_, sector in enumerate(sixteens, start=1):
-        print(f'\n\n\n\n Sector {enum_} of {len(sixteens)} \n\n\n\n')
+
+        print(f'\n\n Sector {enum_} of {len(sixteens)} \n\n')
+
+        if enum_ < 9:
+            continue
 
         sites = os.path.join(d, 'dads', 'met', 'stations', 'madis_29OCT2024.csv')
         extract_daymet(sites, out_files, nc_dir=nc_files_, bounds=sector, workers=14,
