@@ -193,20 +193,20 @@ def create_url_list(year):
 
 if __name__ == '__main__':
 
-    d = os.path.join('/home', 'ubuntu', 'data', 'IrrigationGIS')
-    prism = os.path.join('/home', 'ubuntu', 'data', 'prism')
+    home = os.path.expanduser('~')
+    d = os.path.join(home, 'data', 'IrrigationGIS')
+    prism = os.path.join(home, 'data', 'prism')
+
+    if not os.path.isdir(d):
+        d = os.path.join(home, 'data', 'IrrigationGIS')
+        prism = os.path.join(home, 'data', 'prism')
 
     if not os.path.isdir(d):
         d = os.path.join('/data', 'IrrigationGIS')
         prism = os.path.join('/data', 'prism')
 
-    if not os.path.isdir(d):
-        h = os.path.expanduser('~')
-        d = os.path.join(h, 'data', 'IrrigationGIS')
-        prism = os.path.join(h, 'data', 'prism')
-
-    # sites = os.path.join(d, 'climate', 'ghcn', 'stations', 'ghcn_CANUSA_stations_mgrs.csv')
-    sites = os.path.join(d, 'dads', 'met', 'stations', 'madis_29OCT2024.csv')
+    sites = os.path.join(d, 'climate', 'ghcn', 'stations', 'ghcn_CANUSA_stations_mgrs.csv')
+    # sites = os.path.join(d, 'dads', 'met', 'stations', 'madis_29OCT2024.csv')
 
     out_files = os.path.join(prism, 'station_data')
     nc_files_ = os.path.join(prism, 'netcdf')
@@ -216,7 +216,7 @@ if __name__ == '__main__':
     print(f'{out_files} exists: {os.path.exists(out_files)}')
     print(f'{nc_files_} exists: {os.path.exists(nc_files_)}')
 
-    process_prism_data(sites, nc_files_, out_files, temp_, start_year=1995, end_year=1997, workers=16,
+    process_prism_data(sites, nc_files_, out_files, temp_, start_year=1990, end_year=2024, workers=18,
                        overwrite=False, bounds=None, debug=False)
 
 # ========================= EOF ====================================================================
