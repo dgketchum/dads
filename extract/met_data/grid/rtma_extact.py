@@ -2,36 +2,21 @@ import calendar
 import concurrent.futures
 import gc
 import os
-import tempfile
-from datetime import datetime, timedelta
+from datetime import datetime, date
 
-import earthaccess
+import boto3
 import numpy as np
 import pandas as pd
 import xarray as xr
-from earthaccess.results import DataGranule
-
-from extract.met_data.grid.to_parquet import process_and_concat_csv
-
-
-def get_rtma(start_date, end_date, down_dst=None):
-    # Construct the URL for the RTMA data
-    base_url = "https://noaa-urma-pds.s3.amazonaws.com/urma2p5.{date}/urma2p5.t14z.2dvarges_ndfd.grb2_ext"
-    date_str = start_date.strftime("%Y%m%d")
-    url = base_url.format(date=date_str)
-
-    if down_dst:
-        # Download the file using earthaccess if down_dst is provided
-        earthaccess.download(url, down_dst)
-    else:
-        # Return the URL if down_dst is not provided
-        return url
+from botocore.exceptions import ClientError
+from botocore import UNSIGNED
+from botocore.client import Config
+from dateutil.rrule import rrule, HOURLY
 
 
 def extract_rtma(stations, out_data, grb_data=None, workers=8, overwrite=False, bounds=None, debug=False,
-                 parquet_check=None, missing_list=None, tmpd=None):
-
-    station_list = pd.read_csv(stations)
+                 start_yr=1990, end_yr=2024):
+    station_list = pd.read_csv(stations, nrows=100)
     if 'LAT' in station_list.columns:
         station_list = station_list.rename(columns={'STAID': 'fid', 'LAT': 'latitude', 'LON': 'longitude'})
     station_list.index = station_list['fid']
@@ -59,73 +44,32 @@ def extract_rtma(stations, out_data, grb_data=None, workers=8, overwrite=False, 
     indexer = station_list[['lat', 'lon']].to_xarray()
     fids = np.unique(indexer.fid.values).tolist()
 
-    yrmo, files = [], []
-
-    for year in range(2016, 2024):
-
-        for month in range(1, 13):
-
-            month_start = datetime(year, month, 1)
-            date_string = month_start.strftime('%Y%m')
-
-            if missing_list and date_string not in missing_list:
-                continue
-
-            if grb_data:
-                grb_files = [f for f in os.listdir(grb_data) if date_string == f.split('.')[1][1:7]]
-                grb_files.sort()
-                grb_files = [os.path.join(grb_data, f) for f in grb_files]
-            else:
-                m_str = str(month).rjust(2, '0')
-                month_end = calendar.monthrange(year, month)[1]
-                grb_files = []
-                for day in range(1, month_end + 1):
-                    start_date = datetime(year, month, day)
-                    grb_files.append(get_rtma(start_date, start_date))
-
-            if not grb_files:
-                print(f'No GRIB files found for {year}-{month}')
-                continue
-
-            yrmo.append(date_string)
-            files.append(grb_files)
+    yrmo = [(datetime(year, month, 1).strftime('%Y%m')) for year in range(start_yr, end_yr) for month in range(1, 13)]
+    yrmo = [yms for yms in yrmo if int(yms) > 201401][:1]
 
     print(f'{len(yrmo)} months to write')
-    file_packs = [(yrmo[i], len(files[i])) for i in range(0, len(yrmo))]
-    [print(fp) for fp in file_packs]
 
     if debug:
-        for fileset, dts in zip(files, yrmo):
-            proc_time_slice(fileset, indexer, dts, fids, out_data, overwrite, par_check=parquet_check, tmpdir=tmpd)
+        for dts in yrmo:
+            proc_time_slice(indexer, dts, fids, out_data, overwrite, grb_dir=grb_data)
 
     with concurrent.futures.ProcessPoolExecutor(max_workers=workers) as executor:
-        futures = [executor.submit(proc_time_slice, fileset, indexer, dts, fids, out_data, overwrite, tmpdir=tmpd)
-                   for fileset, dts in zip(files, yrmo)]
+        futures = [executor.submit(proc_time_slice, indexer, dts, fids, out_data, overwrite, tmpdir=grb_data)
+                   for dts in zip(yrmo)]
         concurrent.futures.wait(futures)
 
 
-def proc_time_slice(grb_files_, indexer_, date_string_, fids_, out_, overwrite_, par_check=None, tmpdir=None):
-    try:
-        if isinstance(grb_files_[0], DataGranule):
-            if not tmpdir:
-                tmpdir = tempfile.gettempdir()
-            ges_files = earthaccess.download(grb_files_, tmpdir, threads=4)
-            ds = xr.open_mfdataset(ges_files, engine='cfgrib')
-            [os.remove(f) for f in ges_files]
-        else:
-            ds = xr.open_mfdataset(grb_files_, engine='cfgrib', combine='nested', concat_dim='time')
+def proc_time_slice(indexer_, date_string_, fids_, out_, overwrite_, grb_dir=None):
+    """"""
+    grb_files = get_grb_files(date_string_, dst=grb_dir, overwrite=overwrite_)
+    ds = xr.open_mfdataset(grb_files, engine='cfgrib', concat_dim='time', combine='nested')
+    ds = ds.chunk({'time': len(grb_files), 'latitude': 28, 'longitude': 29})
 
-        ds = ds.chunk({'time': len(grb_files_), 'latitude': 28, 'longitude': 29})
-
-    except Exception as exc:
-        print(f'{exc} on {date_string_}')
-        return
     try:
         ds = ds.sel(latitude=indexer_.lat, longitude=indexer_.lon, method='nearest')
         df_all = ds.to_dataframe()
         ct, skip = 0, 0
         now = datetime.strftime(datetime.now(), '%Y%m%d %H:%M')
-
         print(f'prepare to write {date_string_}: {now}')
     except Exception as exc:
         print(f'{exc} on {date_string_}')
@@ -134,12 +78,6 @@ def proc_time_slice(grb_files_, indexer_, date_string_, fids_, out_, overwrite_,
     for fid in fids_:
 
         try:
-            if par_check:
-                parquet = os.path.join(par_check, f'{fid}.parquet.gzip')
-                if os.path.exists(parquet):
-                    skip += 1
-                    continue
-
             dst_dir = os.path.join(out_, fid)
             if not os.path.exists(dst_dir):
                 os.mkdir(dst_dir)
@@ -168,6 +106,47 @@ def proc_time_slice(grb_files_, indexer_, date_string_, fids_, out_, overwrite_,
     print(f'wrote {ct} for {date_string_}, skipped {skip}, {now}')
 
 
+def get_grb_files(yrmo_str, dst, overwrite=False):
+    """"""
+    year, month = int(yrmo_str[:4]), int(yrmo_str[-2:])
+    bucket_name = 'noaa-urma-pds'
+    date_dir, hr_file = 'urma2p5.{date}', 'urma2p5.t{hour}z.2dvaranl_ndfd.grb2{ext}'
+    start_date = date(year, month, 1)
+    month_end = calendar.monthrange(year, month)[1]
+    end_date = date(year, month, month_end)
+    files = []
+    s3 = boto3.client('s3', config=Config(signature_version=UNSIGNED))
+
+    for dt in rrule(HOURLY, dtstart=start_date, until=end_date):
+        date_str = dt.strftime('%Y%m%d')
+        hr_str = dt.strftime('%H')
+
+        day_dir = date_dir.format(date=date_str)
+        par_dir = os.path.join(dst, day_dir)
+        if not os.path.exists(par_dir):
+            os.mkdir(par_dir)
+
+        file_path = os.path.join(par_dir, hr_file.format(hour=hr_str, ext=''))
+        files.append(file_path)
+        if os.path.exists(file_path) and not overwrite:
+            continue
+
+        object_key = f'{date_dir.format(date=date_str)}/{hr_file.format(hour=hr_str, ext='_wexp')}'
+        try:
+            s3.download_file(bucket_name, object_key, file_path)
+
+        except ClientError as exc:
+            try:
+                object_key = f'{date_dir.format(date=date_str)}/{hr_file.format(hour=hr_str, ext='_ext')}'
+                s3.download_file(bucket_name, object_key, file_path)
+
+            except Exception as e:
+                files.remove(file_path)
+                print(f"Error downloading s3://{bucket_name}/{object_key}: {e}")
+
+    return files
+
+
 def get_quadrants(b):
     mid_longitude = (b[0] + b[2]) / 2
     mid_latitude = (b[1] + b[3]) / 2
@@ -181,45 +160,34 @@ def get_quadrants(b):
 
 if __name__ == '__main__':
 
-    d = '/media/research/IrrigationGIS'
-    temp_directory = None
+    home = os.path.expanduser('~')
+    d = os.path.join(home, 'data', 'IrrigationGIS')
+    rtma = os.path.join(home, 'data', 'rtma')
 
     if not os.path.isdir(d):
-        d = os.path.join('/home', 'dgketchum', 'data', 'IrrigationGIS')
+        d = os.path.join(home, 'data', 'IrrigationGIS')
+        rtma = os.path.join(home, 'data', 'rtma')
 
     if not os.path.isdir(d):
         d = os.path.join('/data', 'IrrigationGIS')
-        temp_directory = os.path.join('/data', 'temp')
+        rtma = os.path.join('/data', 'rtma')
 
-    if not os.path.isdir(d):
-        d = os.path.join('/home', 'dketchum', 'data', 'IrrigationGIS')
+    sites = os.path.join(d, 'dads', 'met', 'stations', 'madis_29OCT2024.csv')
+    # sites = os.path.join(d, 'climate', 'ghcn', 'stations', 'ghcn_CANUSA_stations_mgrs.csv')
 
-    grb_data_ = '/data/ssd2/rtma/grb'
-    # grb_data_ = None
-    # get_rtma(grb_data_)
+    out_files = os.path.join(rtma, 'station_data')
+    grb_files_ = os.path.join(rtma, 'grib')
 
-    sites = os.path.join(d, 'climate', 'ghcn', 'stations', 'ghcn_CANUSA_stations_mgrs.csv')
-    # sites = os.path.join(d, 'dads', 'met', 'stations', 'madis_29OCT2024.csv')
-
-    csv_files = '/data/ssd1/rtma/station_data/'
-    # csv_files = os.path.join(d, 'dads', 'met', 'gridded', 'rtma', 'station_data')
-    p_files = os.path.join(d, 'dads', 'met', 'gridded', 'rtma_parquet')
-
-    if not grb_data_:
-        earthaccess.login()
-        print('earthdata access authenticated')
-
-    bounds = (-125.0, 25.0, -67.0, 53.0)
-    quadrants = get_quadrants(bounds)
+    bounds_ = (-124.0, 23.0, -66.0, 52.0)
+    quadrants = get_quadrants(bounds_)
 
     for e, quad in enumerate(quadrants, start=1):
-
         print(f'\n\n\n\n Quadrant {e} \n\n\n\n')
 
-        extract_rtma(sites, csv_files, grb_data=grb_data_, workers=16, overwrite=False, missing_list=None,
-                     bounds=quad, debug=False, parquet_check=p_files)
+        extract_rtma(sites, out_files, grb_data=grb_files_, workers=16, overwrite=False,
+                     bounds=quad, debug=True, start_yr=2014, end_yr=2024)
 
-        process_and_concat_csv(sites, csv_files, start_date='2016-01-01', end_date='2023-12-31', outdir=p_files,
-                               workers=16, missing_file=None)
+        # process_and_concat_csv(sites, csv_files, start_date='2016-01-01', end_date='2023-12-31', outdir=p_files,
+        #                        workers=16, missing_file=None)
 
 # ========================= EOF ====================================================================
