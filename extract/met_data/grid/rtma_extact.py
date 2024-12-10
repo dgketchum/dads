@@ -2,20 +2,25 @@ import calendar
 import concurrent.futures
 import gc
 import os
-from datetime import datetime, date
+from datetime import datetime
 
-import boto3
 import numpy as np
 import pandas as pd
 import xarray as xr
+from herbie import FastHerbie
+import boto3
 from botocore.exceptions import ClientError
 from botocore import UNSIGNED
 from botocore.client import Config
-from dateutil.rrule import rrule, HOURLY
+import cfgrib
+import pygrib
+from pyproj import CRS
 
 
-def extract_rtma(stations, out_data, grb_data=None, workers=8, overwrite=False, bounds=None, debug=False,
-                 start_yr=1990, end_yr=2024):
+def extract_rtma(stations, out_data, grib, netcdf, model="rtma", workers=8, overwrite=False, bounds=None,
+                 debug=False, stream=False, start_yr=1990, end_yr=2024):
+    """"""
+    # TODO: remove the nrows arg!!!
     station_list = pd.read_csv(stations, nrows=100)
     if 'LAT' in station_list.columns:
         station_list = station_list.rename(columns={'STAID': 'fid', 'LAT': 'latitude', 'LON': 'longitude'})
@@ -44,26 +49,33 @@ def extract_rtma(stations, out_data, grb_data=None, workers=8, overwrite=False, 
     indexer = station_list[['lat', 'lon']].to_xarray()
     fids = np.unique(indexer.fid.values).tolist()
 
-    yrmo = [(datetime(year, month, 1).strftime('%Y%m')) for year in range(start_yr, end_yr) for month in range(1, 13)]
-    yrmo = [yms for yms in yrmo if int(yms) > 201401][:1]
+    yrmo = [f'{year}{month:02}' for year in range(start_yr, end_yr + 1) for month in range(1, 13)]
+    yrmo = [yms for yms in yrmo if int(yms[:4]) > 2014]
 
     print(f'{len(yrmo)} months to write')
 
     if debug:
         for dts in yrmo:
-            proc_time_slice(indexer, dts, fids, out_data, overwrite, grb_dir=grb_data)
+            proc_time_slice(indexer, dts, fids, grib, netcdf, out_data, overwrite, model, stream)
 
     with concurrent.futures.ProcessPoolExecutor(max_workers=workers) as executor:
-        futures = [executor.submit(proc_time_slice, indexer, dts, fids, out_data, overwrite, tmpdir=grb_data)
-                   for dts in zip(yrmo)]
+        futures = [executor.submit(proc_time_slice, indexer, dts, fids, grib, netcdf, out_data, overwrite, model, stream)
+                   for dts in yrmo]
         concurrent.futures.wait(futures)
 
 
-def proc_time_slice(indexer_, date_string_, fids_, out_, overwrite_, grb_dir=None):
+def proc_time_slice(indexer_, date_string_, fids_, grb_, nc_, out_, overwrite_, model_, stream_=False):
     """"""
-    grb_files = get_grb_files(date_string_, dst=grb_dir, overwrite=overwrite_)
-    ds = xr.open_mfdataset(grb_files, engine='cfgrib', concat_dim='time', combine='nested')
-    ds = ds.chunk({'time': len(grb_files), 'latitude': 28, 'longitude': 29})
+    nc_file = os.path.join(nc_, f'{model}_{date_string_}.nc')
+
+    if not os.path.exists(nc_file):
+        ds = get_grb_files(date_string_, model_, None, stream_data=stream_)
+    else:
+        ds = xr.open_dataset(nc_file)
+    return
+
+    ds = ds.chunk({'time': ds.time.values.shape[0], 'y': 40, 'x': 60})
+    ds.to_netcdf(nc_file)
 
     try:
         ds = ds.sel(latitude=indexer_.lat, longitude=indexer_.lon, method='nearest')
@@ -82,7 +94,7 @@ def proc_time_slice(indexer_, date_string_, fids_, out_, overwrite_, grb_dir=Non
             if not os.path.exists(dst_dir):
                 os.mkdir(dst_dir)
 
-            _file = os.path.join(dst_dir, '{}_{}.csv'.format(fid, date_string_))
+            _file = os.path.join(dst_dir, '{}_{}.csv'.format(fid, date_string_.replace('-', '')))
 
             if os.path.exists(_file) and os.path.getsize(_file) == 0:
                 os.remove(_file)
@@ -106,46 +118,90 @@ def proc_time_slice(indexer_, date_string_, fids_, out_, overwrite_, grb_dir=Non
     print(f'wrote {ct} for {date_string_}, skipped {skip}, {now}')
 
 
-def get_grb_files(yrmo_str, dst, overwrite=False):
+def get_grb_files(date_str, model, dst=None, max_threads=6, stream_data=False):
     """"""
-    year, month = int(yrmo_str[:4]), int(yrmo_str[-2:])
-    bucket_name = 'noaa-urma-pds'
-    date_dir, hr_file = 'urma2p5.{date}', 'urma2p5.t{hour}z.2dvaranl_ndfd.grb2{ext}'
-    start_date = date(year, month, 1)
-    month_end = calendar.monthrange(year, month)[1]
-    end_date = date(year, month, month_end)
-    files = []
+
     s3 = boto3.client('s3', config=Config(signature_version=UNSIGNED))
 
-    for dt in rrule(HOURLY, dtstart=start_date, until=end_date):
-        date_str = dt.strftime('%Y%m%d')
-        hr_str = dt.strftime('%H')
+    year, month = int(date_str[:4]), int(date_str[-2:])
+    month_end = calendar.monthrange(year, month)[1]
+    start, end = f'{year}-{month}-01 00:00', f'{year}-{month:02}-{month_end:02} 23:00'
 
-        day_dir = date_dir.format(date=date_str)
-        par_dir = os.path.join(dst, day_dir)
-        if not os.path.exists(par_dir):
-            os.mkdir(par_dir)
+    dates = pd.date_range(start=start, end=end, freq='1h')
+    FH = FastHerbie(dates, model=model, max_threads=max_threads, **{'save_dir': dst})
 
-        file_path = os.path.join(par_dir, hr_file.format(hour=hr_str, ext=''))
-        files.append(file_path)
-        if os.path.exists(file_path) and not overwrite:
-            continue
+    if dst:
+        target_dir = os.path.join(dst, date_str)
+        if not os.path.exists(target_dir):
+            os.mkdir(target_dir)
 
-        object_key = f'{date_dir.format(date=date_str)}/{hr_file.format(hour=hr_str, ext='_wexp')}'
-        try:
-            s3.download_file(bucket_name, object_key, file_path)
-
-        except ClientError as exc:
+    if not stream_data and dst:
+        for obj in FH.objects:
             try:
-                object_key = f'{date_dir.format(date=date_str)}/{hr_file.format(hour=hr_str, ext='_ext')}'
-                s3.download_file(bucket_name, object_key, file_path)
+                remote_file = '/'.join(obj.SOURCES['aws'].split('/')[-2:])
+                local_file = os.path.basename(obj.SOURCES['aws'])
+                local_path = os.path.join(target_dir, local_file)
+                obj.SOURCES['local'] = local_path
 
-            except Exception as e:
-                files.remove(file_path)
-                print(f"Error downloading s3://{bucket_name}/{object_key}: {e}")
+                if not os.path.exists(local_path):
+                    s3.download_file(f'noaa-{model}-pds', remote_file, local_path)
+                    print(f'downloaded {local_path}')
 
-    return files
+            except Exception as exc:
+                print(exc, date_str, 'on download')
+                return None
 
+    try:
+        ds_list = [to_xarray(H) for H in FH.objects]
+        ds_list = [xr.merge(dso, compat='override') for dso in ds_list]
+        ds_list.sort(key=lambda x: x.time.data.max())
+    except Exception as exc:
+        print(exc, date_str, 'on list, merge, sort')
+        return None
+
+    ds_ = xr.combine_nested(ds_list, combine_attrs='drop_conflicts', concat_dim='time')
+    ds_ = ds_.squeeze()
+
+    return ds_
+
+
+def to_xarray(h_object, model):
+    backend_kwargs = {}
+    backend_kwargs.setdefault('indexpath', '')
+    backend_kwargs.setdefault(
+        'read_keys',
+        ['parameterName', 'parameterUnits', 'stepRange', 'uvRelativeToGrid'],
+    )
+    backend_kwargs.setdefault('errors', 'raise')
+
+
+    Hxr = cfgrib.open_datasets(h_object, backend_kwargs=backend_kwargs)
+
+    with pygrib.open(str(local_file)) as grb:
+        msg = grb.message(1)
+        cf_params = CRS(msg.projparams).to_cf()
+
+    for ds in Hxr:
+        ds.attrs['model'] = str(self.model)
+        ds.attrs['product'] = str(self.product)
+        ds.attrs['description'] = self.DESCRIPTION
+        ds.attrs['remote_grib'] = str(self.grib)
+        ds.attrs['local_grib'] = str(local_file)
+        ds.attrs['search'] = str(search)
+        ds.coords['gribfile_projection'] = None
+        ds.coords['gribfile_projection'].attrs = cf_params
+        ds.coords['gribfile_projection'].attrs['long_name'] = (
+            f'{self.model.upper()} model grid projection'
+        )
+
+        # Assign this grid_mapping for all variables
+        for var in list(ds):
+            ds[var].attrs['grid_mapping'] = 'gribfile_projection'
+
+        if len(Hxr) == 1:
+            return Hxr[0]
+        else:
+            raise ValueError
 
 def get_quadrants(b):
     mid_longitude = (b[0] + b[2]) / 2
@@ -161,22 +217,25 @@ def get_quadrants(b):
 if __name__ == '__main__':
 
     home = os.path.expanduser('~')
-    d = os.path.join(home, 'data', 'IrrigationGIS')
-    rtma = os.path.join(home, 'data', 'rtma')
 
-    if not os.path.isdir(d):
+    model = 'rtma'
+
+    d = '/media/research/IrrigationGIS'
+    rtma = '/media/nvm/{}'.format(model)
+
+    if not os.path.isdir(rtma):
         d = os.path.join(home, 'data', 'IrrigationGIS')
-        rtma = os.path.join(home, 'data', 'rtma')
+        rtma = os.path.join('/data', 'ssd1', f'{model}')
 
-    if not os.path.isdir(d):
-        d = os.path.join('/data', 'IrrigationGIS')
-        rtma = os.path.join('/data', 'rtma')
+    if not os.path.isdir(rtma):
+        d = os.path.join(home, 'data', 'IrrigationGIS')
+        rtma = os.path.join(home, 'data', f'{model}')
 
     sites = os.path.join(d, 'dads', 'met', 'stations', 'madis_29OCT2024.csv')
-    # sites = os.path.join(d, 'climate', 'ghcn', 'stations', 'ghcn_CANUSA_stations_mgrs.csv')
 
     out_files = os.path.join(rtma, 'station_data')
-    grb_files_ = os.path.join(rtma, 'grib')
+    out_netcdf_ = os.path.join(rtma, 'netcdf')
+    out_grib_ = os.path.join(rtma, 'grib')
 
     bounds_ = (-124.0, 23.0, -66.0, 52.0)
     quadrants = get_quadrants(bounds_)
@@ -184,10 +243,7 @@ if __name__ == '__main__':
     for e, quad in enumerate(quadrants, start=1):
         print(f'\n\n\n\n Quadrant {e} \n\n\n\n')
 
-        extract_rtma(sites, out_files, grb_data=grb_files_, workers=16, overwrite=False,
-                     bounds=quad, debug=True, start_yr=2014, end_yr=2024)
-
-        # process_and_concat_csv(sites, csv_files, start_date='2016-01-01', end_date='2023-12-31', outdir=p_files,
-        #                        workers=16, missing_file=None)
+        extract_rtma(sites, out_files, out_grib_, out_netcdf_, model='rtma', workers=1, overwrite=False,
+                     bounds=quad, debug=True, stream=True, start_yr=2020, end_yr=2024)
 
 # ========================= EOF ====================================================================
