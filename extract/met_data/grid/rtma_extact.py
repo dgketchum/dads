@@ -1,27 +1,19 @@
 import calendar
 import concurrent.futures
 import gc
-import os
-
 import json
+import os
 from datetime import datetime
 
+import boto3
+import cfgrib
 import numpy as np
 import pandas as pd
-import pyproj
 import xarray as xr
 from herbie import FastHerbie
-import boto3
-from botocore.exceptions import ClientError
 from botocore import UNSIGNED
 from botocore.client import Config
-import cfgrib
-import xoak
-import pygrib
-from pyproj import CRS
-import numpy as np
 from sklearn.neighbors import BallTree
-from sklearn.metrics.pairwise import haversine_distances
 
 """
 NOAA GRIB Projection Info: https://www.nco.ncep.noaa.gov/pmb/docs/on388/tableb.html
@@ -31,13 +23,13 @@ NOAA GRIB Projection Info: https://www.nco.ncep.noaa.gov/pmb/docs/on388/tableb.h
 def extract_rtma(stations, out_data, grib, netcdf, model="rtma", workers=8, overwrite=False, bounds=None,
                  debug=False, start_yr=1990, end_yr=2024):
     """"""
-    station_list = pd.read_csv(stations, nrows=15)
+    station_list = pd.read_csv(stations)
     if 'LAT' in station_list.columns:
         station_list = station_list.rename(columns={'STAID': 'fid', 'LAT': 'latitude', 'LON': 'longitude'})
     station_list.index = station_list['fid']
 
     w, s, e, n = bounds
-    print(f'Geo Bounds Extent: x ({w}, {e}), y ({s}, {n})')
+    print(f'\n{os.path.basename(stations)}\nGeo Bounds Extent: x ({w}, {e}), y ({s}, {n})')
 
     station_list = station_list[(station_list['latitude'] < n) & (station_list['latitude'] >= s)]
     station_list = station_list[(station_list['longitude'] < e) & (station_list['longitude'] >= w)]
@@ -59,20 +51,19 @@ def extract_rtma(stations, out_data, grib, netcdf, model="rtma", workers=8, over
     indexer = station_list[['slat', 'slon']].to_xarray()
 
     yrmo = [f'{year}{month:02}' for year in range(start_yr, end_yr + 1) for month in range(1, 13)]
-    yrmo = [yms for yms in yrmo if int(yms[:4]) > 2014]
+    yrmo.reverse()
 
     print(f'{len(yrmo)} months to write')
 
     if debug:
         for dts in yrmo:
-            if dts != '201706':
-                continue
             proc_time_slice(indexer, dts, grib, netcdf, out_data, overwrite, model)
 
-    with concurrent.futures.ProcessPoolExecutor(max_workers=workers) as executor:
-        futures = [executor.submit(proc_time_slice, indexer, dts, grib, netcdf, out_data, overwrite, model)
-                   for dts in yrmo]
-        concurrent.futures.wait(futures)
+    else:
+        with concurrent.futures.ProcessPoolExecutor(max_workers=workers) as executor:
+            futures = [executor.submit(proc_time_slice, indexer, dts, grib, netcdf, out_data, overwrite, model)
+                       for dts in yrmo]
+            concurrent.futures.wait(futures)
 
 
 def proc_time_slice(indexer_, date_string_, grb_, nc_, out_, overwrite_, model_):
@@ -85,7 +76,7 @@ def proc_time_slice(indexer_, date_string_, grb_, nc_, out_, overwrite_, model_)
         ds = xr.open_dataset(nc_file)
 
     # was unable to use xoak here for some reason it dropped FID index
-    # must use a tree aproach as the only meaningful spatial coordinates are in an irregular grid
+    # must use a tree approach as the only meaningful spatial coordinates are in an irregular grid
     grid_points_radians = np.deg2rad(np.stack((ds['latitude'].values.ravel(), ds['longitude'].values.ravel()), axis=-1))
     station_points_radians = np.deg2rad(np.stack((indexer_['slat'].values, indexer_['slon'].values), axis=-1))
     tree = BallTree(grid_points_radians, metric='haversine')
@@ -111,7 +102,7 @@ def proc_time_slice(indexer_, date_string_, grb_, nc_, out_, overwrite_, model_)
             if not os.path.exists(dst_dir):
                 os.mkdir(dst_dir)
 
-            _file = os.path.join(dst_dir, '{}_{}.csv'.format(fid, date_string_.replace('-', '')))
+            _file = os.path.join(dst_dir, '{}_{}.parquet'.format(fid, date_string_.replace('-', '')))
 
             if os.path.exists(_file) and os.path.getsize(_file) == 0:
                 os.remove(_file)
@@ -119,7 +110,7 @@ def proc_time_slice(indexer_, date_string_, grb_, nc_, out_, overwrite_, model_)
             if not os.path.exists(_file) or overwrite_:
                 df_station = df_all.loc[(0, 0, slice(None), fid)].copy()
                 df_station['dt'] = [i.strftime('%Y%m%d%H') for i in df_station.index]
-                df_station.to_csv(_file, index=False)
+                df_station.to_parquet(_file, index=False)
                 ct += 1
                 if ct % 1000 == 0.:
                     print(f'{ct} of {len(fids_)} for {date_string_}')
@@ -142,7 +133,7 @@ def get_grb_files(date_str, model, dst, nc_file, max_threads=6):
 
     year, month = int(date_str[:4]), int(date_str[-2:])
     month_end = calendar.monthrange(year, month)[1]
-    start, end = f'{year}-{month}-01 00:00', f'{year}-{month:02}-{1:02} 06:00'
+    start, end = f'{year}-{month}-01 00:00', f'{year}-{month:02}-{month_end:02} 06:00'
 
     dates = pd.date_range(start=start, end=end, freq='1h')
     FH = FastHerbie(dates, model=model, max_threads=max_threads, **{'save_dir': dst})
@@ -152,6 +143,7 @@ def get_grb_files(date_str, model, dst, nc_file, max_threads=6):
         if not os.path.exists(target_dir):
             os.mkdir(target_dir)
 
+    dwn_first, dwn_ct = True, 0
     for obj in FH.objects:
         try:
             remote_file = '/'.join(obj.SOURCES['aws'].split('/')[-2:])
@@ -161,11 +153,16 @@ def get_grb_files(date_str, model, dst, nc_file, max_threads=6):
 
             if not os.path.exists(local_path):
                 s3.download_file(f'noaa-{model}-pds', remote_file, local_path)
-                print(f'downloaded {local_path}')
+                dwn_ct += 1
+                if dwn_first:
+                    print(f'downloaded {local_path}')
+                    dwn_first = False
 
         except Exception as exc:
             print(exc, date_str, 'on download')
             return None
+
+    print(f'downloaded {dwn_ct} grib files for {date_str}')
 
     try:
         ds_list = [to_xarray(obj, model) for obj in FH.objects]
@@ -233,7 +230,7 @@ if __name__ == '__main__':
 
     home = os.path.expanduser('~')
 
-    model = 'rtma'
+    model = 'urma'
 
     d = '/media/research/IrrigationGIS'
     rtma = '/media/nvm/{}'.format(model)
@@ -258,7 +255,10 @@ if __name__ == '__main__':
     for e, quad in enumerate(quadrants, start=1):
         print(f'\n\n\n\n Quadrant {e} \n\n\n\n')
 
-        extract_rtma(sites, out_files, out_grib_, out_netcdf_, model='rtma', workers=1, overwrite=False,
-                     bounds=quad, debug=True, start_yr=2017, end_yr=2024)
+        extract_rtma(sites, out_files, out_grib_, out_netcdf_, model=model, workers=1, overwrite=False,
+                     bounds=quad, debug=True, start_yr=2014, end_yr=2023)
 
+        sites = os.path.join(d, 'climate', 'ghcn', 'stations', 'ghcn_CANUSA_stations_mgrs.csv')
+        extract_rtma(sites, out_files, out_grib_, out_netcdf_, model=model, workers=1, overwrite=False,
+                     bounds=quad, debug=True, start_yr=2014, end_yr=2023)
 # ========================= EOF ====================================================================
