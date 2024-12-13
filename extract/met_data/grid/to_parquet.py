@@ -152,7 +152,10 @@ def general_parquet(root_, subdir_, required_years_, expected_index_, outdir_):
         if len(dtimes) < len(required_years_):
             missing = [m for m in required_years_ if m not in dtimes]
             if len(missing) > 0:
-                print(f'{subdir_} missing {len(missing)} years: {np.random.choice(missing, size=5, replace=False)}')
+                if missing >= 5:
+                    print(f'{subdir_} missing {len(missing)} years: {np.random.choice(missing, size=5, replace=False)}')
+                else:
+                    print(f'{subdir_} missing {len(missing)} years: {missing}')
                 return
 
         dfs = []
