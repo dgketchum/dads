@@ -14,6 +14,7 @@ from herbie import FastHerbie
 from botocore import UNSIGNED
 from botocore.client import Config
 from sklearn.neighbors import BallTree
+from tqdm import tqdm
 
 """
 NOAA GRIB Projection Info: https://www.nco.ncep.noaa.gov/pmb/docs/on388/tableb.html
@@ -133,10 +134,12 @@ def get_grb_files(date_str, model, dst, nc_file, max_threads=6):
 
     year, month = int(date_str[:4]), int(date_str[-2:])
     month_end = calendar.monthrange(year, month)[1]
-    start, end = f'{year}-{month}-01 00:00', f'{year}-{month:02}-{month_end:02} 06:00'
+    start, end = f'{year}-{month}-01 00:00', f'{year}-{month:02}-{month_end:02} 23:00'
 
     dates = pd.date_range(start=start, end=end, freq='1h')
-    FH = FastHerbie(dates, model=model, max_threads=max_threads, **{'save_dir': dst})
+    FH = FastHerbie(dates, model=model, max_threads=max_threads, **{'save_dir': dst,
+                                                                    'priority': ['aws', 'nomads']})
+    print(f'{date_str} found {len(FH.objects)} objects')
 
     if dst:
         target_dir = os.path.join(dst, date_str)
@@ -144,7 +147,7 @@ def get_grb_files(date_str, model, dst, nc_file, max_threads=6):
             os.mkdir(target_dir)
 
     dwn_first, dwn_ct = True, 0
-    for obj in FH.objects:
+    for obj in tqdm(FH.objects, len(FH.objects)):
         try:
             remote_file = '/'.join(obj.SOURCES['aws'].split('/')[-2:])
             local_file = os.path.basename(obj.SOURCES['aws'])
