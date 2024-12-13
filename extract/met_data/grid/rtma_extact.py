@@ -141,16 +141,19 @@ def get_grb_files(date_str, model, dst, nc_file, max_threads=6):
                                                                     'priority': ['aws', 'nomads']})
     print(f'{date_str} found {len(FH.objects)} objects')
 
-    if dst:
-        target_dir = os.path.join(dst, date_str)
-        if not os.path.exists(target_dir):
-            os.mkdir(target_dir)
+    target_dir = os.path.join(dst, date_str)
+    if not os.path.exists(target_dir):
+        os.mkdir(target_dir)
 
     dwn_first, dwn_ct = True, 0
-    for obj in tqdm(FH.objects, len(FH.objects)):
+    for obj in tqdm(FH.objects, desc='Download {model}', total=len(FH.objects)):
         try:
             remote_file = '/'.join(obj.SOURCES['aws'].split('/')[-2:])
-            local_file = os.path.basename(obj.SOURCES['aws'])
+            splt = obj.grib.split('/')
+            dt = splt[-2].split('.')[-1]
+            dt_hr_st = splt[-1].split('.')
+            dt_hr_st.insert(1, dt)
+            local_file = '.'.join(dt_hr_st)
             local_path = os.path.join(target_dir, local_file)
             obj.SOURCES['local'] = local_path
 
