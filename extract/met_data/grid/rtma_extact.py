@@ -146,7 +146,7 @@ def get_grb_files(date_str, model, dst, nc_file, max_threads=6):
         os.mkdir(target_dir)
 
     dwn_first, dwn_ct = True, 0
-    for obj in tqdm(FH.objects, desc='Download {model}', total=len(FH.objects)):
+    for obj in tqdm(FH.objects, desc=f'Download {model}', total=len(FH.objects)):
         try:
             remote_file = '/'.join(obj.SOURCES['aws'].split('/')[-2:])
             splt = obj.grib.split('/')
@@ -200,7 +200,8 @@ def to_xarray(h_object, model_):
 
     Hxr = cfgrib.open_datasets(h_object.SOURCES['local'], backend_kwargs=backend_kwargs)
 
-    with open('rtma_cf_params.json', 'r') as f:
+    cf = os.path.join(os.path.dirname(__file__), 'rtma_cf_params.json')
+    with open(cf, 'r') as f:
         cf_params = json.load(f)
 
     for ds in Hxr:
