@@ -240,8 +240,8 @@ if __name__ == '__main__':
         rtma = os.path.join('/data', 'ssd1', f'{model}')
 
     if not os.path.isdir(rtma):
-        d = os.path.join(home, 'data', 'IrrigationGIS')
-        rtma = os.path.join(home, 'data', f'{model}')
+        d = os.path.join('/data', 'IrrigationGIS')
+        rtma = os.path.join('/data', f'{model}')
 
     sites = os.path.join(d, 'dads', 'met', 'stations', 'madis_29OCT2024.csv')
 
