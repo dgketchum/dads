@@ -200,7 +200,8 @@ def to_xarray(h_object, model_):
 
     Hxr = cfgrib.open_datasets(h_object.SOURCES['local'], backend_kwargs=backend_kwargs)
 
-    with open('rtma_cf_params.json', 'r') as f:
+    cf = os.path.join(os.path.dirname(__file__), 'rtma_cf_params.json')
+    with open(cf, 'r') as f:
         cf_params = json.load(f)
 
     for ds in Hxr:
