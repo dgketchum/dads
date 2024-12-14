@@ -146,7 +146,7 @@ def get_grb_files(date_str, model, dst, nc_file, max_threads=6):
         os.mkdir(target_dir)
 
     dwn_first, dwn_ct = True, 0
-    for obj in tqdm(FH.objects, desc='Download {model}', total=len(FH.objects)):
+    for obj in tqdm(FH.objects, desc=f'Download {model}', total=len(FH.objects)):
         try:
             remote_file = '/'.join(obj.SOURCES['aws'].split('/')[-2:])
             splt = obj.grib.split('/')
