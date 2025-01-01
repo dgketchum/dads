@@ -2,8 +2,8 @@ from refet import Daily
 
 
 def calc_asce_params(r, zw, lat, elev):
-    asce = Daily(tmin=r['min_temp'],
-                 tmax=r['max_temp'],
+    asce = Daily(tmin=r['tmin'],
+                 tmax=r['tmax'],
                  rs=r['rsds'],
                  ea=r['ea'],
                  uz=r['wind'],
