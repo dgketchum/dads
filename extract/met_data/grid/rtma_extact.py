@@ -256,7 +256,7 @@ if __name__ == '__main__':
     out_netcdf_ = os.path.join(rtma, 'netcdf')
     out_grib_ = os.path.join(rtma, 'grib')
 
-    bounds_ = (-124.0, 19.2, -66.0, 53.0)
+    bounds_ = (-134.0, 22.0, -61.0, 55.0)
     quadrants = get_quadrants(bounds_)
 
     for e, quad in enumerate(quadrants, start=1):
