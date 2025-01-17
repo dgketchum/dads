@@ -39,8 +39,8 @@ def extract_met_data(stations, gridded_dir, overwrite=False, station_type='opene
 
     for i, (fid, row) in enumerate(station_list.iterrows(), start=1):
 
-        if fid != 'COVM':
-            continue
+        # if fid != 'COVM':
+        #     continue
 
         lon, lat, elv = row[kw['lon']], row[kw['lat']], row[kw['elev']]
         if np.isnan(elv):
@@ -99,7 +99,7 @@ def extract_met_data(stations, gridded_dir, overwrite=False, station_type='opene
 
             in_file_ = os.path.join(gridded_dir, 'raw_parquet', 'daymet', '{}.parquet.gzip'.format(fid))
             if not os.path.exists(in_file_):
-                print('Input PRISM at {} does not exist, skipping'.format(os.path.basename(in_file_)))
+                print('Input DAYMET at {} does not exist, skipping'.format(os.path.basename(in_file_)))
                 continue
 
             out_file_gm = os.path.join(gridded_dir, 'processed_parquet', 'daymet', '{}.parquet'.format(fid))
@@ -263,8 +263,8 @@ if __name__ == '__main__':
         d = os.path.join(home, 'data', 'IrrigationGIS')
 
     overwrite = True
-    processing_targets = {'nldas2': True, 'gridmet': True,
-                          'prism': True, 'daymet': True}
+    processing_targets = {'nldas2': False, 'gridmet': False,
+                          'prism': False, 'daymet': True}
 
     pandarallel.initialize(nb_workers=4)
 
