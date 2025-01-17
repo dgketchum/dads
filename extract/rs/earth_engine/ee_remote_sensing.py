@@ -14,7 +14,7 @@ sys.setrecursionlimit(2000)
 BOUNDARIES = 'users/dgketchum/boundaries'
 
 
-def request_band_extract(file_prefix, points_layer, region, years, buffer, tiles, check_dir=None, export_tif=False):
+def request_band_extract(file_prefix, points_layer, years, buffer, tiles, check_dir=None, export_tif=False):
     """
 
     """
@@ -30,14 +30,16 @@ def request_band_extract(file_prefix, points_layer, region, years, buffer, tiles
 
         tasks = [os.path.join(check_dir, '{}.csv'.format(t)) for t in tasks]
 
-    roi = ee.FeatureCollection(region)
+    mgrs = ee.FeatureCollection('users/dgketchum/boundaries/MGRS_TILE')
     points = ee.FeatureCollection(points_layer)
     points = points.map(lambda x: x.buffer(buffer))
 
     failed = {}
-    mgrs = ee.FeatureCollection('users/dgketchum/boundaries/MGRS_TILE')
 
     for tile in tiles:
+
+        # if tile != '15SVS':
+        #     continue
 
         clip = mgrs.filterMetadata('MGRS_TILE', 'equals', tile)
 
@@ -56,7 +58,7 @@ def request_band_extract(file_prefix, points_layer, region, years, buffer, tiles
                     pass
 
             if export_tif:
-                stack = stack_bands(yr, roi, scale=True)
+                stack = stack_bands(yr, mgrs, scale=True)
                 stack = stack.clip(clip.first().geometry().buffer(250))
                 task = ee.batch.Export.image.toCloudStorage(
                     image=stack,
@@ -76,7 +78,7 @@ def request_band_extract(file_prefix, points_layer, region, years, buffer, tiles
                     task.start()
                     print(desc)
             else:
-                stack = stack_bands(yr, roi, scale=False)
+                stack = stack_bands(yr, mgrs, scale=False)
                 stack = stack.clip(clip.first().geometry().buffer(1000))
                 tile_pts = points.filterMetadata('MGRS_TILE', 'equals', tile)
 
@@ -203,32 +205,39 @@ if __name__ == '__main__':
         d = '/home/dgketchum/data/IrrigationGIS'
 
     _bucket = 'gs://wudr'
+    station_set = 'madis'
 
-    # sites = os.path.join(d, 'dads', 'met', 'stations', 'dads_stations_res_elev_mgrs.csv')
-    sites = os.path.join(d, 'climate', 'ghcn', 'stations', 'ghcn_CANUSA_stations_mgrs.csv')
-    # sites = os.path.join(d, 'dads', 'met', 'stations', 'madis_mgrs_28OCT2024.csv')
-    # sites = os.path.join(d, 'dads', 'dem', 'w17_tiles.csv')
+    if station_set == 'madis':
+        stations = 'madis_mgrs_28OCT2024'
+        sites = os.path.join(d, 'dads', 'met', 'stations', 'madis_mgrs_28OCT2024.csv')
+        chk = os.path.join(d, 'dads', 'rs', 'madis_28OCT2024')
+
+    elif station_set == 'ghcn':
+        stations = 'ghcn_CANUSA_stations_mgrs'
+        sites = os.path.join(d, 'climate', 'ghcn', 'stations', 'ghcn_CANUSA_stations_mgrs.csv')
+        chk = os.path.join(d, 'dads', 'rs', 'ghcn_stations', 'landsat', 'tiles')
+
+    else:
+        raise NotImplementedError
 
     tiles = pd.read_csv(sites)['MGRS_TILE'].unique().tolist()
     tiles = [m for m in tiles if isinstance(m, str)]
     mgrs_tiles = list(set(tiles))
     mgrs_tiles.sort()
 
-    # stations = 'madis_mgrs_28OCT2024'
-    stations = 'ghcn_CANUSA_stations_mgrs'
     pts = 'projects/ee-dgketchum/assets/dads/{}'.format(stations)
 
     geo = 'users/dgketchum/boundaries/western_states_expanded_union'
-    years_ = list(range(2023, 2024))
+    years_ = list(range(2000, 2023))
     years_.reverse()
 
     failed = []
-    # chk = os.path.join(d, 'dads', 'rs', 'madis_28OCT2024')
-    chk = os.path.join(d, 'dads', 'rs', 'ghcn_stations', 'landsat', 'tiles')
 
     for buffer_ in [500]:
         file_ = '{}_{}'.format(stations, buffer_)
-        request_band_extract(file_, pts, region=geo, years=years_, buffer=buffer_, check_dir=chk, tiles=mgrs_tiles,
+        request_band_extract(file_, pts, years=[2023], buffer=buffer_, tiles=mgrs_tiles, check_dir=chk,
+                             export_tif=False)
+        request_band_extract(file_, pts, years=years_, buffer=buffer_, tiles=mgrs_tiles, check_dir=chk,
                              export_tif=False)
 
     # chk = os.path.join(d, 'dads', 'rs', 'dads_stations', 'modis')
