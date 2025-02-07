@@ -8,13 +8,13 @@ import pytz
 import seaborn as sns
 from timezonefinder import TimezoneFinder
 
-from utils.calc_eto import calc_asce_params
+from utils.calc_eto import calc_asce_params, calc_asce_params_longname
 from utils.station_parameters import station_par_map
 from utils.qaqc_calc import calc_rso
 
 
 def read_hourly_data(stations, madis_src, madis_dst, rsun_tables, shuffle=False, bounds=None, overwrite=False,
-                     qaqc=False, plot=None, stype='madis'):
+                     qaqc=False, plot=None, alt_src=None, stype='madis'):
 
     kw = station_par_map(stype)
 
@@ -52,8 +52,11 @@ def read_hourly_data(stations, madis_src, madis_dst, rsun_tables, shuffle=False,
 
         station_dir = os.path.join(madis_src, fid)
         if not os.path.isdir(station_dir):
-            print('station dir does not exist')
-            continue
+            if alt_src:
+                station_dir = os.path.join(alt_src, fid)
+            if not os.path.isdir(station_dir):
+                # print(f'{fid} station dir does not exist')
+                continue
 
         files_ = [os.path.join(station_dir, f) for f in os.listdir(station_dir)]
         years = [int(f.split('.')[0].split('_')[-1]) for f in files_ if '(copy)' not in f]
@@ -78,7 +81,13 @@ def read_hourly_data(stations, madis_src, madis_dst, rsun_tables, shuffle=False,
 
         df, first, local_tz = None, True, None
         for file_, yr in zip(files_, years):
-            c = pd.read_csv(file_, index_col=0, parse_dates=True)
+
+            try:
+                c = pd.read_csv(file_, index_col=0, parse_dates=True)
+            except pd.errors.EmptyDataError:
+                print(f'{os.path.basename(file_)} is empty')
+                continue
+
             c = c.sort_index()
             c['doy'] = c.index.dayofyear
 
@@ -118,7 +127,7 @@ def read_hourly_data(stations, madis_src, madis_dst, rsun_tables, shuffle=False,
                 df = pd.concat([df, c], ignore_index=False, axis=0)
 
         if df is None:
-            print('{}, 0 records\n'.format(fid))
+            # print('{}, 0 records\n'.format(fid))
             continue
 
         df.to_csv(out_file)
@@ -189,7 +198,7 @@ def process_daily_data(hourly_df, rsun_data, lat_, elev_, zw_=2.0, qaqc=False):
     daily_df.drop(columns=['obs_ct'], inplace=True)
     daily_df.index = pd.DatetimeIndex(daily_df.index)
 
-    if daily_df.empty:
+    if daily_df.empty or daily_df.shape[0] < 20:
         return None
 
     if qaqc:
@@ -211,12 +220,16 @@ def process_daily_data(hourly_df, rsun_data, lat_, elev_, zw_=2.0, qaqc=False):
         # print('Removed {} rs records'.format(post_clean_nan_ct - pre_clean_nan_ct))
 
     # asce_params = daily_df.parallel_apply(calc_asce_params, lat=lat_, elev=elev_, zw=10, axis=1)
-    asce_params = daily_df.apply(calc_asce_params, lat=lat_, elev=elev_, zw=zw_, axis=1)
+
+    try:
+        asce_params = daily_df.apply(calc_asce_params, lat=lat_, elev=elev_, zw=zw_, axis=1)
+    except KeyError:
+        asce_params = daily_df.apply(calc_asce_params_longname, lat=lat_, elev=elev_, zw=zw_, axis=1)
 
     try:
         daily_df[['mean_temp', 'vpd', 'rn', 'u2', 'eto']] = pd.DataFrame(asce_params.tolist(),
                                                                          index=daily_df.index)
-    except ValueError as e:
+    except (ValueError, KeyError) as e:
         print(e)
         return None
 
@@ -300,13 +313,18 @@ if __name__ == '__main__':
 
     # pandarallel.initialize(nb_workers=6)
 
-    sites = os.path.join('/data/ssd1/madis', 'madis_shapefile_29OCT2024.csv')
+    sites = os.path.join(d, 'dads', 'met', 'stations', 'madis_mgrs_28OCT2024.csv')
+
+    madis_hourly_public = os.path.join(d, 'climate', 'madis', 'LDAD_public', 'mesonet', 'csv')
     madis_hourly_research = os.path.join(d, 'climate', 'madis', 'LDAD', 'mesonet', 'inclusive_csv')
-    madis_daily_ = os.path.join('/data/ssd1/madis', 'madis_daily')
+
+    # madis_daily_ = os.path.join('/data/ssd1/madis', 'madis_daily')
+    madis_daily_ = os.path.join(d, 'dads', 'met', 'obs', 'madis_daily_add')
 
     solrad = os.path.join(d, 'dads', 'dem', 'rsun_tables', 'station_rsun')
 
-    read_hourly_data(sites, madis_hourly_research, madis_daily_, solrad, shuffle=True, stype='madis',
-                     bounds=(-125., 25., -66., 49.), overwrite=False, qaqc=True, plot=None)
+    read_hourly_data(sites, madis_hourly_public, madis_daily_, solrad, shuffle=False, stype='madis',
+                     bounds=(-125., 25., -66., 49.), overwrite=False, qaqc=True, plot=None,
+                     alt_src=madis_hourly_research)
 
 # ========================= EOF ====================================================================
