@@ -22,7 +22,7 @@ def process_landsat(stations, rs_dir, out_dir, glob=None, shuffle=False, overwri
 
     for i, tile in enumerate(tiles, start=1):
 
-        # if tile != '10UFU':
+        # if tile != '20TQS':
         #     continue
 
         test_file = os.path.join(rs_dir, f'{glob}_500_2023_{tile}.csv')
@@ -168,13 +168,13 @@ if __name__ == '__main__':
     # fields = os.path.join(d, 'met', 'stations', 'ghcn_CANUSA_stations_mgrs.csv')
     # rs = os.path.join(d, 'rs', 'ghcn_stations', 'landsat', 'tiles')
 
-    # glob_ = 'madis_28OCT2024'
-    # fields = os.path.join(d, 'met', 'stations', 'madis_mgrs_28OCT2024.csv')
-    # rs = os.path.join(d, 'rs', 'madis_28OCT2024')
-
-    glob_ = 'missing_madis'
+    glob_ = 'madis_mgrs_28OCT2024'
     fields = os.path.join(d, 'met', 'stations', 'madis_mgrs_28OCT2024.csv')
-    rs = os.path.join(d, 'rs', 'madis_missing', 'landsat', 'tiles')
+    rs = os.path.join(d, 'rs', 'madis_28OCT2024')
+
+    # glob_ = 'missing_madis'
+    # fields = os.path.join(d, 'met', 'stations', 'madis_mgrs_28OCT2024.csv')
+    # rs = os.path.join(d, 'rs', 'madis_missing', 'landsat', 'tiles')
 
     process_landsat(fields, rs, out, glob=glob_, shuffle=True, overwrite=False, extrapolate=True, index_col='fid')
 

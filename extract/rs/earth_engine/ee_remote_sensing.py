@@ -14,11 +14,12 @@ sys.setrecursionlimit(2000)
 BOUNDARIES = 'users/dgketchum/boundaries'
 
 
-def request_band_extract(file_prefix, points_layer, years, buffer, tiles, check_dir=None, export_tif=False):
+def request_band_extract(file_prefix, points_layer, years, buffer, tiles, check_dir=None, export_tif=False,
+                         dry_run=False):
     """
 
     """
-    tasks = None
+    tasks, outfile = None, None
 
     # if there are tasks in process:
     # earthengine task list | grep -E '(READY|COMPLETED)' | awk '{print $3}' > processing.txt
@@ -34,7 +35,7 @@ def request_band_extract(file_prefix, points_layer, years, buffer, tiles, check_
     points = ee.FeatureCollection(points_layer)
     points = points.map(lambda x: x.buffer(buffer))
 
-    failed = {}
+    failed, to_export = {}, []
 
     for tile in tiles:
 
@@ -77,6 +78,14 @@ def request_band_extract(file_prefix, points_layer, years, buffer, tiles, check_
                     time.sleep(600)
                     task.start()
                     print(desc)
+
+            elif dry_run:
+                if outfile:
+                    to_export.append(outfile)
+                else:
+                    desc = '{}_{}_{}'.format(file_prefix, yr, tile)
+                    to_export.append(desc)
+
             else:
                 stack = stack_bands(yr, mgrs, scale=False)
                 stack = stack.clip(clip.first().geometry().buffer(1000))
@@ -109,6 +118,9 @@ def request_band_extract(file_prefix, points_layer, years, buffer, tiles, check_
                         failed[tile] = [str(yr)]
                     else:
                         failed[tile].append(str(yr))
+
+    if dry_run:
+        print(f'{len(to_export)} exports to be run')
 
 
 def stack_bands(yr, roi, scale=False):
@@ -235,10 +247,8 @@ if __name__ == '__main__':
 
     for buffer_ in [500]:
         file_ = '{}_{}'.format(stations, buffer_)
-        request_band_extract(file_, pts, years=[2023], buffer=buffer_, tiles=mgrs_tiles, check_dir=chk,
-                             export_tif=False)
         request_band_extract(file_, pts, years=years_, buffer=buffer_, tiles=mgrs_tiles, check_dir=chk,
-                             export_tif=False)
+                             export_tif=False, dry_run=False)
 
     # chk = os.path.join(d, 'dads', 'rs', 'dads_stations', 'modis')
     # extract_modis(stations, pts, years=years_, check_dir=chk)
