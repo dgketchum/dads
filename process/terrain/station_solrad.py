@@ -27,7 +27,7 @@ def process_tile(tile, tile_dir, station_out, overwrite=False):
     print(tile)
 
 
-def write_station_solrad(stations, tile_dir, station_out, num_workers=2, shuffle=False, overwrite=False):
+def write_station_solrad(stations, tile_dir, station_out, num_workers=2, shuffle=False, overwrite=False, debug=False):
 
     stations = pd.read_csv(stations)
     stations.sort_index(inplace=True)
@@ -36,6 +36,10 @@ def write_station_solrad(stations, tile_dir, station_out, num_workers=2, shuffle
         stations = stations.sample(frac=1)
 
     tiles = stations['MGRS_TILE'].unique().tolist()
+
+    if debug:
+        for tile in tiles:
+            process_tile(tile, tile_dir, station_out, overwrite)
 
     with ProcessPoolExecutor(max_workers=num_workers) as executor:
         executor.map(process_tile, tiles, [tile_dir] * len(tiles),
@@ -52,16 +56,16 @@ if __name__ == '__main__':
     out = os.path.join(d, 'dem', 'terrain', 'station_data')
 
     # shapefile_path_ = os.path.join(d, 'dads', 'met', 'stations', 'dads_stations_res_elev_mgrs.csv')
-    shapefile_path_ = os.path.join(d, 'climate', 'ghcn', 'stations', 'ghcn_CANUSA_stations_mgrs.csv')
-    # shapefile_path_ = os.path.join(d,'dads',  'met', 'stations', 'madis_mgrs_28OCT2024.csv')
+    # shapefile_path_ = os.path.join(d, 'climate', 'ghcn', 'stations', 'ghcn_CANUSA_stations_mgrs.csv')
+    shapefile_path_ = os.path.join(d,'dads',  'met', 'stations', 'madis_mgrs_28OCT2024.csv')
 
     # solrad_tiled = os.path.join(d, 'dads', 'dem', 'rsun_tables', 'madis')
-    solrad_tiled = os.path.join(d, 'dads', 'dem', 'rsun_tables', 'ghcn')
-    # solrad_tiled = os.path.join(d, 'dads', 'dem', 'rsun_tables', 'madis_27OCT2024')
+    # solrad_tiled = os.path.join(d, 'dads', 'dem', 'rsun_tables', 'ghcn')
+    solrad_tiled = os.path.join(d, 'dads', 'dem', 'rsun_tables', 'madis_27OCT2024')
 
-    solrad_out = os.path.join(d, 'dem', 'rsun_tables', 'station_rsun')
+    solrad_out = os.path.join(d, 'dads', 'dem', 'rsun_tables', 'station_rsun')
 
     write_station_solrad(shapefile_path_, solrad_tiled, solrad_out, num_workers=1,
-                         shuffle=True, overwrite=False)
+                         shuffle=True, overwrite=False, debug=False)
 
 # ========================= EOF ====================================================================
