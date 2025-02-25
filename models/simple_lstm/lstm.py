@@ -51,6 +51,7 @@ class LSTMPredictor(pl.LightningModule):
         self.scaler = scaler
 
     def forward(self, x):
+        x = x.float()
         x = x.squeeze()
         x = self.input_expansion(x)
         out, _ = self.lstm(x)
@@ -79,11 +80,11 @@ class LSTMPredictor(pl.LightningModule):
             train_loss = self.trainer.callback_metrics['train_loss'].item()
             val_loss = self.trainer.callback_metrics['val_loss'].item()
             r2_lstm = self.trainer.callback_metrics['r2_lstm'].item()
-            r2_gm = self.trainer.callback_metrics['r2_gm'].item()
-            r2_nl = self.trainer.callback_metrics['r2_nl'].item()
+            r2_comp = self.trainer.callback_metrics['r2_comp'].item()
+            # r2_nl = self.trainer.callback_metrics['r2_nl'].item()
             rmse_lstm = self.trainer.callback_metrics['rmse_lstm'].item()
-            rmse_gm = self.trainer.callback_metrics['rmse_gm'].item()
-            rmse_nl = self.trainer.callback_metrics['rmse_nl'].item()
+            rmse_comp = self.trainer.callback_metrics['rmse_comp'].item()
+            # rmse_nl = self.trainer.callback_metrics['rmse_nl'].item()
             current_lr = self.trainer.optimizers[0].param_groups[0]['lr']
             lr_ratio = current_lr / self.learning_rate
 
@@ -91,11 +92,11 @@ class LSTMPredictor(pl.LightningModule):
                         round(train_loss, 4),
                         round(val_loss, 4),
                         round(r2_lstm, 4),
-                        round(r2_gm, 4),
-                        round(r2_nl, 4),
+                        round(r2_comp, 4),
+                        # round(r2_nl, 4),
                         round(rmse_lstm, 4),
-                        round(rmse_gm, 4),
-                        round(rmse_nl, 4),
+                        round(rmse_comp, 4),
+                        # round(rmse_nl, 4),
                         round(current_lr, 4),
                         round(lr_ratio, 4)]
 
@@ -109,15 +110,15 @@ class LSTMPredictor(pl.LightningModule):
                     header = next(reader)
                     f.seek(0)
                     writer = csv.writer(f)
-                    writer.writerow(['epoch', 'train_loss', 'val_loss', 'r2_lstm', 'r2_gm', 'r2_nl', 'rmse_lstm',
-                                     'rmse_gm', 'rmse_nl', 'lr', 'lr_ratio'])
+                    writer.writerow(['epoch', 'train_loss', 'val_loss', 'r2_lstm', 'r2_comp', 'rmse_lstm',
+                                     'rmse_comp', 'lr', 'lr_ratio'])
                     writer.writerow(header)
 
     def validation_step(self, batch, batch_idx):
-        y_obs, y_gm, lf = batch
+        y_obs, y_comp, lf = batch
         y_hat = self(lf)
         y_obs = y_obs[:, -1]
-        y_gm = y_gm[:, -1]
+        y_comp = y_comp[:, -1]
         y_nl = lf[:, -1, 0]
 
         loss_obs = self.criterion(y_hat, y_obs)
@@ -125,29 +126,29 @@ class LSTMPredictor(pl.LightningModule):
 
         y_obs = self.inverse_transform(y_obs, idx=0)
         y_hat = self.inverse_transform(y_hat, idx=0)
-        y_gm = self.inverse_transform(y_gm, idx=1)
-        y_nl = self.inverse_transform(y_nl, idx=2)
+        y_comp = self.inverse_transform(y_comp, idx=1)
+        # y_nl = self.inverse_transform(y_nl, idx=2)
 
         y_hat = y_hat.detach().cpu().numpy()
         y_obs = y_obs.detach().cpu().numpy()
-        y_gm = y_gm.detach().cpu().numpy()
+        y_comp = y_comp.detach().cpu().numpy()
         y_nl = y_nl.detach().cpu().numpy()
 
         rmse_obs = root_mean_squared_error(y_obs, y_hat)
-        rmse_gm = root_mean_squared_error(y_obs, y_gm)
-        rmse_nl = root_mean_squared_error(y_obs, y_nl)
+        rmse_comp = root_mean_squared_error(y_obs, y_comp)
+        # rmse_nl = root_mean_squared_error(y_obs, y_nl)
 
         r2_obs = r2_score(y_obs, y_hat)
-        r2_gm = r2_score(y_obs, y_gm)
-        r2_nl = r2_score(y_obs, y_nl)
+        r2_comp = r2_score(y_obs, y_comp)
+        # r2_nl = r2_score(y_obs, y_nl)
 
         self.log('r2_lstm', r2_obs, on_step=False, on_epoch=True, prog_bar=False, sync_dist=True)
-        self.log('r2_gm', r2_gm, on_step=False, on_epoch=True, prog_bar=False, sync_dist=True)
-        self.log('r2_nl', r2_nl, on_step=False, on_epoch=True, prog_bar=False, sync_dist=True)
+        self.log('r2_comp', r2_comp, on_step=False, on_epoch=True, prog_bar=False, sync_dist=True)
+        # self.log('r2_nl', r2_nl, on_step=False, on_epoch=True, prog_bar=False, sync_dist=True)
 
         self.log('rmse_lstm', rmse_obs, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
-        self.log('rmse_gm', rmse_gm, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
-        self.log('rmse_nl', rmse_nl, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
+        self.log('rmse_comp', rmse_comp, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
+        # self.log('rmse_nl', rmse_nl, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
 
         current_lr = self.trainer.optimizers[0].param_groups[0]['lr']
         self.log('lr', current_lr, on_step=False, on_epoch=True, prog_bar=True)
