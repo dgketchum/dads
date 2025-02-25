@@ -19,7 +19,7 @@ def join_stations(snotel, mesonet, agrimet, out_file, fill_elevation=False, boun
     snotel_data['orig_netid'] = snotel_data['ID'].apply(lambda x: x.strip())
 
     mesonet_data = pd.read_csv(mesonet)
-    mesonet_data['source'] = 'madis'
+    mesonet_data['source'] = 'madis/' + mesonet_data['stype']
 
     agrimet_data = pd.read_csv(agrimet)
     agrimet_data['source'] = agrimet_data['Source'] + '_gwx'
@@ -36,11 +36,16 @@ def join_stations(snotel, mesonet, agrimet, out_file, fill_elevation=False, boun
     agrimet_data['name'] = agrimet_data['name'].astype(str)
     agrimet_data['name'] = [s.upper() for s in agrimet_data['name']]
 
-    mesonet_data = mesonet_data.rename(columns={'index': 'fid', 'NAME': 'name', 'ELEV': 'elevation'})
+    mesonet_data = mesonet_data.rename(columns={'index': 'fid', 'NAME': 'name', 'elev': 'elevation'})
     mesonet_data['orig_netid'] = mesonet_data['fid'].astype(str).copy()
     mesonet_data['fid'] = mesonet_data['fid'].astype(str)
     mesonet_data['fid'] = [s.upper() for s in mesonet_data['fid']]
-    mesonet_data['name'] = mesonet_data['name'].astype(str)
+
+    try:
+        mesonet_data['name'] = mesonet_data['name'].astype(str)
+    except KeyError:
+        mesonet_data['name'] = mesonet_data['fid']
+
     mesonet_data['name'] = [s.upper() for s in mesonet_data['name']]
 
     snotel_data = snotel_data.rename(columns={'ID': 'fid', 'Elevation_ft': 'elevation',
@@ -132,10 +137,10 @@ if __name__ == '__main__':
         d = '/home/dgketchum/data/IrrigationGIS'
 
     sno_list = os.path.join(d, 'climate', 'snotel', 'snotel_list.csv')
-    meso_list = os.path.join(d, 'climate', 'madis', 'mesonet_sites.csv')
+    meso_list = os.path.join(d, 'dads', 'met', 'stations', 'madis_mgrs_28OCT2024.csv')
     agrim_list = os.path.join(d, 'dads', 'met', 'stations', 'openet_gridwxcomp_input.csv')
 
-    stations = os.path.join(d, 'dads', 'met', 'stations', 'dads_stations_origid.shp')
+    stations = os.path.join(d, 'dads', 'met', 'stations', 'dads_stations_10FEB2025.shp')
     join_stations(sno_list, meso_list, agrim_list, stations, bounds=None, fill_elevation=False)
 
 # ========================= EOF ====================================================================
