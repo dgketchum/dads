@@ -1,13 +1,13 @@
-import os
 import json
-import resource
+import os
 import random
+from collections import defaultdict
 from datetime import datetime
 
-import torch
-import pandas as pd
 import numpy as np
 import pytorch_lightning as pl
+import resource
+import torch
 from pytorch_lightning.callbacks import ModelCheckpoint, EarlyStopping
 from torch.utils.data import DataLoader, Dataset
 from torch.utils.data._utils.collate import default_collate
@@ -32,64 +32,79 @@ from prep.simple_lstm.build_training_sequences import MET_FEATURES, GEO_FEATURES
 
 
 class PTHLSTMDataset(Dataset):
-    def __init__(self, file_paths, station_names, col_ind, chunk_size, stats, strided=False,
-                 transform=None, return_station_name=False,
-                 scaler_json=None):
+    def __init__(self, file_paths, station_names, col_names, col_ind, chunk_size, strided=False, transform=None,
+                 return_station_name=False, scaler_sample_n=10000):
+
         self.file_paths = file_paths
         self.chunk_size = chunk_size
         self.transform = transform
+        self.col_names = col_names
         self.col_indices = col_ind
         self.return_station_name = return_station_name
         self.strided = strided
         self.data_info = file_paths
         self.station_names = station_names
-        self.scaler_json = scaler_json
+        self.scaler_sample_n = scaler_sample_n
+        self.sample_stats = None
 
-        if scaler_json:
-            with open(scaler_json, 'r') as f:
-                dct = json.load(f)
-            self.scaler = MinMaxScaler()
-            self.scaler.bias_ = np.array(dct['bias']).reshape(1, -1)
-            self.scaler.scale_ = np.array(dct['scale']).reshape(1, -1)
-        else:
-            self.scaler = None
-            self._fit_scaler(stats)
+        self._fit_scaler()
 
-    def _fit_scaler(self, stats_json):
-        with open(stats_json, 'r') as f:
-            stats_dict = json.load(f)
+    def _fit_scaler(self):
+        sample_data = []
+        nan_ct = 0
+        for file_path in self.file_paths:
+            try:
+                data = torch.load(file_path, weights_only=True)
+                data = data[:, self.col_indices]
+                if torch.any(torch.isnan(data)):
+                    nan_ct += 1
+                    continue
+                sample_data.append(data)
+                if len(sample_data) > self.scaler_sample_n:
+                    break
 
-        # Initialize a dictionary to store min/max values for each variable
-        variable_stats = {}
-        for station, stats in stats_dict.items():
-            for col, values in stats.items():
-                if col not in variable_stats:
-                    variable_stats[col] = {'min': values['min'], 'max': values['max']}
-                else:
-                    variable_stats[col]['min'] = min(variable_stats[col]['min'], values['min'])
-                    variable_stats[col]['max'] = max(variable_stats[col]['max'], values['max'])
+            except (FileNotFoundError, RuntimeError) as e:
+                print(f"Error reading file {file_path}: {e}")
+                continue
+        print(f'{nan_ct} training samples had nan')
+        if sample_data:
+            sample_data = torch.cat(sample_data, dim=0)
+            if len(sample_data) > 0:
+                variable_stats = {}
+                for i, (col, col_str) in enumerate(zip(self.col_indices, self.col_names)):
+                    variable_stats[col] = {'column': col_str,
+                                           'min': sample_data[:, i].min().item(),
+                                           'max': sample_data[:, i].max().item()}
 
-        all_data = []
-        for col, values in variable_stats.items():
-            all_data.append([values['min'], values['max']])
-
-        all_data = np.array(all_data)
-        self.scaler = MinMaxScaler()
-        self.scaler.fit(all_data)
+                self.sample_stats = variable_stats
+                all_data = np.array(sample_data)
+                self.scaler = MinMaxScaler(axis=0)
+                self.scaler.fit(all_data)
+            else:
+                print("Not enough data to estimate scaler parameters. Using default scaler.")
+                self.scaler = MinMaxScaler()
 
     def __len__(self):
         return len(self.data_info)
 
     def __getitem__(self, idx):
-        file_path = self.data_info[idx]
-        chunk = torch.load(file_path, weights_only=True)
+
+        while True:
+            file_path = self.file_paths[idx]
+            chunk = torch.load(file_path, weights_only=True)
+            chunk = chunk[:, self.col_indices]
+
+            if not torch.any(torch.isnan(chunk)):
+                break
+
+            idx = random.randint(0, len(self.file_paths) - 1)
 
         if self.scaler:
             chunk = torch.tensor(self.scaler.transform(chunk.numpy()), dtype=torch.float32)
 
-        y = chunk[:, self.col_indices[0]]
-        gm = chunk[:, self.col_indices[1]]
-        lf = chunk[:, self.col_indices[2:]]
+        y = chunk[:, 0]
+        gm = chunk[:, 1]
+        lf = chunk[:, 2:]
 
         if self.return_station_name:
             station_name = self.station_names[idx]
@@ -116,8 +131,8 @@ def custom_collate(batch):
     return default_collate(batch)
 
 
-def train_model(dirpath, sequence_data, metadata, target_var, columns, batch_size=1, learning_rate=0.01, n_workers=1,
-                chunk_size=16, strided=False, logging_csv=None):
+def train_model(dirpath, sequence_data, target_var, columns, batch_size=1, learning_rate=0.01, n_workers=1,
+                chunk_size=16, strided=False, logging_csv=None, scaler_sample_n=10000):
     """"""
 
     target, comparison = f'{target_var}_obs', f'{target_var}_dm'
@@ -130,28 +145,36 @@ def train_model(dirpath, sequence_data, metadata, target_var, columns, batch_siz
 
     idx = target_idx + comp_idx + met_idx + geo_idx + add_idx
 
-    stations = list(set([f.split('_')[0] for f in os.listdir(sequence_data)]))
+    # limit = 1000
+    file_map = defaultdict(list)
+    for filename in os.listdir(sequence_data):
+        station = filename.split('_')[0]
+        file_map[station].append(os.path.join(sequence_data, filename))
+        # if len(file_map) > limit:
+        #     break
+
+    stations = list(file_map.keys())
     random.seed(1234)
     random.shuffle(stations)
+
     t_stations = stations[:int(len(stations) * 0.7)]
     v_stations = stations[int(len(stations) * 0.7):]
 
-    t_files = [os.path.join(sequence_data, f) for f in os.listdir(sequence_data) if f.split('_')[0] in t_stations]
-    v_files = [os.path.join(sequence_data, f) for f in os.listdir(sequence_data) if f.split('_')[0] in v_stations]
+    t_files = [f for station in t_stations for f in file_map[station]]
+    v_files = [f for station in v_stations for f in file_map[station]]
 
-    train_dataset = PTHLSTMDataset(file_paths=t_files,
-                                   station_names=t_stations,
-                                   col_ind=idx,
-                                   chunk_size=chunk_size,
-                                   strided=strided,
-                                   stats=metadata)
+    selected_columns = list(np.array(columns)[idx])
+
+    train_dataset = PTHLSTMDataset(file_paths=t_files, station_names=t_stations, col_names=selected_columns,
+                                   col_ind=idx, chunk_size=chunk_size, strided=strided, scaler_sample_n=scaler_sample_n)
 
     if strided:
         print(f'\nTrain dataset: {len(train_dataset)} {chunk_size} x {len(columns)} strided samples')
     else:
         print(f'\nTrain dataset: {len(train_dataset)} {chunk_size} x {len(columns)} non-overlapping samples')
 
-    print(f'Batch size: {batch_size}, Sequence Length: {chunk_size}, GPU: {device_name}')
+    print(f'Batch size: {batch_size}, Sequence Length: {chunk_size}, GPU: {device_name}, '
+          f'Scaler Sample: {scaler_sample_n}')
 
     train_dataset.save_scaler(os.path.join(dirpath, 'scaler.json'))
 
@@ -159,13 +182,10 @@ def train_model(dirpath, sequence_data, metadata, target_var, columns, batch_siz
                                   batch_size=batch_size,
                                   shuffle=True,
                                   num_workers=n_workers,
-                                  collate_fn=lambda batch: [x for x in batch if x is not None])
+                                  collate_fn=custom_collate)
 
-    val_dataset = PTHLSTMDataset(file_paths=v_files,
-                                 station_names=v_stations,
-                                 col_ind=idx,
-                                 chunk_size=chunk_size,
-                                 stats=metadata)
+    val_dataset = PTHLSTMDataset(file_paths=v_files, station_names=v_stations, col_names=selected_columns, col_ind=idx,
+                                 chunk_size=chunk_size, scaler_sample_n=scaler_sample_n)
 
     val_dataloader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=n_workers,
                                 collate_fn=custom_collate)
@@ -217,7 +237,7 @@ if __name__ == '__main__':
     else:
         raise NotImplementedError('Specify the machine this is running on')
 
-    zoran = '/data/ssd2/training/simple_lstm'
+    zoran = '/data/ssd2/dads/training/simple_lstm'
     nvm = '/media/nvm/training/simple_lstm'
     if os.path.exists(zoran):
         print('modeling with data from zoran')
@@ -238,11 +258,10 @@ if __name__ == '__main__':
     chk = os.path.join(training, 'checkpoints', now)
     os.mkdir(chk)
     logger_csv = os.path.join(chk, 'training_{}.csv'.format(now))
-    out_csv = os.path.join(training, 'pth')
 
     with open(os.path.join(training, 'pth_columns.json'), 'r') as fp:
         cols = json.load(fp)['columns']
 
-    train_model(chk, sequences, metadata_, target_var_, cols, batch_size=512, learning_rate=0.01, n_workers=workers,
-                logging_csv=logger_csv)
+    train_model(chk, sequences, target_var_, cols, batch_size=512, learning_rate=0.01, n_workers=workers,
+                logging_csv=logger_csv, scaler_sample_n=11000)
 # ========================= EOF ====================================================================

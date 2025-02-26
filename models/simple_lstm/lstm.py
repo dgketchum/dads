@@ -66,7 +66,8 @@ class LSTMPredictor(pl.LightningModule):
         return out
 
     def training_step(self, batch, batch_idx):
-        y_obs, gm, lf = stack_batch(batch)
+        # y_obs, gm, lf = stack_batch(batch)
+        y_obs, gm, lf = batch
         y_hat = self(lf)
         y_obs = y_obs[:, -1]
 
@@ -169,7 +170,7 @@ class LSTMPredictor(pl.LightningModule):
         }
 
     def inverse_transform(self, a, idx):
-        a = a * (self.scaler.scale[0, -1, idx] + 5e-8) + self.scaler.bias[0, -1, idx]
+        a = a * (self.scaler.scale[0, idx] + 5e-8) + self.scaler.bias[0, idx]
         return a
 
 
