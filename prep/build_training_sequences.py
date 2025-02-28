@@ -25,7 +25,10 @@ MET_FEATURES = [
     'lon_nl_hr',
 ]
 
-GEO_FEATURES = ['lat', 'lon', 'B10', 'B2', 'B3', 'B4', 'B5', 'B6', 'B7', 'doy', 'rsun']
+GEO_FEATURES = ['lat', 'lon',
+                'SR1', 'SR2', 'SR3', 'BT1', 'BT2', 'BT3',
+                'B10', 'B2', 'B3', 'B4', 'B5', 'B6', 'B7',
+                'rsun', 'doy']
 
 COMPARISON_FEATURES = ['mean_temp_dm', 'rsds_dm', 'vpd_dm']
 
@@ -41,7 +44,7 @@ ADDED_FEATURES = [
 PTH_COLUMNS = TARGETS + COMPARISON_FEATURES + MET_FEATURES + GEO_FEATURES + ADDED_FEATURES
 
 
-def process_station(fid, row, ts_dir, landsat_dir, dem_dir, out_dir, overwrite, chunk_size=72):
+def process_station(fid, row, ts_dir, landsat_dir, cdr_dir, dem_dir, out_dir, overwrite, chunk_size=72):
     """"""
     missing = {'sol_file': 0,
                'station_file': 0,
@@ -52,11 +55,6 @@ def process_station(fid, row, ts_dir, landsat_dir, dem_dir, out_dir, overwrite, 
                'cdr_file': 0,
                'exists': 0,
                'columns': 0}
-
-    outfile = os.path.join(out_dir, '{}.parquet'.format(fid))
-    if os.path.exists(outfile) and not overwrite:
-        missing['exists'] += 1
-        return fid, None, missing
 
     if row['source'] == 'snotel':
         missing['snotel'] += 1
@@ -88,6 +86,20 @@ def process_station(fid, row, ts_dir, landsat_dir, dem_dir, out_dir, overwrite, 
         missing['landsat_obs_time_misalign'] += 1
         return fid, None, missing
     ts.loc[idx, landsat.columns] = landsat.loc[idx, landsat.columns]
+
+    # ========= NOAA Climate Data Record ===========
+    # currently will find non-unique original FID file in case original FID is non-unique integer
+    cdr_file = os.path.join(cdr_dir, '{}.csv'.format(fid))
+    if not os.path.exists(cdr_file):
+        missing['cdr_file'] += 1
+        return fid, None, missing
+    cdr = pd.read_csv(cdr_file, index_col='Unnamed: 0', parse_dates=True)
+    cdr = cdr.resample('h').ffill()
+    idx = [i for i in cdr.index if i in ts.index]
+    if not idx:
+        missing['cdr_obs_time_misalign'] += 1
+        return fid, None, missing
+    ts.loc[idx, cdr.columns] = cdr.loc[idx, cdr.columns]
 
     # =========== Terrain-Adjusted Clear Sky Solar Radiation ================
     sol_file = os.path.join(dem_dir, f'{fid}.csv')
@@ -128,6 +140,17 @@ def process_station(fid, row, ts_dir, landsat_dir, dem_dir, out_dir, overwrite, 
         missing['columns'] += 1
         return fid, None, missing
 
+    out_parquet = os.path.join(out_dir, 'parquet', '{}.parquet'.format(fid))
+    if os.path.exists(out_parquet) and not overwrite:
+        missing['exists'] += 1
+        return fid, None, missing
+
+    if not os.path.exists(out_parquet) or overwrite:
+        daily_df = ts.resample('D').mean()
+        daily_df.dropna(how='all', subset=TARGETS, axis=0, inplace=True)
+        if not daily_df.empty:
+            daily_df.to_parquet(out_parquet)
+
     chunk_ct = 0
     num_chunks = len(ts) // chunk_size
     for i in range(num_chunks):
@@ -139,7 +162,7 @@ def process_station(fid, row, ts_dir, landsat_dir, dem_dir, out_dir, overwrite, 
         chunk.drop(columns=['time_diff'], inplace=True)
 
         if len(chunk) == chunk_size:
-            outfile = os.path.join(out_dir, f'{fid}_{i}.pth')
+            outfile = os.path.join(out_dir, 'pth', f'{fid}_{i}.pth')
             if os.path.exists(outfile) and not overwrite:
                 missing['exists'] += 1
             else:
@@ -167,8 +190,9 @@ def process_station(fid, row, ts_dir, landsat_dir, dem_dir, out_dir, overwrite, 
 def process_station_wrapper(args):
     return process_station(*args)
 
-def join_training(stations, ts_dir, landsat_dir, dem_dir, out_dir, stats_dir, bounds=None, debug=False,
-                  shuffle=False, overwrite=False, sample_frac=1.0, workers=4, chunk_size=72):
+
+def join_training(stations, ts_dir, landsat_dir, cdr, dem_dir, out_dir, bounds=None, debug=False, shuffle=False,
+                  overwrite=False, sample_frac=1.0, workers=4, chunk_size=72):
     """"""
 
     stations = pd.read_csv(stations)
@@ -188,7 +212,7 @@ def join_training(stations, ts_dir, landsat_dir, dem_dir, out_dir, stats_dir, bo
 
     fids = [str(f) for f in stations.index.to_list()]
 
-    args = [(f, row, ts_dir, landsat_dir, dem_dir, out_dir, overwrite, chunk_size)
+    args = [(f, row, ts_dir, landsat_dir, cdr, dem_dir, out_dir, overwrite, chunk_size)
             for f, row in zip(fids, rows)]
 
     if debug:
@@ -223,11 +247,6 @@ def join_training(stations, ts_dir, landsat_dir, dem_dir, out_dir, stats_dir, bo
 
     print('missing', total_missing)
 
-    # Write stats to JSON
-    json_file = os.path.join(stats_dir, 'combined_stats.json')
-    with open(json_file, 'w') as f:
-        json.dump(combined_stats, f, indent=4)
-
 
 if __name__ == '__main__':
 
@@ -239,10 +258,11 @@ if __name__ == '__main__':
 
     fields = os.path.join(d, 'met', 'stations', '{}.csv'.format(glob_))
     landsat_ = os.path.join(d, 'rs', 'landsat', 'station_data')
+    cdr_ = os.path.join(d, 'rs', 'cdr', 'joined')
     solrad = os.path.join(d, 'dem', 'rsun_tables', 'station_rsun')
 
-    zoran = '/data/ssd2/dads/training/simple_lstm'
-    nvm = '/media/nvm/training/simple_lstm'
+    zoran = '/data/ssd2/dads/training'
+    nvm = '/media/nvm/training'
     if os.path.exists(zoran):
         print('writing to zoran')
         training = zoran
@@ -253,8 +273,6 @@ if __name__ == '__main__':
         print('writing to UM drive')
         training = os.path.join(d, 'training')
 
-    out_csv = os.path.join(training, 'pth')
-
     overwrite_ = False
 
     sta = os.path.join(d, 'met', 'joined', 'hourly')
@@ -264,7 +282,7 @@ if __name__ == '__main__':
 
     print('========================== writing joined training data ==========================')
 
-    join_training(fields, sta, landsat_, solrad, out_csv, stats_dir=training, bounds=None, debug=True,
-                  shuffle=True, overwrite=overwrite_, sample_frac=1.0, chunk_size=72, workers=12)
+    join_training(fields, sta, landsat_, cdr_, solrad, training, bounds=None, debug=False, shuffle=True,
+                  overwrite=overwrite_, sample_frac=1.0, workers=12, chunk_size=72)
 
 # ========================= EOF ==============================================================================
