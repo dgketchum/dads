@@ -6,7 +6,8 @@ from shapely.geometry import Point
 
 from models.dads import SIMILARITY_COLS
 
-l = ['lat', 'lon', 'B10', 'nd', 'slope', 'aspect', 'elevation', 'tpi_1250', 'tpi_250', 'tpi_150', 'rsun']
+GRAPH_FEATURES = ['lat', 'lon', 'B10', 'nd', 'slope', 'aspect',
+                  'elevation', 'tpi_1250', 'tpi_250', 'tpi_150', 'rsun']
 
 
 def get_stations(stations, csv_dir, out_csv, bounds=None):
@@ -56,7 +57,7 @@ if __name__ == '__main__':
 
     target_var = 'mean_temp'
 
-    glob_ = 'dads_stations_res_elev_mgrs_split'
+    glob_ = 'dads_stations_10FEB2025'
 
     fields = os.path.join(d, 'met', 'stations', '{}.shp'.format(glob_))
     landsat_ = os.path.join(d, 'rs', 'dads_stations', 'landsat', 'station_data')

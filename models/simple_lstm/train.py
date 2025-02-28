@@ -28,7 +28,7 @@ torch.cuda.get_device_name(torch.cuda.current_device())
 rlimit = resource.getrlimit(resource.RLIMIT_NOFILE)
 resource.setrlimit(resource.RLIMIT_NOFILE, (4096, rlimit[1]))
 
-from prep.simple_lstm.build_training_sequences import MET_FEATURES, GEO_FEATURES, ADDED_FEATURES
+from prep.build_training_sequences import MET_FEATURES, GEO_FEATURES, ADDED_FEATURES
 
 
 class PTHLSTMDataset(Dataset):
