@@ -1,48 +1,13 @@
-import os
 import json
+import multiprocessing
+import os
 
-import torch
 import numpy as np
 import pandas as pd
+import torch
 from tqdm import tqdm
-import multiprocessing
 
-MET_FEATURES = [
-    'CAPE_nl_hr',
-    'CRainf_frac_nl_hr',
-    'LWdown_nl_hr',
-    'PSurf_nl_hr',
-    'PotEvap_nl_hr',
-    'Qair_nl_hr',
-    'Rainf_nl_hr',
-    'SWdown_nl_hr',
-    'Tair_nl_hr',
-    'Wind_E_nl_hr',
-    'Wind_N_nl_hr',
-    'doy_obs',
-    'dt_nl_hr',
-    'lat_nl_hr',
-    'lon_nl_hr',
-]
-
-GEO_FEATURES = ['lat', 'lon',
-                'SR1', 'SR2', 'SR3', 'BT1', 'BT2', 'BT3',
-                'B10', 'B2', 'B3', 'B4', 'B5', 'B6', 'B7',
-                'rsun', 'doy']
-
-COMPARISON_FEATURES = ['mean_temp_dm', 'rsds_dm', 'vpd_dm']
-
-TARGETS = ['rsds_obs', 'mean_temp_obs', 'vpd_obs', 'prcp_obs',
-           'rn_obs', 'u2_obs']
-
-ADDED_FEATURES = [
-    'doy_sin',
-    'doy_cos',
-    'hour_sin',
-    'hour_cos',
-]
-
-PTH_COLUMNS = TARGETS + COMPARISON_FEATURES + MET_FEATURES + GEO_FEATURES + ADDED_FEATURES
+from prep.columns_desc import PTH_COLUMNS, TARGETS, COMPARISON_FEATURES
 
 
 def process_station(fid, row, ts_dir, landsat_dir, cdr_dir, dem_dir, out_dir, overwrite, chunk_size=72):
@@ -167,7 +132,12 @@ def process_station(fid, row, ts_dir, landsat_dir, cdr_dir, dem_dir, out_dir, ov
             if os.path.exists(outfile) and not overwrite:
                 missing['exists'] += 1
             else:
-                torch.save(torch.tensor(chunk.values, dtype=torch.float32), outfile)
+                try:
+                    torch.save(torch.tensor(chunk.values, dtype=torch.float32), outfile)
+                except Exception as exc:
+                    print(exc, fid)
+                    continue
+
                 chunk_ct += 1
 
     target_cols = [col for col in ts.columns if col in TARGETS + COMPARISON_FEATURES]
@@ -274,7 +244,7 @@ if __name__ == '__main__':
         print('writing to UM drive')
         training = os.path.join(d, 'training')
 
-    overwrite_ = False
+    overwrite_ = True
 
     sta = os.path.join(d, 'met', 'joined', 'hourly')
 

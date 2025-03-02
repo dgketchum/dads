@@ -1,11 +1,11 @@
 import os
 
-import pandas as pd
+import numpy as np
 import geopandas as gpd
+import pandas as pd
 from shapely.geometry import Point
 
-from models.dads import SIMILARITY_COLS
-from prep.build_training_sequences import GEO_FEATURES
+from prep.columns_desc import GEO_FEATURES
 
 GRAPH_FEATURES = ['lat', 'lon', 'B10', 'nd', 'slope', 'aspect',
                   'elevation', 'tpi_1250', 'tpi_250', 'tpi_150', 'rsun']
@@ -21,7 +21,7 @@ def get_stations(stations, csv_dir, out_csv, bounds=None):
         stations = stations[(stations['latitude'] < n) & (stations['latitude'] >= s)]
         stations = stations[(stations['longitude'] < e) & (stations['longitude'] >= w)]
 
-    first, df, data = True, None, None
+    first, df, data, dct = True, None, None, {}
     for i, (f, row) in enumerate(stations.iterrows(), start=1):
 
         file_ = os.path.join(csv_dir, '{}.parquet'.format(f))
@@ -30,18 +30,16 @@ def get_stations(stations, csv_dir, out_csv, bounds=None):
 
         data = pd.read_parquet(file_)
         data = data[GEO_FEATURES]
-        data['fid'] = f
-        data = data.groupby('fid').agg(SIMILARITY_COLS)
-        data['train'] = row['train']
-        if first:
-            df = data.copy()
-            first = False
-        else:
-            df = pd.concat([df, data.copy()], ignore_index=False)
+        _len = data.shape[0]
+        data = data.mean()
+        data['records'] = _len
+        data['train'] = np.random.choice([0, 1], p=[0.2, 0.8])
+        dct[f] = data.to_dict()
 
         if i % 100 == 0:
             print(i)
 
+    df = pd.DataFrame.from_dict(dct, orient='index')
     df.to_csv(out_csv)
     geometry = [Point(xy) for xy in zip(df['lon'], df['lat'])]
     gdf = gpd.GeoDataFrame(df, geometry=geometry)
@@ -64,7 +62,7 @@ if __name__ == '__main__':
     landsat_ = os.path.join(d, 'rs', 'dads_stations', 'landsat', 'station_data')
     solrad = os.path.join(d, 'dem', 'rsun_tables')
 
-    zoran = '/home/dgketchum/training'
+    zoran = '/data/ssd2/dads/training'
     nvm = '/media/nvm/training'
 
     if os.path.exists(zoran):
@@ -80,7 +78,7 @@ if __name__ == '__main__':
     # TODO remove this confusing dependence on getting RS and terrain data from lstm training data
     csv_dir_ = os.path.join(training, 'parquet')
 
-    out_csv_ = os.path.join(training, 'dads', 'graph', 'stations.csv')
+    out_csv_ = os.path.join(training, 'graph', 'stations.csv')
 
     get_stations(fields, csv_dir_, out_csv_, bounds=None)
 

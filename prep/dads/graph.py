@@ -7,7 +7,7 @@ import numpy as np
 from fiona.crs import CRS
 from shapely.geometry import LineString, Point
 
-from models.dads import SIMILARITY_COLS
+from prep.columns_desc import GEO_FEATURES
 from sklearn.preprocessing import MinMaxScaler
 
 
@@ -28,7 +28,7 @@ class Graph:
             stations = stations[(stations['latitude'] < n) & (stations['latitude'] >= s)]
             stations = stations[(stations['longitude'] < e) & (stations['longitude'] >= w)]
 
-        attrs_select = list(SIMILARITY_COLS.keys()) + ['train']
+        attrs_select = list(GEO_FEATURES.keys()) + ['train']
         attributes = stations[attrs_select].copy()
         attributes.index = stations['fid']
         scaler = MinMaxScaler()
