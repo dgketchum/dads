@@ -32,7 +32,8 @@ GEO_FEATURES = ['lat', 'lon',
 
 COMPARISON_FEATURES = ['mean_temp_dm', 'rsds_dm', 'vpd_dm']
 
-TARGETS = ['mean_temp_obs', 'rn_obs', 'rsds_obs', 'u2_obs', 'vpd_obs']
+TARGETS = ['rsds_obs', 'mean_temp_obs', 'vpd_obs', 'prcp_obs',
+           'rn_obs', 'u2_obs']
 
 ADDED_FEATURES = [
     'doy_sin',

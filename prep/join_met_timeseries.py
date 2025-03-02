@@ -148,7 +148,7 @@ def join_daily_timeseries(stations, sta_dir, nldas_dir, dst_dir, daymet_dir=None
         sdf = sdf[all_cols].copy()
 
         if clip_to_obs:
-            sdf.dropna(subset=['rsds_obs', 'mean_temp_obs', 'vpd_obs',
+            sdf.dropna(subset=['rsds_obs', 'mean_temp_obs', 'vpd_obs', 'prcp_obs',
                                'rn_obs', 'u2_obs'], how='all', inplace=True, axis=0)
 
         if sdf.empty:

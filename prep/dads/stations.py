@@ -5,6 +5,7 @@ import geopandas as gpd
 from shapely.geometry import Point
 
 from models.dads import SIMILARITY_COLS
+from prep.build_training_sequences import GEO_FEATURES
 
 GRAPH_FEATURES = ['lat', 'lon', 'B10', 'nd', 'slope', 'aspect',
                   'elevation', 'tpi_1250', 'tpi_250', 'tpi_150', 'rsun']
@@ -23,12 +24,12 @@ def get_stations(stations, csv_dir, out_csv, bounds=None):
     first, df, data = True, None, None
     for i, (f, row) in enumerate(stations.iterrows(), start=1):
 
-        file_ = os.path.join(csv_dir, '{}.csv'.format(f))
+        file_ = os.path.join(csv_dir, '{}.parquet'.format(f))
         if not os.path.exists(file_):
             continue
 
-        data = pd.read_csv(file_)
-        data = data[SIMILARITY_COLS.keys()]
+        data = pd.read_parquet(file_)
+        data = data[GEO_FEATURES]
         data['fid'] = f
         data = data.groupby('fid').agg(SIMILARITY_COLS)
         data['train'] = row['train']
@@ -77,7 +78,7 @@ if __name__ == '__main__':
         training = os.path.join(d, 'training')
 
     # TODO remove this confusing dependence on getting RS and terrain data from lstm training data
-    csv_dir_ = os.path.join(training, 'simple_lstm', target_var, 'compiled_csv')
+    csv_dir_ = os.path.join(training, 'parquet')
 
     out_csv_ = os.path.join(training, 'dads', 'graph', 'stations.csv')
 

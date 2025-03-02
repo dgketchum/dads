@@ -324,7 +324,7 @@ if __name__ == '__main__':
     solrad = os.path.join(d, 'dads', 'dem', 'rsun_tables', 'station_rsun')
 
     read_hourly_data(sites, madis_hourly_public, madis_daily_, solrad, shuffle=False, stype='madis',
-                     bounds=(-125., 25., -66., 49.), overwrite=False, qaqc=True, plot=None,
+                     bounds=(-180., 25., -60., 85.), overwrite=False, qaqc=True, plot=None,
                      alt_src=madis_hourly_research)
 
 # ========================= EOF ====================================================================
