@@ -1,4 +1,5 @@
 import os
+from tqdm import tqdm
 
 import numpy as np
 import geopandas as gpd
@@ -22,8 +23,7 @@ def get_stations(stations, csv_dir, out_csv, bounds=None):
         stations = stations[(stations['longitude'] < e) & (stations['longitude'] >= w)]
 
     first, df, data, dct = True, None, None, {}
-    for i, (f, row) in enumerate(stations.iterrows(), start=1):
-
+    for f, row in tqdm(stations.iterrows(), total=len(stations)):
         file_ = os.path.join(csv_dir, '{}.parquet'.format(f))
         if not os.path.exists(file_):
             continue
@@ -35,9 +35,6 @@ def get_stations(stations, csv_dir, out_csv, bounds=None):
         data['records'] = _len
         data['train'] = np.random.choice([0, 1], p=[0.2, 0.8])
         dct[f] = data.to_dict()
-
-        if i % 100 == 0:
-            print(i)
 
     df = pd.DataFrame.from_dict(dct, orient='index')
     df.to_csv(out_csv)
@@ -75,9 +72,7 @@ if __name__ == '__main__':
         print('reading from UM drive')
         training = os.path.join(d, 'training')
 
-    # TODO remove this confusing dependence on getting RS and terrain data from lstm training data
     csv_dir_ = os.path.join(training, 'parquet')
-
     out_csv_ = os.path.join(training, 'graph', 'stations.csv')
 
     get_stations(fields, csv_dir_, out_csv_, bounds=None)

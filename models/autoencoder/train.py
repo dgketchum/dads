@@ -1,11 +1,10 @@
 import json
 import os
-import resource
-import shutil
 from datetime import datetime
 
 import numpy as np
 import pytorch_lightning as pl
+import resource
 import torch
 from pytorch_lightning.callbacks import ModelCheckpoint, EarlyStopping
 from torch.nn import functional as F
@@ -14,6 +13,16 @@ from torch.utils.data._utils.collate import default_collate
 
 from models.autoencoder.weather_encoder import WeatherAutoencoder
 from models.scalers import MinMaxScaler
+from prep.columns_desc import MET_FEATURES
+
+OBS_NLDAS_MAPPING = {'vpd_obs': 'Qair_nl_hr',
+                     'prcp_obs': 'Rainf_nl_hr',
+                     'rsds_obs': 'SWdown_nl_hr',
+                     'mean_temp_obs': 'Tair_nl_hr',
+                     'u2_obs': ['Wind_E_nl_hr', 'Wind_N_nl_hr']}
+
+TARGETS = ['rsds_obs', 'mean_temp_obs', 'vpd_obs', 'prcp_obs',
+           'rn_obs', 'u2_obs', 'doy_obs']
 
 device_name = None
 if torch.cuda.is_available():
@@ -30,12 +39,12 @@ resource.setrlimit(resource.RLIMIT_NOFILE, (4096, rlimit[1]))
 
 
 class WeatherDataset(Dataset):
-    def __init__(self, file_paths, expected_width, data_width, chunk_size,
+    def __init__(self, file_paths, expected_width, col_indices, chunk_size,
                  features_path, target_indices=None, similarity_file=None, transform=None):
 
         self.chunk_size = chunk_size
         self.transform = transform
-        self.data_width = data_width
+        self.col_indices = col_indices
         self.target_indices = target_indices
 
         self.station_idx = []
@@ -69,7 +78,7 @@ class WeatherDataset(Dataset):
     @staticmethod
     def load_station_features(features_path, file_paths):
 
-        seq_stations = [os.path.basename(fp).replace('.pth', '') for fp in file_paths]
+        seq_stations = [os.path.basename(fp).replace('.parquet', '') for fp in file_paths]
 
         with open(features_path, 'r') as f:
             features = json.load(f)
@@ -141,7 +150,7 @@ class WeatherDataset(Dataset):
     def get_valid_data_for_scaling(self):
         valid_data = []
         for chunk in self.data:
-            chunk_without_pe = chunk[:, :self.data_width]
+            chunk_without_pe = chunk[:, :self.col_indices]
             valid_rows = chunk_without_pe[~torch.isnan(chunk_without_pe).any(dim=1)]
             valid_data.append(valid_rows)
         return torch.cat(valid_data, dim=0).numpy()
@@ -162,13 +171,16 @@ class WeatherDataset(Dataset):
 
         chunk = self.data[idx]
 
-        chunk[:, :self.data_width] = self.scale_chunk(chunk[:, :self.data_width])
+        chunk = chunk[:, self.col_indices]
+
+        chunk[:, self.col_indices] = self.scale_chunk(chunk[:, self.col_indices])
+
         if isinstance(self.target_indices[0], tuple):
             target = diff_pairs(chunk, self.target_indices)
         else:
             target = chunk[:, self.target_indices]
 
-        # pytorch has counterintuitive mask logic (opposite)
+        # pytorch has counterintuitive mask logic (opposite
         # i.e., False where there is valid data
         mask = ~torch.isnan(chunk[:, 0]).unsqueeze(1).repeat_interleave(chunk.size(1), dim=1)
 
@@ -207,32 +219,47 @@ def custom_collate(batch):
     return default_collate(batch)
 
 
-def train_model(dirpath, pth, metadata, feature_dir, batch_size=64, learning_rate=0.001, n_workers=1, device='gpu',
+def train_model(dirpath, parquet, target_var, columns, chunk_size,
+                feature_dir, batch_size=64, learning_rate=0.001, n_workers=1, device='gpu',
                 bias_target=False, logging_csv=None):
     """"""
 
-    with open(metadata, 'r') as f:
-        meta = json.load(f)
+    target, comparison = f'{target_var}_obs', f'{target_var}_dm'
+    target_idx = [columns.index(target)]
+    comp_idx = [columns.index(comparison)]
+    met_idx = [columns.index(p) for p in MET_FEATURES]
 
-    cols = meta['column_order']
-    chunk_size = meta['chunk_size']
-    tensor_width = len(cols)
-    data_width = len(meta['data_columns'])
-
-    variables = list(set(['_'.join(v.split('_')[:-1]) for v in cols if 'pe' not in v]))
+    idx = target_idx + comp_idx + met_idx
 
     if bias_target:
-        difference_idx = [(cols.index(f'{v}_nl'), cols.index(f'{v}_obs')) for v in variables]
-    else:
-        difference_idx = [cols.index(f'{v}_obs') for v in variables]
+        difference_idx = []
+        for k, v in OBS_NLDAS_MAPPING.items():
+            if isinstance(v, list):
+                cc = [columns.index(vv) for vv in v]
+                difference_idx.append((cc, columns.index(k)))
+            else:
+                difference_idx.append((columns.index(v), columns.index(k)))
 
-    tdir = os.path.join(pth, 'train')
-    t_files = [os.path.join(tdir, f) for f in os.listdir(tdir)]
+    else:
+        difference_idx = [columns.index(k) for k, v in OBS_NLDAS_MAPPING.items()]
+
     train_features = os.path.join(feature_dir, 'train_edge_attr.json')
+    with open(train_features, 'r') as f:
+        train_feats = json.load(f)
+
+    file_map = {'train': [], 'val': []}
+    for filename in os.listdir(parquet):
+        station = filename.split('.')[0]
+        if station in train_feats.keys():
+            file_map['train'].append(os.path.join(parquet, filename))
+        else:
+            file_map['val'].append(os.path.join(parquet, filename))
+
     train_similarity = os.path.join(feature_dir, 'train_similarity.np')
-    train_dataset = WeatherDataset(file_paths=t_files,
-                                   expected_width=tensor_width,
-                                   data_width=data_width,
+
+    train_dataset = WeatherDataset(file_paths=file_map['train'],
+                                   expected_width=len(columns),
+                                   col_indices=len(idx),
                                    chunk_size=chunk_size,
                                    target_indices=difference_idx,
                                    features_path=train_features,
@@ -247,13 +274,12 @@ def train_model(dirpath, pth, metadata, feature_dir, batch_size=64, learning_rat
                                   num_workers=n_workers,
                                   collate_fn=lambda batch: [x for x in batch if x is not None])
 
-    vdir = os.path.join(pth, 'val')
-    v_files = [os.path.join(vdir, f) for f in os.listdir(vdir)]
     val_features = os.path.join(feature_dir, 'val_edge_attr.json')
     val_similarity = os.path.join(feature_dir, 'val_similarity.np')
-    val_dataset = WeatherDataset(file_paths=v_files,
-                                 expected_width=tensor_width,
-                                 data_width=data_width,
+
+    val_dataset = WeatherDataset(file_paths=file_map['val'],
+                                 expected_width=len(columns),
+                                 col_indices=len(idx),
                                  chunk_size=chunk_size,
                                  target_indices=difference_idx,
                                  features_path=val_features,
@@ -265,15 +291,14 @@ def train_model(dirpath, pth, metadata, feature_dir, batch_size=64, learning_rat
                                 num_workers=n_workers,
                                 collate_fn=lambda batch: [x for x in batch if x is not None])
 
-    model = WeatherAutoencoder(input_dim=tensor_width,
+    model = WeatherAutoencoder(input_dim=len(columns),
                                output_dim=len(difference_idx),
                                latent_size=128,
                                hidden_size=128,
                                dropout=0.1,
                                learning_rate=learning_rate,
                                log_csv=logging_csv,
-                               scaler=val_dataset.scaler,
-                               **meta)
+                               scaler=val_dataset.scaler)
 
     print(f"Number of training samples: {len(train_dataset)}")
     print(f"Number of validation samples: {len(val_dataset)}")
@@ -306,9 +331,16 @@ if __name__ == '__main__':
     if not os.path.exists(d):
         d = '/home/dgketchum/data/IrrigationGIS/dads'
 
-    variable = 'mean_temp'
+    target_var_ = 'mean_temp'
 
-    zoran = '/home/dgketchum/training'
+    if device_name == 'NVIDIA GeForce RTX 2080':
+        workers = 6
+    elif device_name == 'NVIDIA RTX A6000':
+        workers = 12
+    else:
+        raise NotImplementedError('Specify the machine this is running on')
+
+    zoran = '/data/ssd2/dads/training'
     nvm = '/media/nvm/training'
     if os.path.exists(zoran):
         print('modeling with data from zoran')
@@ -317,17 +349,14 @@ if __name__ == '__main__':
         print('modeling with data from NVM drive')
         training = nvm
     else:
-        print('modeling with data from UM drive')
-        training = os.path.join(d, 'training')
-
-    print(f'========================== training autoencoder {variable} ==========================')
+        raise NotImplementedError
 
     param_dir = os.path.join(training, 'autoencoder')
-    pth_ = os.path.join(param_dir, 'pth')
+    parq_ = os.path.join(training, 'parquet')
     metadata_ = os.path.join(param_dir, 'training_metadata.json')
 
     # graph
-    edges = os.path.join(training, 'dads', 'graph')
+    edges = os.path.join(training, 'graph')
 
     now = datetime.now().strftime('%m%d%H%M')
     chk = os.path.join(param_dir, 'checkpoints', now)
@@ -337,6 +366,10 @@ if __name__ == '__main__':
     workers = 12
     device_ = 'gpu'
 
-    train_model(chk, pth_, metadata_, feature_dir=edges, batch_size=128, learning_rate=0.001,
+    with open(os.path.join(training, 'pth_columns.json'), 'r') as fp:
+        cols = json.load(fp)['columns']
+
+    train_model(chk, parq_, target_var=target_var_, columns=cols, chunk_size=365,
+                feature_dir=edges, batch_size=128, learning_rate=0.001,
                 n_workers=workers, logging_csv=logger_csv, device=device_, bias_target=True)
 # ========================= EOF ====================================================================

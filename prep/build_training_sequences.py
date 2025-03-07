@@ -7,6 +7,7 @@ import pandas as pd
 import torch
 from tqdm import tqdm
 
+from utils.station_parameters import station_par_map
 from prep.columns_desc import PTH_COLUMNS, TARGETS, COMPARISON_FEATURES
 
 
@@ -163,22 +164,26 @@ def process_station_wrapper(args):
 
 
 def join_training(stations, ts_dir, landsat_dir, cdr, dem_dir, out_dir, bounds=None, debug=False, shuffle=False,
-                  overwrite=False, sample_frac=1.0, workers=4, chunk_size=72):
+                  overwrite=False, sample_frac=1.0, workers=4, chunk_size=72, source='madis'):
     """"""
+    kw = station_par_map(source)
 
-    stations = pd.read_csv(stations)
-    stations.index = stations['fid']
+    stations = pd.read_csv(stations, index_col=kw['index'])
     stations.sort_index(inplace=True)
+
+    if source == 'ghcn':
+        stations['orig_netid'] = stations.index
+        stations['source'] = source
 
     if bounds:
         w, s, e, n = bounds
-        stations = stations[(stations['latitude'] < n) & (stations['latitude'] >= s)]
-        stations = stations[(stations['longitude'] < e) & (stations['longitude'] >= w)]
+        stations = stations[(stations[kw['lat']] < n) & (stations[kw['lat']] >= s)]
+        stations = stations[(stations[kw['lon']] < e) & (stations[kw['lon']] >= w)]
 
     if shuffle:
         stations = stations.sample(frac=sample_frac)
 
-    rows = [{'index': f, 'latitude': float(row['latitude']), 'longitude': float(row['longitude']),
+    rows = [{'index': f, 'latitude': float(row[kw['lat']]), 'longitude': float(row[kw['lon']]),
              'orig_netid': str(row['orig_netid']), 'source': str(row['source'])} for f, row in stations.iterrows()]
 
     fids = [str(f) for f in stations.index.to_list()]
@@ -225,7 +230,11 @@ if __name__ == '__main__':
     if not os.path.exists(d):
         d = '/home/dgketchum/data/IrrigationGIS/dads'
 
-    glob_ = 'dads_stations_10FEB2025'
+    # glob_ = 'dads_stations_10FEB2025'
+    # _source = 'madis'
+
+    glob_ = 'ghcn_CANUSA_stations_mgrs'
+    _source = 'ghcn'
 
     fields = os.path.join(d, 'met', 'stations', '{}.csv'.format(glob_))
     landsat_ = os.path.join(d, 'rs', 'landsat', 'station_data')
@@ -244,7 +253,7 @@ if __name__ == '__main__':
         print('writing to UM drive')
         training = os.path.join(d, 'training')
 
-    overwrite_ = True
+    overwrite_ = False
 
     sta = os.path.join(d, 'met', 'joined', 'hourly')
 
@@ -253,7 +262,7 @@ if __name__ == '__main__':
 
     print('========================== writing joined training data ==========================')
 
-    join_training(fields, sta, landsat_, cdr_, solrad, training, bounds=None, debug=False, shuffle=True,
-                  overwrite=overwrite_, sample_frac=1.0, workers=12, chunk_size=72)
+    join_training(fields, sta, landsat_, cdr_, solrad, training, bounds=None, debug=True, shuffle=True,
+                  overwrite=overwrite_, sample_frac=1.0, workers=12, chunk_size=72, source=_source)
 
 # ========================= EOF ==============================================================================

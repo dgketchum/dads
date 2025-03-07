@@ -17,11 +17,13 @@ MET_FEATURES = [
 
 CDR_FEATURES = ['SR1', 'SR2', 'SR3', 'BT1', 'BT2', 'BT3']
 LANDSAT_FEATURES = ['B10', 'B2', 'B3', 'B4', 'B5', 'B6', 'B7']
-GEO_FEATURES = ['lat', 'lon', 'rsun', 'doy'] + LANDSAT_FEATURES + CDR_FEATURES
+TERRAIN_FEATURES = ['aspect', 'elevation', 'slope', 'tpi_10000', 'tpi_22500', 'tpi_2500', 'tpi_500']
+
+GEO_FEATURES = ['lat', 'lon', 'rsun', 'doy'] + LANDSAT_FEATURES + CDR_FEATURES + TERRAIN_FEATURES
 
 COMPARISON_FEATURES = ['mean_temp_dm', 'rsds_dm', 'vpd_dm']
 
-TARGETS = ['rsds_obs', 'mean_temp_obs', 'vpd_obs', 'prcp_obs',
+TARGETS = ['rsds_obs', 'mean_temp_obs', 'min_temp_obs', 'max_temp_obs', 'vpd_obs', 'prcp_obs',
            'rn_obs', 'u2_obs', 'doy_obs']
 
 ADDED_FEATURES = [

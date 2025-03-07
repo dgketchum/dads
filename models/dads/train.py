@@ -97,7 +97,7 @@ class DadsDataset(Dataset):
             self.lstm_dataset = PTHLSTMDataset(file_paths=filter_files,
                                                col_index=self.column_indices,
                                                expected_width=self.tensor_width,
-                                               chunk_size=chunk_size,
+                                               sample_dimensions=chunk_size,
                                                return_station_name=True,
                                                scaler_json=scaler)
 
