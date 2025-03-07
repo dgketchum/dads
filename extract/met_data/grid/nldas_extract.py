@@ -208,9 +208,10 @@ if __name__ == '__main__':
     sites = os.path.join(d, 'climate', 'ghcn', 'stations', 'ghcn_CANUSA_stations_mgrs.csv')
     # sites = os.path.join(d, 'dads', 'met', 'stations', 'madis_29OCT2024.csv')
 
+    source_ = 'nldas2'
     csv_files = '/data/ssd1/nldas2/station_data/'
     # csv_files = os.path.join(d, 'dads', 'met', 'gridded', 'nldas2', 'station_data')
-    p_files = os.path.join(d, 'dads', 'met', 'gridded', 'nldas2_parquet')
+    p_files = os.path.join(d, 'dads', 'met', 'gridded', 'raw_parquet', source_)
 
     if not nc_data_:
         earthaccess.login()
@@ -223,9 +224,10 @@ if __name__ == '__main__':
 
         print(f'\n\n\n\n Quadrant {e} \n\n\n\n')
 
-        extract_nldas(sites, csv_files, nc_data=nc_data_, workers=16, overwrite=False, missing_list=None,
-                      bounds=quad, debug=False, parquet_check=p_files)
+        if e > 1:
+            extract_nldas(sites, csv_files, nc_data=nc_data_, workers=16, overwrite=False, missing_list=None,
+                          bounds=quad, debug=False, parquet_check=p_files)
 
-        process_and_concat_csv(sites, csv_files, start_date='1990-01-01', end_date='2023-12-31', outdir=p_files,
-                               workers=16, missing_file=None)
+        process_and_concat_csv(csv_files, source_, start_date='1990-01-01', end_date='2023-12-31', outdir=p_files,
+                               workers=16, missing_file=None, debug=False)
 # ========================= EOF ====================================================================

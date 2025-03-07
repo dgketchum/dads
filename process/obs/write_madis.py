@@ -125,7 +125,7 @@ def open_nc(f):
     return ds_
 
 
-def read_madis_hourly(data_directory, year_mo_str, output_directory, bounds=(-125., 25., -66., 49.)):
+def read_madis_hourly(data_directory, year_mo_str, output_directory, bounds=(-125., 24., -66., 53.)):
     """"""
 
     file_pattern = os.path.join(data_directory, f"*{year_mo_str}*.gz")
@@ -182,9 +182,9 @@ def read_madis_hourly(data_directory, year_mo_str, output_directory, bounds=(-12
 
 
 def process_time_chunk(args):
-    time_tuple, meso_dir, out_dir = args
+    time_tuple, meso_dir, out_dir, bnds = args
     start_time, end_time = time_tuple
-    read_madis_hourly(meso_dir, start_time[:6], out_dir, bounds=(-180., 25., -60., 85.))
+    read_madis_hourly(meso_dir, start_time[:6], out_dir, bounds=bnds)
 
 
 if __name__ == "__main__":
@@ -196,31 +196,26 @@ if __name__ == "__main__":
     mesonet_dir = os.path.join(d, 'climate', 'madis', 'LDAD', 'mesonet')
     tracker_ = os.path.join(mesonet_dir, 'stations.json')
 
-    if os.path.exists('/data/ssd1/madis'):
-        netcdf_src = os.path.join(mesonet_dir, 'netCDF')
-        netcdf_dst = os.path.join('/data/ssd1/madis', 'netCDF')
-        out_dir_ = os.path.join('/data/ssd1/madis', 'inclusive_csv')
-        print('operating on zoran data')
-    else:
-        netcdf_src = os.path.join(mesonet_dir, 'netCDF')
-        netcdf_dst = os.path.join(mesonet_dir, 'netCDF')
-        out_dir_ = os.path.join(mesonet_dir, 'inclusive_csv')
-        print('operating on network drive data')
+    netcdf_src = os.path.join(mesonet_dir, 'netCDF')
+    netcdf_dst = os.path.join(mesonet_dir, 'netCDF')
+    out_dir_ = os.path.join(mesonet_dir, 'inclusive_csv')
+    print('operating on network drive data')
 
     # get_station_metadata(netcdf_src, tracker_)
     shp_ = os.path.join(mesonet_dir, 'stations_25OCT2024.shp')
     # write_stations_to_shapefile(tracker_, shp_)
 
-    dt = pd.date_range('2001-01-01', '2009-12-31', freq='MS')
-    dts = [d.strftime('%Y%m') for d in dt]
-    transfer_list(netcdf_src, netcdf_dst, progress_json=None, yrmo_str=dts, workers=20)
+    # dt = pd.date_range('2001-01-01', '2009-12-31', freq='MS')
+    # dts = [d.strftime('%Y%m') for d in dt]
+    # transfer_list(netcdf_src, netcdf_dst, progress_json=None, yrmo_str=dts, workers=20)
 
-    times = generate_monthly_time_tuples(2001, 2009, check_dir=out_dir_)
+    bnds = (-180., 49., -60., 85.)
+    times = generate_monthly_time_tuples(2001, 2024, check_dir=out_dir_)
     [print(t) for t in times]
-    args_ = [(t, netcdf_dst, out_dir_) for t in times]
+    args_ = [(t, netcdf_dst, out_dir_, bnds) for t in times]
 
     # num_processes = 5
-    num_processes = 20
+    num_processes = 10
     with multiprocessing.Pool(processes=num_processes) as pool:
         pool.map(process_time_chunk, args_)
 

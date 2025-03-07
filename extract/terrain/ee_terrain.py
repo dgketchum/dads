@@ -123,25 +123,32 @@ if __name__ == '__main__':
 
     _bucket = 'gs://wudr'
 
-    # sites = os.path.join(d, 'dads', 'met', 'stations', 'dads_stations_res_elev_mgrs.csv')
-    sites = os.path.join(d, 'climate', 'ghcn', 'stations', 'ghcn_CANUSA_stations_mgrs.csv')
+    sites = os.path.join(d, 'dads', 'met', 'stations', 'dads_stations_mgrs_10FEB2025.csv')
+    # sites = os.path.join(d, 'climate', 'ghcn', 'stations', 'ghcn_CANUSA_stations_mgrs.csv')
     # sites = os.path.join(d, 'dads', 'met', 'stations', 'madis_mgrs_28OCT2024.csv')
     # sites = os.path.join(d, 'dads', 'dem', 'w17_tiles.csv')
 
-    tiles = pd.read_csv(sites)['MGRS_TILE'].unique().tolist()
+    bounds = (-180., 25., -60., 85.)
+    sites_df = pd.read_csv(sites)
+    sites_df = sites_df[(sites_df['latitude'] < bounds[3]) & (sites_df['latitude'] >= bounds[1])]
+    sites_df = sites_df[(sites_df['longitude'] < bounds[2]) & (sites_df['longitude'] >= bounds[0])]
+
+    tiles = sites_df['MGRS_TILE'].unique().tolist()
     tiles = [m for m in tiles if isinstance(m, str)]
     mgrs_tiles = list(set(tiles))
     mgrs_tiles.sort()
 
     chk = '/media/nvm/IrrigationGIS/dads/dem/dem_250'
-    export_dem(mgrs_tiles, chk)
+    # export_dem(mgrs_tiles, chk)
 
     pt_buffer = 100
-    # stations = 'dads_stations_elev_mgrs'
-    stations = 'ghcn_CANUSA_stations_mgrs'
+    stations = 'dads_stations_mgrs_10FEB2025'
+    # stations = 'ghcn_CANUSA_stations_mgrs'
     pts = 'projects/ee-dgketchum/assets/dads/{}'.format(stations)
     file_ = '{}_{}'.format(stations, pt_buffer)
-    # export_terrain_features(file_prefix=file_, points_layer=pts, buffer_=pt_buffer,
-    #                         tiles=mgrs_tiles, check_dir=None)
+    check = os.path.join(d, 'dads', 'dem', 'terrain', 'madis_stations')
+
+    export_terrain_features(file_prefix=file_, points_layer=pts, buffer_=pt_buffer,
+                            tiles=mgrs_tiles, check_dir=None)
 
 # ========================= EOF ====================================================================

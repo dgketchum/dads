@@ -1,14 +1,11 @@
-import os
-import json
 import concurrent.futures
+import json
+import os
+from datetime import datetime
 
 import numpy as np
 import pandas as pd
 import xarray as xr
-from datetime import datetime
-
-import matplotlib.pyplot as plt
-import seaborn as sns
 
 AVHRR_VARS = ['SREFL_CH1',
               'SREFL_CH2',
@@ -96,10 +93,10 @@ def extract_surface_reflectance(stations, gridded_dir, incomplete_out, out_data,
             ds = ds.sel(latitude=indexer.latitude, longitude=indexer.longitude, method='nearest')
 
             # TODO: consider making use of zenith, overpass time and QA data
-            fids = np.unique(indexer.fid.values).tolist()
+            fids = np.unique(indexer[index_col].values).tolist()
             with concurrent.futures.ThreadPoolExecutor(max_workers=num_workers) as executor:
                 futures = [executor.submit(process_fid, fid, year, month, ds, extract_vars,
-                                           out_data, overwrite) for fid in fids]
+                                           out_data, overwrite, index_col) for fid in fids]
                 concurrent.futures.wait(futures)
 
     if len(incomplete) > 0:
@@ -107,18 +104,27 @@ def extract_surface_reflectance(stations, gridded_dir, incomplete_out, out_data,
             json.dump(incomplete, fp, indent=4)
 
 
-def process_fid(fid, year, month, ds, extract_vars, out_data, overwrite):
+def process_fid(fid, year, month, ds, extract_vars, out_data, overwrite, ind_col):
     dst_dir = os.path.join(out_data, fid)
     if not os.path.exists(dst_dir):
         os.mkdir(dst_dir)
     _file = os.path.join(dst_dir, '{}_{}_{}.csv'.format(fid, year, month))
 
     if not os.path.exists(_file) or overwrite:
-        df_station = ds.sel(fid=fid).to_dataframe()
+
+        if ind_col == 'STAID':
+            df_station = ds.sel(STAID=fid).to_dataframe()
+        elif ind_col == 'fid':
+            df_station = ds.sel(fid=fid).to_dataframe()
+        else:
+            raise ValueError(f'Invalid indexer {ind_col}')
+
         df_station = df_station.groupby(df_station.index.get_level_values('time').date).first()
         df_station = df_station[extract_vars]
         df_station.to_csv(_file)
-        print(_file)
+
+        if month == 12:
+            print(_file)
 
 
 def join_station_data(in_dir, dst_dir, n_workers, overwrite=False):
@@ -189,14 +195,14 @@ if __name__ == '__main__':
         home = os.path.expanduser('~')
         d = os.path.join(home, 'data', 'IrrigationGIS')
 
-    sites = os.path.join(d, 'dads', 'met', 'stations', 'madis_mgrs_28OCT2024.csv')
-    # sites = os.path.join(d, 'climate', 'ghcn', 'stations', 'ghcn_CANUSA_stations_mgrs_CDR.csv')
+    # sites = os.path.join(d, 'dads', 'met', 'stations', 'madis_mgrs_28OCT2024.csv')
+    sites = os.path.join(d, 'climate', 'ghcn', 'stations', 'ghcn_CANUSA_stations_mgrs_CDR.csv')
 
     grid_dir = os.path.join(d, 'dads', 'rs', 'cdr', 'nc')
     csv_m_dir = os.path.join(d, 'dads', 'rs', 'cdr', 'csv')
     incomp = os.path.join(d, 'dads', 'rs', 'cdr', 'incomplete_files.json')
 
-    workers = 8
+    workers = 16
     extract_surface_reflectance(sites, grid_dir, incomp, csv_m_dir, num_workers=workers,
                                 overwrite=False, bounds=(-180., 25., -60., 85.), index_col='STAID')
 

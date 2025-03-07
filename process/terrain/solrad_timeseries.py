@@ -45,7 +45,7 @@ def process_tile(tile, points, raster_dir, table_out, index_col='fid', overwrite
 
 
 def extract_raster_values_by_tile(shapefile_path, raster_dir, table_out, shuffle=False, avoid_tiles=None,
-                                  target_tiles=None, overwrite=False, num_workers=2, index_col='fid'):
+                                  target_tiles=None, overwrite=False, num_workers=2, index_col='fid', debug=False):
     points = gpd.read_file(shapefile_path)
     points.index = points[index_col]
     if shuffle:
@@ -63,6 +63,10 @@ def extract_raster_values_by_tile(shapefile_path, raster_dir, table_out, shuffle
         tiles = [t for t in tiles if t in target_tiles]
         print(f'{len(tiles)} tiles from {ln} in file')
 
+    if debug:
+        for tile in tiles:
+            process_tile(tile, points.copy(), raster_dir, table_out, index_col, overwrite)
+
     with ProcessPoolExecutor(max_workers=num_workers) as executor:
         executor.map(process_tile, tiles, [points] * len(tiles), [raster_dir] * len(tiles),
                      [table_out] * len(tiles), [index_col] * len(tiles), [overwrite] * len(tiles))
@@ -75,17 +79,19 @@ if __name__ == '__main__':
 
     # this must be EPSG:5071 shapefile
     # shapefile_path_ = os.path.join(root, 'met', 'stations', 'dads_stations_res_elev_mgrs_5071.shp')
-    # shapefile_path_ = os.path.join(root, 'climate', 'ghcn', 'stations', 'ghcn_CANUSA_stations_mgrs_5071.shp')
+    shapefile_path_ = os.path.join(root, 'dads', 'met', 'stations', 'madis_mgrs_28OCT2024_3978.shp')
     # shapefile_path_ = os.path.join(root, 'dads', 'met', 'stations', 'madis_mgrs_28OCT2024_5071.shp')
 
-    shapefile_path_ = os.path.join(root, 'dads', 'met', 'stations', 'madis_mgrs_28OCT2024_3978.shp')
+    shapefile_path_ = os.path.join(root, 'climate', 'ghcn', 'stations', 'ghcn_CANUSA_stations_mgrs_5071.shp')
 
-    target_tiles = os.path.join(root, 'boundaries', 'mgrs', 'mgrs_nldas_canada.csv')
-    target_tiles = pd.read_csv(target_tiles)['MGRS_TILE'].unique().tolist()
+    target_tiles_ = os.path.join(root, 'boundaries', 'mgrs', 'mgrs_nldas.csv')
+    target_tiles_ = pd.read_csv(target_tiles_)['MGRS_TILE'].unique().tolist()
 
     raster_dir_ = os.path.join(root, 'dads', 'dem', 'rsun')
-    solrad_out = os.path.join(root, 'dads', 'dem', 'rsun_tables', 'madis_28OCT2024')
-    extract_raster_values_by_tile(shapefile_path_, raster_dir_, solrad_out, num_workers=1, avoid_tiles=None,
-                                  target_tiles=target_tiles, shuffle=True, overwrite=False, index_col='fid')
+    # solrad_out = os.path.join(root, 'dads', 'dem', 'rsun_tables', 'madis_28OCT2024')
+    solrad_out = os.path.join(root, 'dads', 'dem', 'rsun_tables', 'ghcn')
+    extract_raster_values_by_tile(shapefile_path_, raster_dir_, solrad_out, num_workers=16, avoid_tiles=None,
+                                  target_tiles=target_tiles_, shuffle=True, overwrite=False, index_col='STAID',
+                                  debug=False)
 
 # ========================= EOF ====================================================================

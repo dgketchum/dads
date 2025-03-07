@@ -67,7 +67,7 @@ def nldas2_parquet(root_, subdir_, required_months_, expected_index_, strdt_, ou
 
         if os.path.exists(out_file) and csv_files_:
             shutil.rmtree(subdir_path)
-            print(f'{os.path.basename(out_file)} exists, removing {len(csv_files)} csv files')
+            print(f'{os.path.basename(out_file)} exists, removing {len(csv_files_)} csv files')
             return
 
         dtimes = [f.split('_')[-1].replace('.csv', '') for f in csv_files_]
