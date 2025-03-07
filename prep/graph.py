@@ -12,12 +12,13 @@ from sklearn.preprocessing import MinMaxScaler
 
 
 class Graph:
-    def __init__(self, stations, output_dir, k_nearest=2, bounds=None):
+    def __init__(self, stations, output_dir, k_nearest=2, bounds=None, index_col='fid'):
         self.fields = stations
         self.output_dir = output_dir
         self.k_nearest = k_nearest
         self.pth_stations = []
         self.bounds = bounds
+        self.index_col = index_col
 
     def generate_edge_index(self):
         stations = gpd.read_file(self.fields)
@@ -28,9 +29,15 @@ class Graph:
             stations = stations[(stations['latitude'] < n) & (stations['latitude'] >= s)]
             stations = stations[(stations['longitude'] < e) & (stations['longitude'] >= w)]
 
-        attrs_select = list(GEO_FEATURES.keys()) + ['train']
+        attrs_select = list(GEO_FEATURES) + ['train', self.index_col]
         attributes = stations[attrs_select].copy()
-        attributes.index = stations['fid']
+        attributes.index = attributes[self.index_col]
+
+        df_copy = attributes.copy()
+        for col in df_copy.columns:
+            df_copy[col] = pd.to_numeric(df_copy[col], errors='coerce')
+        attributes = df_copy.copy()
+
         scaler = MinMaxScaler()
         attributes = pd.DataFrame(scaler.fit_transform(attributes),
                                   columns=attributes.columns,
@@ -44,7 +51,7 @@ class Graph:
             # put all in val dict, since training stations' nodes are sent to validation nodes for now
             val_dct[i] = r.to_list()[:-1]
 
-        gdf = stations[['fid', 'train', 'geometry']].copy()
+        gdf = stations[[self.index_col, 'train', 'geometry']].copy()
         train_gdf = gdf[gdf['train'] == 1]
         val_gdf = gdf[gdf['train'] == 0]
 
@@ -86,14 +93,14 @@ class Graph:
         to_from = [1, 0]
         spatial_edges = spatial_edges[:, to_from]
 
-        index_to_staid = {i: staid for i, staid in enumerate(gdf['fid'])}
+        index_to_staid = {i: staid for i, staid in enumerate(gdf[self.index_col])}
         edge_lines, train = [], []
         to_, from_ = [], []
 
         for e, (i, j) in enumerate(spatial_edges):
 
-            from_fid = gdf.iloc[i]['fid']
-            to_fid = gdf.iloc[j]['fid']
+            from_fid = gdf.iloc[i][self.index_col]
+            to_fid = gdf.iloc[j][self.index_col]
 
             point1 = Point(gdf.iloc[i].geometry)
             point2 = Point(gdf.iloc[j].geometry)
@@ -152,16 +159,29 @@ def haversine_distance(lat1, lon1, lat2, lon2):
 
 if __name__ == '__main__':
 
+
     d = '/media/research/IrrigationGIS/dads'
-    clim = '/media/research/IrrigationGIS/climate'
     if not os.path.exists(d):
         d = '/home/dgketchum/data/IrrigationGIS/dads'
-        clim = '/home/dgketchum/data/IrrigationGIS/climate'
 
-    stations_ = '/media/nvm/training/dads/graph/stations.shp'
-    output_dir_ = '/media/nvm/training/dads/graph'
 
-    node_prep = Graph(stations_, output_dir_, k_nearest=10)
+    zoran = '/data/ssd2/dads/training'
+    nvm = '/media/nvm/training'
+    if os.path.exists(zoran):
+        print('modeling with data from zoran')
+        training = zoran
+    elif os.path.exists(nvm):
+        print('modeling with data from NVM drive')
+        training = nvm
+    else:
+        print('modeling with data from UM drive')
+        training = os.path.join(d, 'training')
+
+
+    stations_ = os.path.join(training, 'graph', 'stations.shp')
+    output_dir_ = os.path.join(training, 'graph')
+
+    node_prep = Graph(stations_, output_dir_, k_nearest=10, index_col='index')
     node_prep.generate_edge_index()
 
 # ========================= EOF ====================================================================
