@@ -9,25 +9,19 @@ import pyarrow
 from utils.station_parameters import station_par_map
 
 warnings.filterwarnings("ignore", category=FutureWarning)
-VAR_MAP = {'rsds': 'Rs (w/m2)',
-           'ea': 'Vapor Pres (kPa)',
-           'min_temp': 'TMin (C)',
-           'max_temp': 'TMax (C)',
-           'mean_temp': 'TAvg (C)',
-           'wind': 'ws_2m (m/s)',
-           'eto': 'ETo (mm)'}
 
 GHCN_MAP = {'TMAX': 'max_temp', 'TMIN': 'min_temp', 'PRCP': 'prcp'}
 
-RENAME_MAP = {v: k for k, v in VAR_MAP.items()}
-
 # this depends on comparison of existing data
-COMPARISON_VARS = ['prcp', 'tmax', 'tmin', 'vpd', 'rsds']
+DAYMET_VARS = ['prcp', 'tmax', 'tmin', 'vpd', 'rsds']
+GRIDMET_VARS = ['prcp', 'tmax', 'tmin', 'vpd', 'rsds', 'u2']
+
 OBS_TARGETS = ['rsds', 'max_temp', 'min_temp', 'vpd', 'prcp', 'u2']
 
 
-def join_daily_timeseries(stations, sta_dir, nldas_dir, dst_dir, source, daymet_dir=None, overwrite=False,
-                          bounds=None, shuffle=False, write_missing=None, hourly=False, clip_to_obs=True):
+def join_daily_timeseries(stations, sta_dir, nldas_dir, dst_dir, source, daymet_dir=None, gridmet_dir=None,
+                          overwrite=False, bounds=None, shuffle=False, write_missing=None,
+                          hourly=False, clip_to_obs=True):
     """"""
     kw = station_par_map(source)
     stations = pd.read_csv(stations, index_col=kw['index'])
@@ -54,9 +48,6 @@ def join_daily_timeseries(stations, sta_dir, nldas_dir, dst_dir, source, daymet_
 
     for i, (f, row) in enumerate(stations.iterrows(), start=1):
 
-        if f != 'D4993':
-            continue
-
         if source == 'ghcn':
             obs_dir = None
         elif source == 'madis':
@@ -81,8 +72,8 @@ def join_daily_timeseries(stations, sta_dir, nldas_dir, dst_dir, source, daymet_
 
         try:
             if hourly:
-                nldas_hr_file = os.path.join(nldas_dir, '{}.parquet.gzip'.format(f))
-                ndf = pd.read_parquet(nldas_hr_file)
+                nldas_file = os.path.join(nldas_dir, '{}.parquet.gzip'.format(f))
+                ndf = pd.read_parquet(nldas_file)
                 nld_cols = ['{}_nl_hr'.format(c) for c in ndf.columns]
                 ndf.columns = nld_cols
             else:
@@ -100,19 +91,35 @@ def join_daily_timeseries(stations, sta_dir, nldas_dir, dst_dir, source, daymet_
             print('nldas_file {} is empty'.format(os.path.basename(nldas_file)))
             continue
 
+        # DAYMET
+
         daymet_file = os.path.join(daymet_dir, '{}.parquet'.format(f))
         try:
             dmet = pd.read_parquet(daymet_file)
-            dmet = dmet.rename(columns={'tmean': 'mean_temp'})
-            dmet = dmet[COMPARISON_VARS]
-            grd_cols = ['{}_dm'.format(c) for c in dmet.columns]
-            dmet.columns = grd_cols
+            dmet = dmet[DAYMET_VARS]
+            dmt_cols = ['{}_dm'.format(c) for c in dmet.columns]
+            dmet.columns = dmt_cols
 
         except (FileNotFoundError, pyarrow.lib.ArrowInvalid):
             print('daymet_file {} does not exist'.format(os.path.basename(daymet_file)))
             dmet = pd.DataFrame(index=ndf.index, columns=ndf.columns, data=np.ones_like(ndf.values) * np.nan)
-            grd_cols = [c.replace('_nl', '_dm') for c in dmet.columns]
-            dmet.columns = grd_cols
+            dmt_cols = [c.replace('_nl', '_dm') for c in dmet.columns]
+            dmet.columns = dmt_cols
+
+        # GRIDMET
+
+        gridmet_file = os.path.join(gridmet_dir, '{}.parquet'.format(f))
+        try:
+            gmet = pd.read_parquet(gridmet_file)
+            gmet = gmet[GRIDMET_VARS]
+            grd_cols = ['{}_gm'.format(c) for c in gmet.columns]
+            gmet.columns = grd_cols
+
+        except (FileNotFoundError, pyarrow.lib.ArrowInvalid):
+            print('gridmet_file {} does not exist'.format(os.path.basename(gridmet_file)))
+            gmet = pd.DataFrame(index=ndf.index, columns=ndf.columns, data=np.ones_like(ndf.values) * np.nan)
+            grd_cols = [c.replace('_nl', '_gm') for c in gmet.columns]
+            gmet.columns = grd_cols
 
         if obs_dir:
             sta_file = os.path.join(sta_dir, obs_dir, '{}.csv'.format(f))
@@ -141,28 +148,31 @@ def join_daily_timeseries(stations, sta_dir, nldas_dir, dst_dir, source, daymet_
                     sdf[sdf[col] > 43.0] = np.nan
                     sdf[sdf[col] < -40.0] = np.nan
 
-        cols = [c for c in OBS_TARGETS if c in sdf.columns]
-        check = sdf[cols].values
-        check[check == 0.0] = np.nan
-        if np.count_nonzero(np.isnan(check)) / check.size == 1.0:
-            print(f'{f} all zero or nan, skipping')
-            continue
+        if not clip_to_obs:
+            cols = [c for c in OBS_TARGETS if c in sdf.columns]
+            check = sdf[cols].values
+            check[check == 0.0] = np.nan
+            if np.count_nonzero(np.isnan(check)) / check.size == 1.0:
+                print(f'{f} all zero or nan, skipping')
+                continue
 
         valid_obs = sdf.shape[0]
+        target_cols = [c for c in sdf.columns if c in OBS_TARGETS]
+        sdf = sdf[target_cols]
+
         obs_cols = ['{}_obs'.format(c) for c in sdf.columns]
         sdf.columns = obs_cols
 
-        data_cols = obs_cols + grd_cols + nld_cols
-        all_cols = ['FID'] + data_cols
-
         if hourly:
             dmet = dmet.resample('h').ffill()
+            gmet = gmet.resample('h').ffill()
             sdf = sdf.resample('h').ffill()
-            data_cols = obs_cols + grd_cols + nld_cols
-            all_cols = ['FID'] + data_cols
+
+        data_cols = obs_cols + grd_cols + dmt_cols + nld_cols
+        all_cols = ['FID'] + data_cols
 
         try:
-            sdf = pd.concat([sdf, dmet, ndf], ignore_index=False, axis=1)
+            sdf = pd.concat([sdf, gmet, dmet, ndf], ignore_index=False, axis=1)
         except pd.errors.InvalidIndexError:
             print('Non-unique index in {}'.format(f))
             continue
@@ -180,7 +190,6 @@ def join_daily_timeseries(stations, sta_dir, nldas_dir, dst_dir, source, daymet_
             continue
 
         else:
-            sdf = sdf[sorted(sdf.columns)]
             sdf.to_parquet(out)
 
         print('wrote {} station {} to {}, {} records'.format(source, f, os.path.basename(out), valid_obs))
@@ -207,28 +216,30 @@ if __name__ == '__main__':
     if not os.path.exists(d):
         d = '/home/dgketchum/data/IrrigationGIS'
 
-    # fields = os.path.join(d, 'dads', 'met', 'stations', 'dads_stations_10FEB2025.csv')
-    # obs = os.path.join(d, 'dads', 'met', 'obs')
-    # src_ = 'madis'
+    fields = os.path.join(d, 'dads', 'met', 'stations', 'dads_stations_10FEB2025.csv')
+    obs = os.path.join(d, 'dads', 'met', 'obs')
+    src_ = 'madis'
 
-    fields = os.path.join(d, 'dads', 'met', 'stations', 'ghcn_CANUSA_stations_mgrs.csv')
-    obs = os.path.join(d, 'climate', 'ghcn', 'station_data')
-    src_ = 'ghcn'
+    # fields = os.path.join(d, 'dads', 'met', 'stations', 'ghcn_CANUSA_stations_mgrs.csv')
+    # obs = os.path.join(d, 'climate', 'ghcn', 'station_data')
+    # src_ = 'ghcn'
 
     dm = os.path.join(d, 'dads', 'met', 'gridded', 'processed_parquet', 'daymet')
+    gm = os.path.join(d, 'dads', 'met', 'gridded', 'processed_parquet', 'gridmet')
+
     joined = os.path.join(d, 'dads', 'met', 'joined')
     missing_list = os.path.join(d, 'dads', 'met', 'joined', 'missing_data.csv')
 
     clip_to_obs = True
     hourly_ = True
-    overwrite = True
+    overwrite = False
 
     if hourly_:
         nl = os.path.join(d, 'dads', 'met', 'gridded', 'raw_parquet', 'nldas2')
     else:
         nl = os.path.join(d, 'dads', 'met', 'gridded', 'processed_parquet', 'nldas2')
 
-    join_daily_timeseries(fields, obs, nl, joined, source=src_, daymet_dir=dm, overwrite=overwrite,
+    join_daily_timeseries(fields, obs, nl, joined, source=src_, daymet_dir=dm, gridmet_dir=gm, overwrite=overwrite,
                           bounds=(-180., 25., -60., 85.), shuffle=True, write_missing=missing_list, hourly=hourly_,
                           clip_to_obs=clip_to_obs)
 
