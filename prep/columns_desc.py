@@ -21,7 +21,9 @@ TERRAIN_FEATURES = ['aspect', 'elevation', 'slope', 'tpi_10000', 'tpi_22500', 't
 
 GEO_FEATURES = ['lat', 'lon', 'rsun', 'doy'] + LANDSAT_FEATURES + CDR_FEATURES + TERRAIN_FEATURES
 
-COMPARISON_FEATURES = ['mean_temp_dm', 'rsds_dm', 'vpd_dm']
+COMPARISON_FEATURES = ['prcp_dm', 'rsds_dm', 'tmax_dm', 'tmin_dm', 'vpd_dm',
+                       'prcp_gm', 'tmax_gm', 'tmin_gm', 'vpd_gm', 'rsds_gm', 'u2_gm']
+
 
 TARGETS = ['rsds_obs', 'mean_temp_obs', 'min_temp_obs', 'max_temp_obs', 'vpd_obs', 'prcp_obs',
            'rn_obs', 'u2_obs', 'doy_obs']

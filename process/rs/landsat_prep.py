@@ -164,18 +164,18 @@ if __name__ == '__main__':
 
     out = os.path.join(d, 'rs', 'landsat', 'station_data')
 
-    # glob_ = 'ghcn_CANUSA_stations_mgrs'
-    # fields = os.path.join(d, 'met', 'stations', 'ghcn_CANUSA_stations_mgrs.csv')
-    # rs = os.path.join(d, 'rs', 'ghcn_stations', 'landsat', 'tiles')
+    glob_ = 'ghcn_CANUSA_stations_mgrs'
+    fields = os.path.join(d, 'met', 'stations', 'ghcn_CANUSA_stations_mgrs.csv')
+    rs = os.path.join(d, 'rs', 'ghcn_stations', 'landsat', 'tiles')
 
-    glob_ = 'madis_mgrs_28OCT2024'
-    fields = os.path.join(d, 'met', 'stations', 'madis_mgrs_28OCT2024.csv')
-    rs = os.path.join(d, 'rs', 'madis_28OCT2024')
+    # glob_ = 'madis_mgrs_28OCT2024'
+    # fields = os.path.join(d, 'met', 'stations', 'madis_mgrs_28OCT2024.csv')
+    # rs = os.path.join(d, 'rs', 'madis_28OCT2024')
 
     # glob_ = 'missing_madis'
     # fields = os.path.join(d, 'met', 'stations', 'madis_mgrs_28OCT2024.csv')
     # rs = os.path.join(d, 'rs', 'madis_missing', 'landsat', 'tiles')
 
-    process_landsat(fields, rs, out, glob=glob_, shuffle=True, overwrite=False, extrapolate=True, index_col='fid')
+    process_landsat(fields, rs, out, glob=glob_, shuffle=True, overwrite=False, extrapolate=True, index_col='STAID')
 
 # ========================= EOF ====================================================================

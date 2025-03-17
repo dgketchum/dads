@@ -216,13 +216,13 @@ if __name__ == '__main__':
     if not os.path.exists(d):
         d = '/home/dgketchum/data/IrrigationGIS'
 
-    fields = os.path.join(d, 'dads', 'met', 'stations', 'dads_stations_10FEB2025.csv')
-    obs = os.path.join(d, 'dads', 'met', 'obs')
-    src_ = 'madis'
+    # fields = os.path.join(d, 'dads', 'met', 'stations', 'dads_stations_10FEB2025.csv')
+    # obs = os.path.join(d, 'dads', 'met', 'obs')
+    # src_ = 'madis'
 
-    # fields = os.path.join(d, 'dads', 'met', 'stations', 'ghcn_CANUSA_stations_mgrs.csv')
-    # obs = os.path.join(d, 'climate', 'ghcn', 'station_data')
-    # src_ = 'ghcn'
+    fields = os.path.join(d, 'dads', 'met', 'stations', 'ghcn_CANUSA_stations_mgrs.csv')
+    obs = os.path.join(d, 'climate', 'ghcn', 'station_data')
+    src_ = 'ghcn'
 
     dm = os.path.join(d, 'dads', 'met', 'gridded', 'processed_parquet', 'daymet')
     gm = os.path.join(d, 'dads', 'met', 'gridded', 'processed_parquet', 'gridmet')
