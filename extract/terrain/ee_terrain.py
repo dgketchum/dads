@@ -76,44 +76,6 @@ def get_terrain_image():
     return img
 
 
-def export_dem(tiles, check_dir=None):
-    """"""
-    ned = ee.Image('USGS/SRTMGL1_003').select(['elevation'])
-    elev = ee.Terrain.products(ned).select(['elevation'])
-    mgrs = ee.FeatureCollection('users/dgketchum/boundaries/MGRS_TILE')
-
-    for tile in tiles:
-
-        desc = 'dem_{}'.format(tile)
-
-        if check_dir:
-            outfile = os.path.join(check_dir, '{}.tif'.format(desc))
-            if os.path.exists(outfile):
-                print('{} exists'.format(outfile))
-                continue
-
-        clip = mgrs.filterMetadata('MGRS_TILE', 'equals', tile)
-        img = elev.clip(clip.first().geometry().buffer(1000))
-
-        task = ee.batch.Export.image.toCloudStorage(
-            image=img,
-            description=desc,
-            bucket='wudr',
-            fileNamePrefix=desc,
-            scale=250,
-            crs='EPSG:5071',
-            maxPixels=1e13)
-
-        try:
-            task.start()
-            print(desc)
-        except ee.ee_exception.EEException as e:
-            print('{}, waiting on '.format(e), desc, '......')
-            time.sleep(600)
-            task.start()
-            print(desc)
-
-
 if __name__ == '__main__':
     is_authorized()
 
@@ -123,10 +85,17 @@ if __name__ == '__main__':
 
     _bucket = 'gs://wudr'
 
-    sites = os.path.join(d, 'dads', 'met', 'stations', 'dads_stations_mgrs_10FEB2025.csv')
-    # sites = os.path.join(d, 'climate', 'ghcn', 'stations', 'ghcn_CANUSA_stations_mgrs.csv')
+    # sites = os.path.join(d, 'dads', 'met', 'stations', 'dads_stations_mgrs_10FEB2025.csv')
+    # stations = 'dads_stations_mgrs_10FEB2025'
+    # check = os.path.join(d, 'dads', 'dem', 'terrain', 'madis_stations')
+
+    sites = os.path.join(d, 'climate', 'ghcn', 'stations', 'ghcn_CANUSA_stations_mgrs.csv')
+    stations = 'ghcn_CANUSA_stations_mgrs'
+    check = os.path.join(d, 'dads', 'dem', 'terrain', 'ghcn_stations')
+
     # sites = os.path.join(d, 'dads', 'met', 'stations', 'madis_mgrs_28OCT2024.csv')
-    # sites = os.path.join(d, 'dads', 'dem', 'w17_tiles.csv')
+    # stations = 'madis_mgrs_28OCT2024'
+    # check = os.path.join(d, 'dads', 'dem', 'terrain', 'madis_stations')
 
     bounds = (-180., 25., -60., 85.)
     sites_df = pd.read_csv(sites)
@@ -138,17 +107,11 @@ if __name__ == '__main__':
     mgrs_tiles = list(set(tiles))
     mgrs_tiles.sort()
 
-    chk = '/media/nvm/IrrigationGIS/dads/dem/dem_250'
-    # export_dem(mgrs_tiles, chk)
-
     pt_buffer = 100
-    stations = 'dads_stations_mgrs_10FEB2025'
-    # stations = 'ghcn_CANUSA_stations_mgrs'
     pts = 'projects/ee-dgketchum/assets/dads/{}'.format(stations)
     file_ = '{}_{}'.format(stations, pt_buffer)
-    check = os.path.join(d, 'dads', 'dem', 'terrain', 'madis_stations')
 
     export_terrain_features(file_prefix=file_, points_layer=pts, buffer_=pt_buffer,
-                            tiles=mgrs_tiles, check_dir=None)
+                            tiles=mgrs_tiles, check_dir=check)
 
 # ========================= EOF ====================================================================
