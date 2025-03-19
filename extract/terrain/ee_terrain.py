@@ -4,6 +4,8 @@ import time
 
 import ee
 import pandas as pd
+from utils.station_parameters import station_par_map
+
 
 sys.path.insert(0, os.path.abspath('../..'))
 from extract.rs.earth_engine.ee_utils import is_authorized
@@ -14,6 +16,7 @@ BOUNDARIES = 'users/dgketchum/boundaries'
 
 
 def export_terrain_features(file_prefix, points_layer, buffer_, tiles, check_dir=None):
+    """"""
     points = ee.FeatureCollection(points_layer)
     points = points.map(lambda x: x.buffer(buffer_))
     mgrs = ee.FeatureCollection('users/dgketchum/boundaries/MGRS_TILE')
@@ -91,16 +94,19 @@ if __name__ == '__main__':
 
     sites = os.path.join(d, 'climate', 'ghcn', 'stations', 'ghcn_CANUSA_stations_mgrs.csv')
     stations = 'ghcn_CANUSA_stations_mgrs'
+    stype = 'ghcn'
     check = os.path.join(d, 'dads', 'dem', 'terrain', 'ghcn_stations')
 
     # sites = os.path.join(d, 'dads', 'met', 'stations', 'madis_mgrs_28OCT2024.csv')
     # stations = 'madis_mgrs_28OCT2024'
     # check = os.path.join(d, 'dads', 'dem', 'terrain', 'madis_stations')
 
+    kw = station_par_map(stype)
     bounds = (-180., 25., -60., 85.)
     sites_df = pd.read_csv(sites)
-    sites_df = sites_df[(sites_df['latitude'] < bounds[3]) & (sites_df['latitude'] >= bounds[1])]
-    sites_df = sites_df[(sites_df['longitude'] < bounds[2]) & (sites_df['longitude'] >= bounds[0])]
+    w, s, e, n = bounds
+    sites_df = sites_df[(sites_df[kw['lat']] < n) & (sites_df[kw['lat']] >= s)]
+    sites_df = sites_df[(sites_df[kw['lon']] < e) & (sites_df[kw['lon']] >= w)]
 
     tiles = sites_df['MGRS_TILE'].unique().tolist()
     tiles = [m for m in tiles if isinstance(m, str)]

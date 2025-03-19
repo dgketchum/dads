@@ -24,15 +24,15 @@ GEO_FEATURES = ['lat', 'lon', 'rsun', 'doy'] + LANDSAT_FEATURES + CDR_FEATURES +
 COMPARISON_FEATURES = ['prcp_dm', 'rsds_dm', 'tmax_dm', 'tmin_dm', 'vpd_dm',
                        'prcp_gm', 'tmax_gm', 'tmin_gm', 'vpd_gm', 'rsds_gm', 'u2_gm']
 
-
-TARGETS = ['rsds_obs', 'mean_temp_obs', 'min_temp_obs', 'max_temp_obs', 'vpd_obs', 'prcp_obs',
-           'rn_obs', 'u2_obs', 'doy_obs']
+TARGETS = ['rsds_obs', 'min_temp_obs', 'max_temp_obs', 'vpd_obs', 'prcp_obs',
+           'rn_obs', 'u2_obs', 'doy_obs', 'dt_obs']
 
 ADDED_FEATURES = [
     'doy_sin',
     'doy_cos',
     'hour_sin',
     'hour_cos',
+    'time_diff'
 ]
 
 PTH_COLUMNS = TARGETS + COMPARISON_FEATURES + MET_FEATURES + GEO_FEATURES + ADDED_FEATURES

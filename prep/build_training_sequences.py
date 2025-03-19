@@ -8,31 +8,19 @@ import torch
 from tqdm import tqdm
 
 from utils.station_parameters import station_par_map
-from prep.columns_desc import PTH_COLUMNS, TARGETS, COMPARISON_FEATURES
+from prep.columns_desc import PTH_COLUMNS, TARGETS, COMPARISON_FEATURES, TERRAIN_FEATURES
 
 
-def process_station(fid, row, ts_dir, landsat_dir, cdr_dir, dem_dir, out_dir, overwrite, chunk_size=72):
+def process_station(fid, row, ts_dir, landsat_dir, cdr_dir, dem_dir, terrain_dir, out_dir, overwrite, chunk_size=72):
     """"""
-    missing = {'sol_file': 0,
-               'station_file': 0,
-               'landsat_file': 0,
-               'snotel': 0,
-               'landsat_obs_time_misalign': 0,
-               'sol_fid': 0,
-               'cdr_file': 0,
-               'exists': 0,
-               'columns': 0}
 
-    if row['source'] == 'snotel':
-        missing['snotel'] += 1
+    missing = file_check(fid, ts_dir, landsat_dir, cdr_dir, dem_dir, terrain_dir)
+
+    if any(v > 0 for k, v in missing.items() if k not in ['exists', 'columns']):
         return fid, None, missing
 
+    # Observed Meteorology ==============================================================================
     sta_file = os.path.join(ts_dir, '{}.parquet'.format(fid))
-    if not os.path.exists(sta_file):
-        missing['station_file'] += 1
-        return fid, None, missing
-
-    #  ========= Observed and Gridded Meteorology Record =========
     ts = pd.read_parquet(sta_file)
 
     try:
@@ -40,12 +28,8 @@ def process_station(fid, row, ts_dir, landsat_dir, cdr_dir, dem_dir, out_dir, ov
     except ValueError:
         return fid, None, missing
 
-    # ========= Landsat Record =============
+    # Landsat Surface Reflectance/Radiance ==============================================================
     landsat_file = os.path.join(landsat_dir, '{}.csv'.format(fid))
-    if not os.path.exists(landsat_file):
-        missing['landsat_file'] += 1
-        return fid, None, missing
-
     landsat = pd.read_csv(landsat_file, index_col='Unnamed: 0', parse_dates=True)
     landsat = landsat.resample('h').ffill()
     idx = [i for i in landsat.index if i in ts.index]
@@ -54,12 +38,8 @@ def process_station(fid, row, ts_dir, landsat_dir, cdr_dir, dem_dir, out_dir, ov
         return fid, None, missing
     ts.loc[idx, landsat.columns] = landsat.loc[idx, landsat.columns]
 
-    # ========= NOAA Climate Data Record ===========
-    # currently will find non-unique original FID file in case original FID is non-unique integer
+    # NOAA Climate Data Record ==========================================================================
     cdr_file = os.path.join(cdr_dir, '{}.csv'.format(fid))
-    if not os.path.exists(cdr_file):
-        missing['cdr_file'] += 1
-        return fid, None, missing
     cdr = pd.read_csv(cdr_file, index_col='Unnamed: 0', parse_dates=True)
     cdr = cdr.resample('h').ffill()
     idx = [i for i in cdr.index if i in ts.index]
@@ -68,19 +48,28 @@ def process_station(fid, row, ts_dir, landsat_dir, cdr_dir, dem_dir, out_dir, ov
         return fid, None, missing
     ts.loc[idx, cdr.columns] = cdr.loc[idx, cdr.columns]
 
-    # =========== Terrain-Adjusted Clear Sky Solar Radiation ================
+    # Clear-sky Solar Irradiance ========================================================================
     sol_file = os.path.join(dem_dir, f'{fid}.csv')
     try:
         sol_df = pd.read_csv(sol_file, index_col=0)
         sol = sol_df[fid].to_dict()
         ts['doy'] = ts.index.dayofyear
         ts['rsun'] = ts['doy'].map(sol) * 0.0036
-    except FileNotFoundError:
-        missing['sol_file'] += 1
-        return fid, None, missing
     except KeyError:
         missing['sol_fid'] += 1
         return fid, None, missing
+
+    # Terrain Information ===============================================================================
+    terrain_file = os.path.join(terrain_dir, f'{fid}.csv')
+    try:
+        terrain_df = pd.read_csv(terrain_file, index_col=0).T.iloc[0].to_dict()
+        for t_param in TERRAIN_FEATURES:
+            ts[t_param] = terrain_df[t_param]
+    except (KeyError, pd.errors.EmptyDataError):
+        missing['terrain_fid'] += 1
+        return fid, None, missing
+
+    ts['dt_obs'] = [dt.strftime('%Y%m%d') for dt in ts.index]
 
     ts['time_diff'] = ts.index.to_series().diff().dt.total_seconds() / 3600
 
@@ -93,6 +82,11 @@ def process_station(fid, row, ts_dir, landsat_dir, cdr_dir, dem_dir, out_dir, ov
     ts['hour_cos'] = torch.cos(2 * torch.pi * hour / 24)
 
     ts = ts.loc[~ts.index.duplicated(keep='first')]
+
+    add_missing = [c for c in TARGETS if c not in ts.columns]
+    for missed in add_missing:
+        ts[missed] = np.nan
+
     try:
         ts.dropna(how='all', subset=TARGETS, axis=0, inplace=True)
     except TypeError:
@@ -102,7 +96,7 @@ def process_station(fid, row, ts_dir, landsat_dir, cdr_dir, dem_dir, out_dir, ov
         return fid, None, missing
 
     try:
-        ts = ts[PTH_COLUMNS + ['time_diff']].astype(float)
+        ts = ts[PTH_COLUMNS].astype(float)
     except KeyError:
         missing['columns'] += 1
         return fid, None, missing
@@ -159,12 +153,55 @@ def process_station(fid, row, ts_dir, landsat_dir, cdr_dir, dem_dir, out_dir, ov
     return fid, stats, missing
 
 
+def file_check(fid, ts_dir, landsat_dir, cdr_dir, sol_dir, terrain_dir):
+    """"""
+    missing = {'sol_file': 0,
+               'terrain_file': 0,
+               'terrain_fid': 0,
+               'station_file': 0,
+               'landsat_file': 0,
+               'snotel': 0,
+               'landsat_obs_time_misalign': 0,
+               'cdr_obs_time_misalign': 0,
+               'sol_fid': 0,
+               'cdr_file': 0,
+               'exists': 0,
+               'columns': 0}
+
+    sta_file = os.path.join(ts_dir, '{}.parquet'.format(fid))
+    if not os.path.exists(sta_file):
+        missing['station_file'] += 1
+        return missing
+
+    landsat_file = os.path.join(landsat_dir, '{}.csv'.format(fid))
+    if not os.path.exists(landsat_file):
+        missing['landsat_file'] += 1
+        return missing
+
+    cdr_file = os.path.join(cdr_dir, '{}.csv'.format(fid))
+    if not os.path.exists(cdr_file):
+        missing['cdr_file'] += 1
+        return missing
+
+    sol_file = os.path.join(sol_dir, f'{fid}.csv')
+    if not os.path.exists(sol_file):
+        missing['sol_file'] += 1
+        return missing
+
+    terrain_file = os.path.join(terrain_dir, f'{fid}.csv')
+    if not os.path.exists(terrain_file):
+        missing['terrain_file'] += 1
+        return missing
+
+    return missing
+
+
 def process_station_wrapper(args):
     return process_station(*args)
 
 
-def join_training(stations, ts_dir, landsat_dir, cdr, dem_dir, out_dir, bounds=None, debug=False, shuffle=False,
-                  overwrite=False, sample_frac=1.0, workers=4, chunk_size=72, source='madis'):
+def join_training(stations, ts_dir, landsat_dir, cdr, sol_dir, terrain_dir, out_dir, bounds=None, debug=False,
+                  shuffle=False, overwrite=False, sample_frac=1.0, workers=4, chunk_size=72, source='madis'):
     """"""
     kw = station_par_map(source)
 
@@ -188,7 +225,7 @@ def join_training(stations, ts_dir, landsat_dir, cdr, dem_dir, out_dir, bounds=N
 
     fids = [str(f) for f in stations.index.to_list()]
 
-    args = [(f, row, ts_dir, landsat_dir, cdr, dem_dir, out_dir, overwrite, chunk_size)
+    args = [(f, row, ts_dir, landsat_dir, cdr, sol_dir, terrain_dir, out_dir, overwrite, chunk_size)
             for f, row in zip(fids, rows)]
 
     if debug:
@@ -204,6 +241,7 @@ def join_training(stations, ts_dir, landsat_dir, cdr, dem_dir, out_dir, bounds=N
     combined_stats = {}
     total_missing = {'sol_file': 0,
                      'station_file': 0,
+                     'terrain_file': 0,
                      'landsat_file': 0,
                      'snotel': 0,
                      'landsat_obs_time_misalign': 0,
@@ -230,16 +268,17 @@ if __name__ == '__main__':
     if not os.path.exists(d):
         d = '/home/dgketchum/data/IrrigationGIS/dads'
 
-    # glob_ = 'dads_stations_10FEB2025'
-    # _source = 'madis'
+    glob_ = 'dads_stations_10FEB2025'
+    _source = 'madis'
 
-    glob_ = 'ghcn_CANUSA_stations_mgrs'
-    _source = 'ghcn'
+    # glob_ = 'ghcn_CANUSA_stations_mgrs'
+    # _source = 'ghcn'
 
     fields = os.path.join(d, 'met', 'stations', '{}.csv'.format(glob_))
     landsat_ = os.path.join(d, 'rs', 'landsat', 'station_data')
     cdr_ = os.path.join(d, 'rs', 'cdr', 'joined')
     solrad = os.path.join(d, 'dem', 'rsun_tables', 'station_rsun')
+    terrain = os.path.join(d, 'dem', 'terrain', 'station_data')
 
     zoran = '/data/ssd2/dads/training'
     nvm = '/media/nvm/training'
@@ -262,7 +301,7 @@ if __name__ == '__main__':
 
     print('========================== writing joined training data ==========================')
 
-    join_training(fields, sta, landsat_, cdr_, solrad, training, bounds=None, debug=True, shuffle=True,
-                  overwrite=overwrite_, sample_frac=1.0, workers=12, chunk_size=72, source=_source)
+    join_training(fields, sta, landsat_, cdr_, solrad, terrain, training, bounds=None, debug=False, shuffle=True,
+                  overwrite=overwrite_, sample_frac=1.0, workers=16, chunk_size=72, source=_source)
 
 # ========================= EOF ==============================================================================

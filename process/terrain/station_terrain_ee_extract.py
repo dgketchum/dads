@@ -52,21 +52,16 @@ if __name__ == '__main__':
 
     out = os.path.join(d, 'dem', 'terrain', 'station_data')
 
-    # fields = os.path.join(d, 'met', 'stations', 'dads_stations_res_elev_mgrs.csv')
-    # ee_out = os.path.join(d, 'dem', 'terrain', 'madis_stations')
-    # write_station_terrain(fields, ee_out, out, shuffle=True, overwrite=False, index_col='fid')
-
-    # fields = os.path.join(d, 'met', 'stations', 'madis_mgrs_28OCT2024.csv')
-    # ee_out = os.path.join(d, 'dem', 'terrain', 'new_madis')
-    # glb = 'missing_madis_100'
-    # coords_ = ['lat', 'lon']
-    # write_station_terrain(fields, ee_out, out, shuffle=True, overwrite=False,
-    #                       index_col='fid', glob_=glb, coords=coords_)
+    # fields = os.path.join(d, 'met', 'stations', 'dads_stations_mgrs_10FEB2025.csv')
+    # ee_out = os.path.join(d, 'dem', 'terrain', 'dads_10FEB')
+    # glb = 'dads_stations_mgrs_10FEB2025_100'
+    # coords_ = ['latitude', 'longitude']
 
     fields = os.path.join(d, 'met', 'stations', 'ghcn_CANUSA_stations_mgrs.csv')
     ee_out = os.path.join(d, 'dem', 'terrain', 'ghcn_stations')
     glb = 'ghcn_CANUSA_stations_mgrs_100'
     coords_ = ['LAT', 'LON']
+
     write_station_terrain(fields, ee_out, out, shuffle=True, overwrite=False,
                           index_col='STAID', coords=coords_, glob_=glb)
 
