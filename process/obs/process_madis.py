@@ -1,3 +1,4 @@
+import concurrent.futures
 import glob
 import os
 
@@ -8,142 +9,16 @@ import pytz
 import seaborn as sns
 from timezonefinder import TimezoneFinder
 
-from utils.calc_eto import calc_asce_params, calc_asce_params_longname
+from utils.calc_eto import calc_asce_params
 from utils.station_parameters import station_par_map
-from utils.qaqc_calc import calc_rso
-
-
-def read_hourly_data(stations, madis_src, madis_dst, rsun_tables, shuffle=False, bounds=None, overwrite=False,
-                     qaqc=False, plot=None, alt_src=None, stype='madis'):
-
-    kw = station_par_map(stype)
-
-    station_list = pd.read_csv(stations, index_col=kw['index'])
-
-    if shuffle:
-        station_list = station_list.sample(frac=1)
-
-    if bounds:
-        w, s, e, n = bounds
-        station_list = station_list[(station_list['latitude'] < n) & (station_list['latitude'] >= s)]
-        station_list = station_list[(station_list['longitude'] < e) & (station_list['longitude'] >= w)]
-    else:
-        # NLDAS-2 extent
-        ln = station_list.shape[0]
-        w, s, e, n = (-125.0, 25.0, -67.0, 53.0)
-        station_list = station_list[(station_list['latitude'] < n) & (station_list['latitude'] >= s)]
-        station_list = station_list[(station_list['longitude'] < e) & (station_list['longitude'] >= w)]
-        print('dropped {} stations outside NLDAS-2 extent'.format(ln - station_list.shape[0]))
-
-    record_ct, obs_ct = station_list.shape[0], 0
-
-    for i, (fid, row) in enumerate(station_list.iterrows(), start=1):
-
-        # if not fid.startswith('001'):
-        #     continue
-
-        lon, lat, elv = row[kw['lon']], row[kw['lat']], row[kw['elev']]
-        # print('{}: {} of {}; {:.2f}, {:.2f}'.format(fid, i, record_ct, lat, lon))
-
-        out_file = os.path.join(madis_dst, '{}.csv'.format(fid))
-        if os.path.exists(out_file) and not overwrite:
-            # print('{} exists, skipping'.format(fid))
-            continue
-
-        station_dir = os.path.join(madis_src, fid)
-        if not os.path.isdir(station_dir):
-            if alt_src:
-                station_dir = os.path.join(alt_src, fid)
-            if not os.path.isdir(station_dir):
-                # print(f'{fid} station dir does not exist')
-                continue
-
-        files_ = [os.path.join(station_dir, f) for f in os.listdir(station_dir)]
-        years = [int(f.split('.')[0].split('_')[-1]) for f in files_ if '(copy)' not in f]
-
-        rsun_file = os.path.join(rsun_tables, '{}.csv'.format(fid))
-        if not os.path.exists(rsun_file):
-            print('rsun {} does not exist'.format(os.path.basename(rsun_file)))
-            continue
-
-        try:
-            rsun = pd.read_csv(rsun_file, index_col=0)
-            rsun = (rsun[fid] * 0.0036)
-            if np.any(np.isnan(rsun.values)):
-                raise ValueError
-            rsun = rsun.to_dict()
-        except KeyError:
-            print('station {} not in rsun table {}'.format(fid, os.path.basename(rsun_file)))
-            continue
-        except ValueError:
-            print('station {} rsun table {} has nan'.format(fid, os.path.basename(rsun_file)))
-            continue
-
-        df, first, local_tz = None, True, None
-        for file_, yr in zip(files_, years):
-
-            try:
-                c = pd.read_csv(file_, index_col=0, parse_dates=True)
-            except pd.errors.EmptyDataError:
-                print(f'{os.path.basename(file_)} is empty')
-                continue
-
-            c = c.sort_index()
-            c['doy'] = c.index.dayofyear
-
-            if first:
-                tf = TimezoneFinder()
-                timezone_str = tf.timezone_at(lng=lon, lat=lat)
-                local_tz = pytz.timezone(timezone_str)
-                if timezone_str is None:
-                    raise ValueError(f"Could not determine timezone for coordinates ({lat}, {lon})")
-
-            c.index = c.index.tz_localize('GMT')
-            c.index = c.index.tz_convert(local_tz)
-
-            try:
-                c['temperature'] -= 273.15
-                es = 0.6108 * np.exp(17.27 * c['temperature'] / (c['temperature'] + 237.3))
-                c['ea'] = (c['relHumidity'] / 100) * es
-                c['rsds'] = c['solarRadiation'] * 0.0036
-                c['wind'] = c['windSpeed']
-            except KeyError:
-                print('a met variable is missing from {}, {}'.format(os.path.basename(file_), yr))
-                continue
-
-            c = process_daily_data(c, rsun, lat_=lat, elev_=elv, zw_=2.0, qaqc=qaqc)
-
-            if c is None:
-                continue
-
-            if plot and c.shape[0] > 200:
-                out_plot_file = os.path.join(plot.format('to_check'), '{}_{}.png'.format(fid, yr))
-                plot_daily_data(c, fid, yr, out_plot_file)
-
-            if first:
-                df = c.copy()
-                first = False
-            else:
-                df = pd.concat([df, c], ignore_index=False, axis=0)
-
-        if df is None:
-            # print('{}, 0 records\n'.format(fid))
-            continue
-
-        df.to_csv(out_file)
-        obs_ct += df.shape[0]
-        print('wrote {}, {} records, {} total\n'.format(fid, df.shape[0], obs_ct))
 
 
 def process_daily_data(hourly_df, rsun_data, lat_, elev_, zw_=2.0, qaqc=False):
-    """"""
     hourly_df['date'] = hourly_df.index.date
     hourly_df['hour'] = hourly_df.index.hour
 
     valid_obs_count = hourly_df[['date']].groupby('date').agg({'date': 'count'}).copy()
     if np.nanmax(valid_obs_count['date']) > 24:
-        # print('found multi-hourly obs in {}'.format(hourly_df.index[0].year))
-        # this groupby is to force a maximum of one entry per hour
         hourly_df = hourly_df.groupby(['date', 'hour']).agg(
             temperature=('temperature', 'mean'),
             precipAccum=('precipAccum', 'mean'),
@@ -151,14 +26,19 @@ def process_daily_data(hourly_df, rsun_data, lat_, elev_, zw_=2.0, qaqc=False):
             rsds=('rsds', 'mean'),
             ea=('ea', 'mean'),
             wind=('wind', 'mean'),
+            wind_dir=('wind_dir', 'mean'),
             doy=('doy', 'first'),
         )
-
         hourly_df.reset_index(inplace=True)
-        hourly_df['datetime'] = pd.to_datetime(
-            hourly_df['date'].astype(str) + ' ' + hourly_df['hour'].astype(str) + ':00:00')
-        hourly_df.set_index('datetime', inplace=True)
-        hourly_df.drop(columns=['date', 'hour'], inplace=True)
+        if 'date' in hourly_df.columns and 'hour' in hourly_df.columns:
+            hourly_df['datetime'] = pd.to_datetime(
+                hourly_df['date'].astype(str) + ' ' + hourly_df['hour'].astype(str) + ':00:00', errors='coerce')
+            hourly_df.set_index('datetime', inplace=True)
+            hourly_df.drop(columns=['date', 'hour'], inplace=True)
+
+    wind_direction_rad = np.deg2rad(hourly_df['wind_dir'])
+    hourly_df['u'] = hourly_df['wind'] * (-np.sin(wind_direction_rad))
+    hourly_df['v'] = hourly_df['wind'] * (-np.cos(wind_direction_rad))
 
     hourly_df['precip_increment'] = hourly_df['precipAccum'].diff()
     hourly_df.loc[hourly_df['precip_increment'] < 0, 'precip_increment'] = 0
@@ -167,73 +47,285 @@ def process_daily_data(hourly_df, rsun_data, lat_, elev_, zw_=2.0, qaqc=False):
     if qaqc:
         hourly_df.loc[hourly_df['rsds'] < 0, 'rsds'] = np.nan
         hourly_df.loc[hourly_df['rsds'] > 1500., 'rsds'] = np.nan
-
         hourly_df.loc[hourly_df['wind'] < 0., 'wind'] = np.nan
         hourly_df.loc[hourly_df['wind'] > 200., 'wind'] = np.nan
-
         hourly_df.loc[hourly_df['temperature'] > 57.22, 'temperature'] = np.nan
         hourly_df.loc[hourly_df['temperature'] < -59.44, 'temperature'] = np.nan
-
         hourly_df.loc[hourly_df['relHumidity'] < 0.0, 'relHumidity'] = np.nan
         hourly_df.loc[hourly_df['relHumidity'] < 0.0, 'ea'] = np.nan
         hourly_df.loc[hourly_df['relHumidity'] > 100.0, 'relHumidity'] = np.nan
         hourly_df.loc[hourly_df['relHumidity'] > 100.0, 'ea'] = np.nan
 
+    if hourly_df.empty:
+        return None
+
     hourly_df['date'] = hourly_df.index.date
     valid_obs_count = hourly_df[['date']].groupby('date').agg({'date': 'count'}).copy()
 
     daily_df = hourly_df.groupby('date').agg(
-        max_temp=('temperature', 'max'),
-        min_temp=('temperature', 'min'),
-        mean_temp=('temperature', 'mean'),
+        tmax=('temperature', 'max'),
+        tmin=('temperature', 'min'),
+        tmean=('temperature', 'mean'),
         prcp=('precip_increment', 'sum'),
         rsds=('rsds', 'sum'),
         ea=('ea', 'mean'),
         wind=('wind', 'mean'),
+        wind_dir=('wind_dir', 'mean'),
+        u=('u', 'mean'),
+        v=('v', 'mean'),
         doy=('doy', 'first')
     ).copy()
 
     daily_df['obs_ct'] = valid_obs_count
     daily_df = daily_df[daily_df['obs_ct'] >= 18]
+
+    if daily_df.empty:
+        return None
+
     daily_df.drop(columns=['obs_ct'], inplace=True)
     daily_df.index = pd.DatetimeIndex(daily_df.index)
 
-    if daily_df.empty or daily_df.shape[0] < 20:
+    if daily_df.empty:
         return None
 
     if qaqc:
+        if not all(col in daily_df.columns for col in ['doy', 'ea', 'rsds']):
+            return daily_df
+
         daily_df['month'] = daily_df.index.month
-        daily_df['doy'] = daily_df.index.dayofyear
-        rso = calc_rso(lat_, elev_, daily_df['doy'], daily_df['month'], daily_df['ea'], daily_df['rsds'])
-        daily_df['rso'] = rso * 0.0864
         daily_df['rsun'] = daily_df['doy'].map(rsun_data)
+        daily_df.loc[daily_df['rsun'].isna(), 'rsun'] = 0
 
-        daily_df['rolling_rsds_max'] = daily_df['rsds'].rolling(15).max()
-        daily_df['rolling_rsds_max'] = daily_df['rolling_rsds_max'].bfill()
-        daily_df['rolling_rsds_max'] = daily_df['rolling_rsds_max'].ffill()
+        if daily_df['rsds'].notna().any():
+            daily_df['rolling_rsds_max'] = daily_df['rsds'].rolling(15, min_periods=1).max()
+            daily_df['rolling_rsds_max'] = daily_df['rolling_rsds_max'].bfill().ffill()
+            daily_df.loc[
+                daily_df['rolling_rsds_max'].isna() | (daily_df['rolling_rsds_max'] == 0), 'rolling_rsds_max'] = np.nan
+            daily_df['rsds'] *= daily_df['rsun'] / daily_df['rolling_rsds_max']
+        else:
+            daily_df['rsds'] = np.nan
 
-        daily_df['rsds'] *= daily_df['rsun'] / daily_df['rolling_rsds_max']
+    required_asce_cols = ['max_temp', 'min_temp', 'rsds', 'wind', 'ea']
+    if not all(col in daily_df.columns for col in required_asce_cols):
+        return daily_df
 
-        pre_clean_nan_ct = np.count_nonzero(np.isnan(daily_df['rsds']))
-        daily_df.loc[daily_df['rsds'] > (1.2 * daily_df['rso']), 'rsds'] = np.nan
-        post_clean_nan_ct = np.count_nonzero(np.isnan(daily_df['rsds']))
-        # print('Removed {} rs records'.format(post_clean_nan_ct - pre_clean_nan_ct))
+    asce_params = daily_df.apply(calc_asce_params, lat=lat_, elev=elev_, zw=zw_, axis=1)
 
-    # asce_params = daily_df.parallel_apply(calc_asce_params, lat=lat_, elev=elev_, zw=10, axis=1)
-
-    try:
-        asce_params = daily_df.apply(calc_asce_params, lat=lat_, elev=elev_, zw=zw_, axis=1)
-    except KeyError:
-        asce_params = daily_df.apply(calc_asce_params_longname, lat=lat_, elev=elev_, zw=zw_, axis=1)
-
-    try:
-        daily_df[['mean_temp', 'vpd', 'rn', 'u2', 'eto']] = pd.DataFrame(asce_params.tolist(),
-                                                                         index=daily_df.index)
-    except (ValueError, KeyError) as e:
-        print(e)
-        return None
+    if not asce_params.empty:
+        asce_df = pd.DataFrame(asce_params.tolist(), index=daily_df.index)
+        expected_cols = ['mean_temp', 'vpd', 'rn', 'u2', 'eto']
+        asce_df.columns = expected_cols[:len(asce_df.columns)]
+        for col in asce_df.columns:
+            if col in expected_cols:
+                daily_df[col] = asce_df[col]
 
     return daily_df
+
+
+def process_single_station(fid, row, kw, madis_src, madis_dst, rsun_tables, overwrite, qaqc, plot, alt_src):
+    """"""
+    lon, lat, elv = row[kw['lon']], row[kw['lat']], row[kw['elev']]
+    out_file = os.path.join(madis_dst, '{}.parquet'.format(fid))
+
+    if os.path.exists(out_file) and not overwrite:
+        return fid, 'exists', 'File exists', 0
+
+    station_dir = os.path.join(madis_src, fid)
+    if not os.path.isdir(station_dir):
+        if alt_src:
+            station_dir = os.path.join(alt_src, fid)
+        if not os.path.isdir(station_dir):
+            return fid, 'skipped', 'Source directory not found', 0
+
+    files_ = [os.path.join(station_dir, f) for f in os.listdir(station_dir)]
+    years = []
+    valid_files = []
+    for f in files_:
+        year = int(os.path.basename(f).split('.')[0].split('_')[-1])
+        years.append(year)
+        valid_files.append(f)
+
+    if not valid_files:
+        return fid, 'skipped', 'No valid data files found', 0
+
+    rsun_file = os.path.join(rsun_tables, '{}.csv'.format(fid))
+    if not os.path.exists(rsun_file):
+        return fid, 'error', f'RSun file missing: {os.path.basename(rsun_file)}', 0
+
+    rsun = pd.read_csv(rsun_file, index_col=0)
+    if fid not in rsun.columns:
+        raise KeyError(f"Station {fid} not found in RSun table {os.path.basename(rsun_file)}")
+    rsun = (rsun[fid] * 0.0036)
+    if np.any(np.isnan(rsun.values)):
+        raise ValueError("NaN values found in RSun data")
+    rsun = rsun.to_dict()
+
+    df, first, local_tz = None, True, None
+    tf = TimezoneFinder()
+
+    for file_, yr in zip(valid_files, years):
+        try:
+            c = pd.read_csv(file_, index_col=0, parse_dates=True, low_memory=False)
+        except pd.errors.EmptyDataError:
+            continue
+
+        if c.empty:
+            continue
+
+        if not isinstance(c.index, pd.DatetimeIndex):
+            continue
+
+        c = c.sort_index()
+        c['doy'] = c.index.dayofyear
+
+        if first:
+            timezone_str = tf.timezone_at(lng=lon, lat=lat)
+            if timezone_str is None:
+                return fid, 'error', f"Could not determine timezone for coords ({lat}, {lon})", 0
+            local_tz = pytz.timezone(timezone_str)
+
+        if c.index.tz is None:
+            c.index = c.index.tz_localize('GMT')
+        c.index = c.index.tz_convert(local_tz)
+
+        required_cols = ['temperature', 'relHumidity', 'solarRadiation', 'windSpeed', 'windDir', 'precipAccum']
+        if not any(col in c.columns for col in required_cols):
+            continue
+
+        for col in required_cols:
+            if col not in c.columns:
+                c[col] = np.nan
+
+        c['temperature'] -= 273.15
+        es = 0.6108 * np.exp(17.27 * c['temperature'] / (c['temperature'] + 237.3))
+        c['ea'] = (c['relHumidity'] / 100) * es
+        c['rsds'] = c['solarRadiation'] * 0.0036
+        c['wind'] = c['windSpeed']
+        c['wind_dir'] = c['windDir']
+
+        c_processed = process_daily_data(c, rsun, lat_=lat, elev_=elv, zw_=2.0, qaqc=qaqc)
+
+        if c_processed is None or c_processed.empty:
+            continue
+
+        if plot and not c_processed.empty:
+            out_plot_dir = plot.format('to_check')
+            os.makedirs(out_plot_dir, exist_ok=True)
+            out_plot_file = os.path.join(out_plot_dir, '{}_{}.png'.format(fid, yr))
+            # plot_daily_data(c_processed, fid, yr, out_plot_file) # Assumed external function
+
+        if first:
+            df = c_processed.copy()
+            first = False
+        else:
+            df_cols = set(df.columns)
+            c_cols = set(c_processed.columns)
+            if df_cols != c_cols:
+                all_cols = df_cols.union(c_cols)
+                df = df.reindex(columns=all_cols)
+                c_processed = c_processed.reindex(columns=all_cols)
+            df = pd.concat([df, c_processed], ignore_index=False, axis=0)
+
+    if df is None or df.empty:
+        return fid, 'nodata', 'No processable records found across all years', 0
+
+    df = df.sort_index()
+    df.to_parquet(out_file)
+    obs_ct = df.shape[0]
+    return fid, 'success', f'Wrote {obs_ct} records', obs_ct
+
+
+def read_hourly_data(stations, madis_src, madis_dst, rsun_tables, shuffle=False, bounds=None, overwrite=False,
+                     qaqc=False, plot=None, alt_src=None, stype='madis', n_workers=4, debug=False):
+    kw = station_par_map(stype)
+    station_list = pd.read_csv(stations, index_col=kw['index'])
+
+    if shuffle:
+        station_list = station_list.sample(frac=1)
+
+    if bounds:
+        w, s, e, n = bounds
+        station_list = station_list[(station_list[kw['lat']] < n) & (station_list[kw['lat']] >= s)]
+        station_list = station_list[(station_list[kw['lon']] < e) & (station_list[kw['lon']] >= w)]
+    else:
+        w, s, e, n = (-125.0, 25.0, -67.0, 53.0)
+        station_list = station_list[(station_list[kw['lat']] < n) & (station_list[kw['lat']] >= s)]
+        station_list = station_list[(station_list[kw['lon']] < e) & (station_list[kw['lon']] >= w)]
+
+    total_stations_to_process = station_list.shape[0]
+    if total_stations_to_process == 0:
+        return
+
+    processed_count = 0
+    success_count = 0
+    skipped_count = 0
+    error_count = 0
+    nodata_count = 0
+    total_obs_ct = 0
+    exists_count = 0
+
+    os.makedirs(madis_dst, exist_ok=True)
+
+    if debug:
+        for i, (fid, row) in enumerate(station_list.iterrows(), start=1):
+
+            if fid != 'COVM':
+                continue
+
+            result = process_single_station(fid, row, kw, madis_src, madis_dst, rsun_tables, overwrite, qaqc, plot,
+                                            alt_src)
+            processed_count += 1
+            _fid, status, message, obs_count = result
+            total_obs_ct += obs_count
+            if status == 'success':
+                success_count += 1
+            elif status == 'skipped':
+                skipped_count += 1
+            elif status == 'exists':
+                exists_count += 1
+            elif status == 'error':
+                error_count += 1
+            elif status == 'nodata':
+                nodata_count += 1
+
+            print(f'{fid}: {status}')
+
+    else:
+        if n_workers is None:
+            n_workers = os.cpu_count()
+        futures = []
+        with concurrent.futures.ThreadPoolExecutor(max_workers=n_workers) as executor:
+            for fid, row in station_list.iterrows():
+                future = executor.submit(process_single_station, fid, row, kw, madis_src, madis_dst, rsun_tables,
+                                         overwrite, qaqc, plot, alt_src)
+                futures.append(future)
+
+            for future in concurrent.futures.as_completed(futures):
+                processed_count += 1
+                result = future.result()
+                _fid, status, message, obs_count = result
+                total_obs_ct += obs_count
+
+                if status == 'success':
+                    success_count += 1
+                elif status == 'skipped':
+                    skipped_count += 1
+                elif status == 'exists':
+                    exists_count += 1
+                elif status == 'error':
+                    error_count += 1
+                elif status == 'nodata':
+                    nodata_count += 1
+
+    print("\n--- Processing Summary ---")
+    print(f"Total stations attempted: {total_stations_to_process}")
+    print(f"Successfully processed:   {success_count}")
+    print(f"Skipped (exists/no src):  {skipped_count}")
+    print(f"No processable data:    {nodata_count}")
+    print(f"File exists:    {exists_count}")
+    print(f"Errors encountered:     {error_count}")
+    print(f"Total observations written: {total_obs_ct}")
+    print("-------------------------\n")
 
 
 def plot_daily_data(pdf, station_id, year, out_fig):
@@ -313,18 +405,17 @@ if __name__ == '__main__':
 
     # pandarallel.initialize(nb_workers=6)
 
-    sites = os.path.join(d, 'dads', 'met', 'stations', 'madis_mgrs_28OCT2024.csv')
+    sites = os.path.join(d, 'dads', 'met', 'stations', 'dads_stations_10FEB2025.csv')
 
     madis_hourly_public = os.path.join(d, 'climate', 'madis', 'LDAD_public', 'mesonet', 'csv')
     madis_hourly_research = os.path.join(d, 'climate', 'madis', 'LDAD', 'mesonet', 'inclusive_csv')
 
-    # madis_daily_ = os.path.join('/data/ssd1/madis', 'madis_daily')
-    madis_daily_ = os.path.join(d, 'dads', 'met', 'obs', 'madis_daily_add')
+    madis_daily_ = '/data/ssd2/madis/daily'
 
     solrad = os.path.join(d, 'dads', 'dem', 'rsun_tables', 'station_rsun')
 
-    read_hourly_data(sites, madis_hourly_public, madis_daily_, solrad, shuffle=False, stype='madis',
-                     bounds=(-180., 25., -60., 85.), overwrite=False, qaqc=True, plot=None,
-                     alt_src=madis_hourly_research)
+    read_hourly_data(sites, madis_hourly_public, madis_daily_, solrad, shuffle=True, stype='dads',
+                     bounds=(-180., 25., -60., 85.), overwrite=False, qaqc=True, plot=None, debug=True,
+                     alt_src=madis_hourly_research, n_workers=8)
 
 # ========================= EOF ====================================================================
