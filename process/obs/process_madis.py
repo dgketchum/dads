@@ -135,7 +135,7 @@ def process_single_station(fid, row, kw, madis_src, madis_dst, rsun_tables, over
         if alt_src:
             station_dir = os.path.join(alt_src, fid)
         if not os.path.isdir(station_dir):
-            return fid, 'skipped', 'Source directory not found', 0
+            return fid, 'no_dir', 'Source directory not found', 0
 
     files_ = [os.path.join(station_dir, f) for f in os.listdir(station_dir)]
     years = []
@@ -146,7 +146,7 @@ def process_single_station(fid, row, kw, madis_src, madis_dst, rsun_tables, over
         valid_files.append(f)
 
     if not valid_files:
-        return fid, 'skipped', 'No valid data files found', 0
+        return fid, 'no_files', 'No valid data files found', 0
 
     rsun_file = os.path.join(rsun_tables, '{}.csv'.format(fid))
     if not os.path.exists(rsun_file):
@@ -265,12 +265,13 @@ def read_hourly_data(stations, madis_src, madis_dst, rsun_tables, shuffle=False,
     exists_count = 0
 
     os.makedirs(madis_dst, exist_ok=True)
+    no_files = []
 
     if debug:
         for i, (fid, row) in enumerate(station_list.iterrows(), start=1):
 
-            if fid != 'COVM':
-                continue
+            # if fid != 'COVM':
+            #     continue
 
             result = process_single_station(fid, row, kw, madis_src, madis_dst, rsun_tables, overwrite, qaqc, plot,
                                             alt_src)
@@ -279,8 +280,12 @@ def read_hourly_data(stations, madis_src, madis_dst, rsun_tables, shuffle=False,
             total_obs_ct += obs_count
             if status == 'success':
                 success_count += 1
-            elif status == 'skipped':
+            elif status == 'no_dir':
                 skipped_count += 1
+            elif status == 'no_files':
+                skipped_count += 1
+                no_files.append(fid)
+
             elif status == 'exists':
                 exists_count += 1
             elif status == 'error':
@@ -289,6 +294,9 @@ def read_hourly_data(stations, madis_src, madis_dst, rsun_tables, shuffle=False,
                 nodata_count += 1
 
             print(f'{fid}: {status}')
+            if len(no_files) >= 100:
+                print(no_files)
+                break
 
     else:
         if n_workers is None:
@@ -308,7 +316,9 @@ def read_hourly_data(stations, madis_src, madis_dst, rsun_tables, shuffle=False,
 
                 if status == 'success':
                     success_count += 1
-                elif status == 'skipped':
+                elif status == 'no_dir':
+                    skipped_count += 1
+                elif status == 'no_files':
                     skipped_count += 1
                 elif status == 'exists':
                     exists_count += 1
@@ -320,7 +330,7 @@ def read_hourly_data(stations, madis_src, madis_dst, rsun_tables, shuffle=False,
     print("\n--- Processing Summary ---")
     print(f"Total stations attempted: {total_stations_to_process}")
     print(f"Successfully processed:   {success_count}")
-    print(f"Skipped (exists/no src):  {skipped_count}")
+    print(f"Skipped (no src dir/no files):  {skipped_count}")
     print(f"No processable data:    {nodata_count}")
     print(f"File exists:    {exists_count}")
     print(f"Errors encountered:     {error_count}")

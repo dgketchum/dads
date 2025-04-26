@@ -1,7 +1,6 @@
 import calendar
 import os
-import zipfile
-import io
+from concurrent.futures import ProcessPoolExecutor, as_completed
 
 import cdsapi
 import pandas as pd
@@ -39,8 +38,13 @@ def download_era5(target_dir, overwrite=False):
 
     client = cdsapi.Client()
 
-    for year in range(2000, 2025):
+    for year in range(2000, 2026):
+
         for month in range(1, 13):
+
+            if year == 2025 and month > 4:
+                continue
+
             _, num_days = calendar.monthrange(year, month)
             request["day"] = [str(day) for day in range(1, num_days + 1)]
             request["year"] = str(year)
@@ -53,83 +57,75 @@ def download_era5(target_dir, overwrite=False):
             print(f'downloaded {target_nc}')
 
 
-def extract_met_data(stations, gridded_dir, nc_dir, overwrite=False,
-                     station_type='dads', shuffle=True, bounds=None):
+def _process_nc_file(nc_file, stations, gridded_dir, overwrite, station_type, bounds):
     """"""
     kw = station_par_map(station_type)
-
-    station_list = pd.read_csv(stations, index_col=kw['index'])
-
-    nc_files = sorted([os.path.join(nc_dir, f) for f in os.listdir(nc_dir) if 'era5_land_' in f])
-
-    if shuffle:
-        station_list = station_list.sample(frac=1)
+    station_list = pd.read_csv(stations, index_col=kw['index']).sort_index()
 
     if bounds:
         w, s, e, n = bounds
         station_list = station_list[(station_list['latitude'] < n) & (station_list['latitude'] >= s)]
         station_list = station_list[(station_list['longitude'] < e) & (station_list['longitude'] >= w)]
     else:
-        # Use the bounds from the NetCDF file
-        ds = xr.open_dataset(nc_files[0])
+        ds = xr.open_dataset(nc_file)
         w = float(ds.longitude[0].values)
         e = float(ds.longitude[-1].values)
-        s = float(ds.latitude[-1].values)  # Latitude is decreasing
+        s = float(ds.latitude[-1].values)
         n = float(ds.latitude[0].values)
         ds.close()
-        ln = station_list.shape[0]
         station_list = station_list[(station_list['latitude'] < n) & (station_list['latitude'] >= s)]
         station_list = station_list[(station_list['longitude'] < e) & (station_list['longitude'] >= w)]
-        print('dropped {} stations outside the NetCDF extent'.format(ln - station_list.shape[0]))
 
     record_ct = station_list.shape[0]
 
-    for nc_file in nc_files:
+    ds = xr.open_dataset(nc_file)
+    splt = os.path.basename(nc_file).strip('.nc').split('_')
+    year, month = splt[-2], splt[-1]
 
-        ds = xr.open_dataset(nc_file)
-        splt = os.path.basename(nc_file).strip('.nc').split('_')
-        year, month = splt[-2], splt[-1]
+    for i, (fid, row) in enumerate(station_list.iterrows(), start=1):
+        lon, lat, elv = row[kw['lon']], row[kw['lat']], row[kw['elev']]
+        print('{}: {} of {}; {:.2f}, {:.2f}'.format(fid, i, record_ct, lat, lon))
 
-        for i, (fid, row) in enumerate(station_list.iterrows(), start=1):
-            lon, lat, elv = row[kw['lon']], row[kw['lat']], row[kw['elev']]
-            print('{}: {} of {}; {:.2f}, {:.2f}'.format(fid, i, record_ct, lat, lon))
+        sub_dir = os.path.join(gridded_dir, fid)
+        if not os.path.exists(sub_dir):
+            os.makedirs(sub_dir, exist_ok=True)
 
-            sub_dir = os.path.join(gridded_dir, fid)
-            if not os.path.exists(sub_dir):
-                os.mkdir(sub_dir)
+        _file = os.path.join(sub_dir, f'{fid}_{year}_{month}.parquet')
+        if not os.path.exists(_file) or overwrite:
+            df = ds.sel(longitude=lon, latitude=lat, method="nearest").to_dataframe()
+            df = df[['u10', 'v10', 'd2m', 't2m', 'sp', 'tp', 'ssrd', 'latitude', 'longitude']]
+            df = df.rename(columns={
+                'u10': 'wind_u',
+                'v10': 'wind_v',
+                'd2m': 'tdew',
+                't2m': 'temp',
+                'sp': 'psurf',
+                'tp': 'precip',
+                'ssr': 'rsds'
+            })
+            df['temp'] -= 273.15
+            df['tdew'] -= 273.15
+            df['slat'] = lat
+            df['slon'] = lon
+            df.to_parquet(_file)
+            print('Data extracted and saved to', _file)
+        else:
+            print('{} exists'.format(_file))
 
-            _file = os.path.join(sub_dir, f'{fid}_{year}_{month}.parquet')
-            if not os.path.exists(_file) or overwrite:
-                # Extract data for the nearest grid cell
-                df = ds.sel(longitude=lon, latitude=lat, method="nearest").to_dataframe()
+    ds.close()
 
-                # Remove unnecessary columns and rename for consistency
-                print(ds.variables)
-                df = df[['u10', 'v10', 'd2m', 't2m', 'sp', 'tp', 'ssrd', 'latitude', 'longitude']]
-                df = df.rename(columns={
-                    'u10': 'wind_u',
-                    'v10': 'wind_v',
-                    'd2m': 'tdew',
-                    't2m': 'temp',
-                    'sp': 'psurf',
-                    'tp': 'precip',
-                    'ssr': 'rsds'
-                })
 
-                # Convert temperature to Celsius
-                df['temp'] -= 273.15
-                df['tdew'] -= 273.15
+def extract_met_data(stations, gridded_dir, nc_dir, overwrite=False, station_type='dads', bounds=None, n_workers=2):
 
-                df['slat'] = lat
-                df['slon'] = lon
+    nc_files = sorted([os.path.join(nc_dir, f) for f in os.listdir(nc_dir) if 'era5_land_' in f])
 
-                # Save to CSV
-                df.to_parquet(_file)
-                print('Data extracted and saved to', _file)
-            else:
-                print('{} exists'.format(_file))
-
-        ds.close()
+    futures = []
+    with ProcessPoolExecutor(max_workers=n_workers) as executor:
+        for nc_file in nc_files:
+            future = executor.submit(_process_nc_file, nc_file, stations, gridded_dir, overwrite, station_type, bounds)
+            futures.append(future)
+        for future in as_completed(futures):
+            future.result()
 
 
 if __name__ == '__main__':
@@ -146,7 +142,7 @@ if __name__ == '__main__':
     nc_dir_ = os.path.join(era5, 'netCDF')
     out_files = os.path.join(era5, 'raw_parquet')
 
-    # download_era5(nc_dir_, overwrite=False)
+    download_era5(nc_dir_, overwrite=False)
 
     dads = os.path.join(home, 'data', 'IrrigationGIS', 'dads')
     climate = os.path.join(home, 'data', 'IrrigationGIS', 'climate')
@@ -160,6 +156,6 @@ if __name__ == '__main__':
     sites = os.path.join(dads, 'met', 'stations', 'dads_stations_10FEB2025.csv')
     stype = 'dads'
 
-    extract_met_data(sites, out_files, nc_dir=nc_dir_, bounds=None, overwrite=True, station_type=stype)
+    # extract_met_data(sites, out_files, nc_dir=nc_dir_, bounds=None, overwrite=True, station_type=stype)
 
 # ========================= EOF ====================================================================

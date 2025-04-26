@@ -20,10 +20,11 @@ from utils.elevation import elevation_from_coordinate
 
 warnings.filterwarnings("ignore", category=xr.SerializationWarning)
 
-BASE_URL = "https://madis-data.ncep.noaa.gov/madisResearch/data"
+# BASE_URL = "https://madis-data.ncep.noaa.gov/madisResearch/data"
+BASE_URL = "https://madis-data.ncep.noaa.gov/madisPublic/data"
 
 credentials_file = os.path.join(os.path.expanduser('~'), 'PycharmProjects', 'dads', 'extract', 'met_data',
-                                'madis_credentials.json')
+                                'obs', 'madis_credentials.json')
 
 with open(credentials_file, 'r') as fp:
     creds = json.load(fp)
@@ -137,18 +138,19 @@ if __name__ == "__main__":
     madis_data_dir_ = os.path.join(d, 'climate', 'madis')
 
     stn_meta = os.path.join(d, 'climate', 'madis', 'public_stn_list.csv')
-    mesonet_dir = os.path.join(madis_data_dir_, 'LDAD', 'mesonet')
+
+    mesonet_dir = os.path.join(madis_data_dir_, 'LDAD_public', 'mesonet')
+    # mesonet_dir = os.path.join(madis_data_dir_, 'LDAD', 'mesonet')
 
     # the FTP we're currently using has from 2001-07-01
-    times = generate_monthly_time_tuples(2024, 2024)
-    times = [t for t in times if int(t[0][:6]) >= 202409]
-    times = [t for t in times if int(t[0][:6]) <= 202409]
+    times = generate_monthly_time_tuples(2024, 2026)
+    times = [t for t in times if int(t[0][:8]) >= 20240901]
+    times = [t for t in times if int(t[0][:8]) <= 20250501]
     # random.shuffle(times)
 
     # num_processes = 1
-    num_processes = 20
+    num_processes = 10
 
-    mesonet_dir = os.path.join(madis_data_dir_, 'LDAD', 'mesonet')
     # debug
     # for t in times:
     #     process_time_chunk(t)

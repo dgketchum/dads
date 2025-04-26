@@ -125,7 +125,8 @@ def open_nc(f):
     return ds_
 
 
-def read_madis_hourly(data_directory, year_mo_str, output_directory, bounds=(-125., 24., -66., 53.)):
+def read_madis_hourly(data_directory, year_mo_str, output_directory, bounds=(-125., 24., -66., 53.),
+                      select=None):
     """"""
 
     file_pattern = os.path.join(data_directory, f"*{year_mo_str}*.gz")
@@ -148,10 +149,22 @@ def read_madis_hourly(data_directory, year_mo_str, output_directory, bounds=(-12
         valid_data = ds[DESIRED_PARAMS]
         df = valid_data.to_dataframe()
         df['stationId'] = df['stationId'].astype(str)
-        df = df[(df['latitude'] < bounds[3]) & (df['latitude'] >= bounds[1])]
-        df = df[(df['longitude'] < bounds[2]) & (df['longitude'] >= bounds[0])]
+        df['stationType'] = df['stationType'].astype(str)
+
+        if bounds is not None:
+            df = df[(df['latitude'] < bounds[3]) & (df['latitude'] >= bounds[1])]
+            df = df[(df['longitude'] < bounds[2]) & (df['longitude'] >= bounds[0])]
+
         df.dropna(how='all', inplace=True)
         df.set_index('stationId', inplace=True, drop=True)
+
+        if select is not None:
+            match = [s for s in df['stationId'] if s in select]
+            if len(match) == 0:
+                continue
+            else:
+                df = df.loc[match]
+
         df = df.groupby(df.index).agg(SUBHOUR_RESAMPLE_MAP)
 
         df['v'] = df.apply(lambda row: [float(row[v]) for v in MET_PARAMS], axis=1)
@@ -182,9 +195,9 @@ def read_madis_hourly(data_directory, year_mo_str, output_directory, bounds=(-12
 
 
 def process_time_chunk(args):
-    time_tuple, meso_dir, out_dir, bnds = args
+    time_tuple, meso_dir, out_dir, bnds, sel = args
     start_time, end_time = time_tuple
-    read_madis_hourly(meso_dir, start_time[:6], out_dir, bounds=bnds)
+    read_madis_hourly(meso_dir, start_time[:6], out_dir, bounds=bnds, select=sel)
 
 
 if __name__ == "__main__":
@@ -193,12 +206,15 @@ if __name__ == "__main__":
     if not os.path.exists(d):
         d = '/home/dgketchum/data/IrrigationGIS'
 
-    mesonet_dir = os.path.join(d, 'climate', 'madis', 'LDAD', 'mesonet')
-    tracker_ = os.path.join(mesonet_dir, 'stations.json')
+    mesonet_dir = os.path.join(d, 'climate', 'madis', 'LDAD_public', 'mesonet')
+    out_dir_ = os.path.join(mesonet_dir, 'inclusive_csv')
 
+    # mesonet_dir = os.path.join(d, 'climate', 'madis', 'LDAD', 'mesonet')
+    # out_dir_ = os.path.join(mesonet_dir, 'inclusive_csv')
+
+    tracker_ = os.path.join(mesonet_dir, 'stations.json')
     netcdf_src = os.path.join(mesonet_dir, 'netCDF')
     netcdf_dst = os.path.join(mesonet_dir, 'netCDF')
-    out_dir_ = os.path.join(mesonet_dir, 'inclusive_csv')
     print('operating on network drive data')
 
     # get_station_metadata(netcdf_src, tracker_)
@@ -209,13 +225,18 @@ if __name__ == "__main__":
     # dts = [d.strftime('%Y%m') for d in dt]
     # transfer_list(netcdf_src, netcdf_dst, progress_json=None, yrmo_str=dts, workers=20)
 
-    bnds = (-180., 49., -60., 85.)
-    times = generate_monthly_time_tuples(2001, 2024, check_dir=out_dir_)
+    times = generate_monthly_time_tuples(2001, 2025, check_dir=None)
     [print(t) for t in times]
-    args_ = [(t, netcdf_dst, out_dir_, bnds) for t in times]
+    args_ = [(t, netcdf_dst, out_dir_, None, None) for t in times]
+
+    debug = False
+
+    if debug:
+        for a in args_:
+            process_time_chunk(a)
 
     # num_processes = 5
-    num_processes = 10
+    num_processes = 15
     with multiprocessing.Pool(processes=num_processes) as pool:
         pool.map(process_time_chunk, args_)
 
