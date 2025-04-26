@@ -55,7 +55,7 @@ def process_station(fid, row, ts_dir, landsat_dir, cdr_dir, dem_dir, terrain_dir
         sol = sol_df[fid].to_dict()
         ts['doy'] = ts.index.dayofyear
         ts['rsun'] = ts['doy'].map(sol) * 0.0036
-    except KeyError:
+    except (KeyError, pd.errors.EmptyDataError):
         missing['sol_fid'] += 1
         return fid, None, missing
 
@@ -242,13 +242,16 @@ def join_training(stations, ts_dir, landsat_dir, cdr, sol_dir, terrain_dir, out_
     total_missing = {'sol_file': 0,
                      'station_file': 0,
                      'terrain_file': 0,
+                     'terrain_fid': 0,
                      'landsat_file': 0,
                      'snotel': 0,
+                     'cdr_obs_time_misalign': 0,
                      'landsat_obs_time_misalign': 0,
                      'sol_fid': 0,
                      'cdr_file': 0,
                      'exists': 0}
 
+    # TODO: remove stats gathering as we now sample the training data for scaling parameters
     for f, stat, missing in results:
         if stat is not None:
             for col, values in stat.items():
@@ -268,11 +271,11 @@ if __name__ == '__main__':
     if not os.path.exists(d):
         d = '/home/dgketchum/data/IrrigationGIS/dads'
 
-    glob_ = 'dads_stations_10FEB2025'
-    _source = 'madis'
+    # glob_ = 'dads_stations_10FEB2025'
+    # _source = 'madis'
 
-    # glob_ = 'ghcn_CANUSA_stations_mgrs'
-    # _source = 'ghcn'
+    glob_ = 'ghcn_CANUSA_stations_mgrs'
+    _source = 'ghcn'
 
     fields = os.path.join(d, 'met', 'stations', '{}.csv'.format(glob_))
     landsat_ = os.path.join(d, 'rs', 'landsat', 'station_data')
@@ -302,6 +305,6 @@ if __name__ == '__main__':
     print('========================== writing joined training data ==========================')
 
     join_training(fields, sta, landsat_, cdr_, solrad, terrain, training, bounds=None, debug=False, shuffle=True,
-                  overwrite=overwrite_, sample_frac=1.0, workers=16, chunk_size=72, source=_source)
+                  overwrite=overwrite_, sample_frac=1.0, workers=8, chunk_size=72, source=_source)
 
 # ========================= EOF ==============================================================================
