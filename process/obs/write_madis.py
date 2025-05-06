@@ -6,6 +6,7 @@ import os
 import shutil
 import time
 import warnings
+import concurrent.futures
 from datetime import datetime, timedelta
 
 import pandas as pd
@@ -126,7 +127,7 @@ def open_nc(f):
 
 
 def read_madis_hourly(data_directory, year_mo_str, output_directory, bounds=(-125., 24., -66., 53.),
-                      select=None):
+                      select=None, check_mod_dt=None):
     """"""
 
     file_pattern = os.path.join(data_directory, f"*{year_mo_str}*.gz")
@@ -206,11 +207,11 @@ if __name__ == "__main__":
     if not os.path.exists(d):
         d = '/home/dgketchum/data/IrrigationGIS'
 
-    mesonet_dir = os.path.join(d, 'climate', 'madis', 'LDAD_public', 'mesonet')
-    out_dir_ = os.path.join(mesonet_dir, 'inclusive_csv')
-
-    # mesonet_dir = os.path.join(d, 'climate', 'madis', 'LDAD', 'mesonet')
+    # mesonet_dir = os.path.join(d, 'climate', 'madis', 'LDAD_public', 'mesonet')
     # out_dir_ = os.path.join(mesonet_dir, 'inclusive_csv')
+
+    mesonet_dir = os.path.join(d, 'climate', 'madis', 'LDAD', 'mesonet')
+    out_dir_ = os.path.join(mesonet_dir, 'inclusive_csv')
 
     tracker_ = os.path.join(mesonet_dir, 'stations.json')
     netcdf_src = os.path.join(mesonet_dir, 'netCDF')
@@ -225,9 +226,40 @@ if __name__ == "__main__":
     # dts = [d.strftime('%Y%m') for d in dt]
     # transfer_list(netcdf_src, netcdf_dst, progress_json=None, yrmo_str=dts, workers=20)
 
-    times = generate_monthly_time_tuples(2001, 2025, check_dir=None)
+    bnds = (-180., 25., -60., 85.)
+
+    # times = generate_monthly_time_tuples(2001, 2025, check_dir=None)
+    COLUMN_NAMES = ["Month", "Count", "FirstFile", "LastFile"]
+    mod_summary = os.path.join(os.path.expanduser('~'), 'PycharmProjects', 'dads', 'modification_summary.txt')
+    df = pd.read_csv(
+        mod_summary,
+        skiprows=5,
+        sep='\s+',
+        header=None,
+        names=COLUMN_NAMES,
+        engine='python',
+        on_bad_lines='skip'
+    )
+    df['Month'] = df['Month'].astype(str)
+    df['Count'] = pd.to_numeric(df['Count'], errors='coerce')
+    df.dropna(subset=['Count'], inplace=True)
+    df['Count'] = df['Count'].astype(int)
+
+    times = []
+    processed_months = set()
+    for i, r in df.iterrows():
+        if r['Count'] < 30000:
+            month_start_dt = pd.to_datetime(r['Month'], format='%Y%m')
+            year = month_start_dt.year
+            month = month_start_dt.month
+            last_day = month_start_dt.days_in_month
+
+            start_time_str = f"{year}{month:02d}01 00"
+            end_time_str = f"{year}{month:02d}{last_day:02d} 23"
+            times.append((start_time_str, end_time_str))
+
     [print(t) for t in times]
-    args_ = [(t, netcdf_dst, out_dir_, None, None) for t in times]
+    args_ = [(t, netcdf_dst, out_dir_, bnds, None) for t in times]
 
     debug = False
 
@@ -235,9 +267,8 @@ if __name__ == "__main__":
         for a in args_:
             process_time_chunk(a)
 
-    # num_processes = 5
-    num_processes = 15
-    with multiprocessing.Pool(processes=num_processes) as pool:
-        pool.map(process_time_chunk, args_)
+    workers = 10
+    with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
+        results = list(executor.map(process_time_chunk, args_))
 
 # ========================= EOF ====================================================================
