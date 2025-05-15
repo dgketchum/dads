@@ -3,256 +3,268 @@ import datetime
 import collections
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
-import pandas as pd  # Using pandas simplifies date range generation and plotting
+import pandas as pd
 
-# import calendar # Only needed if using calendar.monthrange instead of pandas days_in_month
 
-# --- Configuration ---
-BASE_DIR = '/home/dgketchum/data/IrrigationGIS/climate/madis/LDAD/mesonet/inclusive_csv/'
-CUTOFF_DATE_STR = '2024-04-01'
-START_YEAR = 2001
-END_YEAR = 2025
-END_MONTH = 4  # Inclusive (up to April 2025)
-OUTPUT_TEXT_FILE = 'modification_summary.txt'  # Name for the output text file
-MODIFIED_COUNT_THRESHOLD = 1000  # Threshold for generating processing tuples
+def check_madis_files(subdir_arg, output_file_prefix_arg, root_dir_arg,
+                         secondary_subdir_name_check_arg=None):
 
-# --- Preparation ---
-try:
-    # Convert cutoff date string to a datetime object, then to a timestamp
-    # Using timezone-aware comparison might be more robust if system/file times differ
-    cutoff_dt = datetime.datetime.strptime(CUTOFF_DATE_STR, '%Y-%m-%d')
-    cutoff_timestamp = cutoff_dt.timestamp()
-    print(f"Checking for files modified after: {cutoff_dt} (Timestamp: {cutoff_timestamp})")
+    CUTOFF_DATE_STR = '2024-04-01'
+    MODIFIED_COUNT_THRESHOLD = 1000
 
-except ValueError:
-    print(f"Error: Invalid CUTOFF_DATE_STR format: '{CUTOFF_DATE_STR}'. Use YYYY-MM-DD.")
-    exit()
+    BASE_DIR = os.path.join(root_dir_arg, subdir_arg)
+    text_output_filename = f'{output_file_prefix_arg}_modification_summary.txt'
+    plot_output_filename = f'{output_file_prefix_arg}_madis_hist.png'
 
-if not os.path.isdir(BASE_DIR):
-    print(f"Error: Base directory not found: {BASE_DIR}")
-    exit()
+    found_non_empty_secondary_subdir_overall = False
 
-# Use defaultdict to store lists of modified files per month
-modified_files_by_month = collections.defaultdict(list)
-processed_dirs = 0
-processed_files = 0
+    start_date_str_arg = '2001-01-01'
+    end_date_str_arg = '2025-05-15'
 
-print(f"Starting file scan in: {BASE_DIR}")
 
-# --- File System Traversal and Data Collection (User's Modified Version) ---
-try:
-    # List only directories directly under BASE_DIR
-    dirs = [d for d in os.listdir(BASE_DIR) if os.path.isdir(os.path.join(BASE_DIR, d))]
-    print(f"Found {len(dirs)} potential station directories.")
-except OSError as e:
-    print(f"Error listing base directory {BASE_DIR}: {e}")
-    exit()
-
-for i, dir_ in enumerate(dirs):
-    processed_dirs += 1
-    if processed_dirs % 1000 == 0 and processed_dirs > 0:
-        print(f"... scanned {processed_dirs}/{len(dirs)} station directories ...")
-
-    current_dir_path = os.path.join(BASE_DIR, dir_)
     try:
-        files = os.listdir(current_dir_path)
-    except OSError as e:
-        print(f"Warning: Could not list files in {current_dir_path}: {e}")
-        continue  # Skip this directory
+        start_date_obj = pd.to_datetime(start_date_str_arg)
+        end_date_obj = pd.to_datetime(end_date_str_arg)
+        if end_date_obj < start_date_obj:
+            print(f"Error: end_date_str ({end_date_str_arg}) cannot be before start_date_str ({start_date_str_arg}).")
+            return False
+    except ValueError as e:
+        print(f"Error: Invalid date string format for start_date_str or end_date_str: {e}. Use YYYY-MM-DD.")
+        return False
 
-    for filename in files:
-        if filename.endswith('.csv') and '_' in filename:
-            processed_files += 1
-            try:
-                # Extract YYYYMM from filename like 'AP156_200106.csv'
-                parts = filename.split('_')
-                if len(parts) < 2: continue  # Skip if no underscore
-                year_month_str = parts[-1][:6]  # Get '200106' part
-
-                # Validate format
-                if len(year_month_str) == 6 and year_month_str.isdigit():
-                    file_path = os.path.join(current_dir_path, filename)
-
-                    # Get modification time
-                    mod_timestamp = os.path.getmtime(file_path)
-
-                    # Compare modification time
-                    if mod_timestamp > cutoff_timestamp:
-                        # Store the full path of the modified file
-                        modified_files_by_month[year_month_str].append(file_path)
-                else:
-                    # Optional: Log filenames that don't match the expected pattern
-                    # print(f"Skipping file with unexpected name format: {filename} in {dir_}")
-                    pass
-
-            except FileNotFoundError:
-                # This might happen in race conditions, less likely with listdir -> getmtime
-                print(f"Warning: File not found during stat: {file_path}")
-            except Exception as e:
-                print(f"Warning: Error processing file {os.path.join(current_dir_path, filename)}: {e}")
-
-    # User's break condition
-    # if processed_dirs >= 5000:
-    #     print(f"\nStopping scan after {processed_dirs} directories due to limit.")
-    #     break
-
-print(f"\nScan complete. Checked {processed_files} files across {processed_dirs} directories.")
-
-# --- Process Collected Data and Write Text File ---
-print(f"\nWriting summary to: {OUTPUT_TEXT_FILE}")
-
-summary_data = []
-# Sort months chronologically for processing and output
-sorted_months = sorted(modified_files_by_month.keys())
-
-for month_str in sorted_months:
-    file_list = modified_files_by_month[month_str]
-    count = len(file_list)
-    if count > 0:
-        file_list.sort()  # Sort alphabetically by full path
-        first_file = os.path.basename(file_list[0])  # Get basename for report
-        last_file = os.path.basename(file_list[-1])  # Get basename for report
-        summary_data.append({
-            "Month": month_str,
-            "Count": count,
-            "FirstFile": first_file,
-            "LastFile": last_file
-        })
-
-# Write the summary text file
-try:
-    with open(OUTPUT_TEXT_FILE, 'w') as f:
-        f.write(f"Summary of CSV Files Modified After {CUTOFF_DATE_STR}\n")
-        # Note: Summary reflects only the directories scanned if break condition was met
-        f.write(f"Based on scan of {processed_dirs} directories.\n")
-        f.write("Generated on: {}\n".format(datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')))
-        f.write("-" * 80 + "\n")
-        # Header - adjust padding as needed
-        f.write("{:<10s} {:<10s} {:<30s} {:<30s}\n".format("Month", "Count", "First Modified (Alphabetical)",
-                                                           "Last Modified (Alphabetical)"))
-        f.write("-" * 80 + "\n")
-        if summary_data:
-            for item in summary_data:
-                f.write("{:<10s} {:<10d} {:<30s} {:<30s}\n".format(
-                    item["Month"], item["Count"], item["FirstFile"], item["LastFile"]
-                ))
-        else:
-            f.write("No files found modified after the cutoff date within the scanned directories.\n")
-    print("Summary file written successfully.")
-except IOError as e:
-    print(f"Error writing summary file: {e}")
-
-# --- Prepare Data for Histogram (using counts derived from collected files) ---
-
-# Generate all months in the range 2001-01 to 2025-04
-date_index = pd.date_range(
-    start=f'{START_YEAR}-01-01',
-    end=f'{END_YEAR}-{END_MONTH:02d}-01',  # Generate up to the first day of the target end month
-    freq='MS'  # Month Start frequency
-)
-
-# Create a series with all months initialized to 0 counts
-all_months_counts = pd.Series(0, index=date_index)
-
-# Populate the series with actual counts derived from the collected file lists
-# These counts reflect only the scanned directories if the loop broke early
-for ym_str, files in modified_files_by_month.items():
     try:
-        # Convert YYYYMM string to a datetime object for indexing
-        month_dt = pd.to_datetime(ym_str, format='%Y%m')
-        if month_dt in all_months_counts.index:
-            all_months_counts[month_dt] = len(files)  # Get count from list length
+        cutoff_dt = datetime.datetime.strptime(CUTOFF_DATE_STR, '%Y-%m-%d')
+        cutoff_timestamp = cutoff_dt.timestamp()
+        print(f"Checking for files modified after: {cutoff_dt} (Timestamp: {cutoff_timestamp})")
     except ValueError:
-        print(f"Warning: Could not parse date from count key: {ym_str}")
+        print(f"Error: Invalid CUTOFF_DATE_STR format in script: '{CUTOFF_DATE_STR}'. Use YYYY-MM-DD.")
+        return False
 
-# --- Generate List of Tuples for Incomplete Months --- <<< ADDED LOGIC HERE
-print(f"\n--- Generating Time Tuples for Months with < {MODIFIED_COUNT_THRESHOLD} Recently Modified Files ---")
-incomplete_month_tuples = []
+    if not os.path.isdir(BASE_DIR):
+        print(f"Error: Base directory not found: {BASE_DIR}")
+        return False
 
-# Iterate through all months in the defined range using the pandas date_index
-# This considers the full date range, regardless of scan limit or actual files found
-for month_start_dt in all_months_counts.index:
-    year = month_start_dt.year
-    month = month_start_dt.month
-    year_month_str = month_start_dt.strftime('%Y%m')  # Key for our dictionary
+    modified_files_by_month = collections.defaultdict(list)
+    processed_dirs = 0
+    processed_files = 0
 
-    # Get the count of recently modified files *found in the potentially limited scan*
-    modified_count = len(modified_files_by_month.get(year_month_str, []))
+    print(f"Starting file scan in: {BASE_DIR}")
 
-    # Check if the count is below the threshold
-    if modified_count < MODIFIED_COUNT_THRESHOLD:
-        # Calculate the last day of the month
-        last_day = month_start_dt.days_in_month  # using pandas Timestamp property
+    station_dirs_list = []
+    try:
+        station_dirs_list = [d for d in os.listdir(BASE_DIR) if os.path.isdir(os.path.join(BASE_DIR, d))]
+        print(f"Found {len(station_dirs_list)} potential station directories in {BASE_DIR}.")
+    except OSError as e:
+        print(f"Error listing contents of base directory {BASE_DIR}: {e}")
+        return False
 
-        # Format the start and end time strings
-        start_time_str = f"{year}{month:02d}01 00"
-        end_time_str = f"{year}{month:02d}{last_day:02d} 23"
+    total_station_dirs_to_scan = len(station_dirs_list)
 
-        # Add the tuple to the list
-        incomplete_month_tuples.append((start_time_str, end_time_str))
+    for i, dir_name in enumerate(station_dirs_list):
+        processed_dirs += 1
+        if processed_dirs > 0 and processed_dirs % 1000 == 0:
+            print(f"... scanned {processed_dirs}/{total_station_dirs_to_scan} station directories ...")
 
-# Print the generated list to the terminal
-print(
-    f"Found {len(incomplete_month_tuples)} months potentially needing processing (Count < {MODIFIED_COUNT_THRESHOLD} based on scan).")
-print("Processing Time Tuples:")
-if incomplete_month_tuples:
-    print(incomplete_month_tuples)
-else:
-    print("No months found with fewer than {} recently modified files within the scanned data.".format(
-        MODIFIED_COUNT_THRESHOLD))
-# --- END OF ADDED LOGIC ---
+        current_station_dir_path = os.path.join(BASE_DIR, dir_name)
+
+        if secondary_subdir_name_check_arg and secondary_subdir_name_check_arg.strip():
+            path_to_secondary_subdir = os.path.join(current_station_dir_path, secondary_subdir_name_check_arg)
+            if os.path.isdir(path_to_secondary_subdir):
+                try:
+                    if os.listdir(path_to_secondary_subdir):
+                        found_non_empty_secondary_subdir_overall = True
+                except OSError as e:
+                    print(
+                        f"Warning: Could not list contents of secondary subdir {path_to_secondary_subdir} for station {dir_name}: {e}")
+
+        try:
+            files_in_station_dir = os.listdir(current_station_dir_path)
+        except OSError as e:
+            print(f"Warning: Could not list files in {current_station_dir_path}: {e}")
+            continue
+
+        for filename in files_in_station_dir:
+            if filename.endswith('.csv') and '_' in filename:
+                processed_files += 1
+                current_file_full_path = os.path.join(current_station_dir_path, filename)
+                try:
+                    parts = filename.split('_')
+                    if len(parts) < 2:
+                        continue
+                    year_month_str = parts[-1][:6]
+
+                    if len(year_month_str) == 6 and year_month_str.isdigit():
+                        mod_timestamp = os.path.getmtime(current_file_full_path)
+                        if mod_timestamp > cutoff_timestamp:
+                            modified_files_by_month[year_month_str].append(current_file_full_path)
+                except FileNotFoundError:
+                    print(f"Warning: File not found during stat: {current_file_full_path}")
+                except Exception as e:
+                    print(f"Warning: Error processing file {current_file_full_path}: {e}")
+
+    print(f"\nScan complete. Checked {processed_files} files across {processed_dirs} directories.")
+
+    print(f"\nWriting summary to: {text_output_filename}")
+    summary_data = []
+    sorted_months = sorted(modified_files_by_month.keys())
+
+    for month_str in sorted_months:
+        file_list = modified_files_by_month[month_str]
+        count = len(file_list)
+        if count > 0:
+            file_list.sort()
+            first_file = os.path.basename(file_list[0])
+            last_file = os.path.basename(file_list[-1])
+            summary_data.append({
+                "Month": month_str,
+                "Count": count,
+                "FirstFile": first_file,
+                "LastFile": last_file
+            })
+
+    try:
+        with open(text_output_filename, 'w') as f:
+            f.write(f"Summary of CSV Files Modified After {CUTOFF_DATE_STR}\n")
+            f.write(
+                f"Based on scan of {processed_dirs} director{'y' if processed_dirs == 1 else 'ies'} found within {BASE_DIR}.\n")
+            f.write("Generated on: {}\n".format(datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')))
+            f.write("-" * 80 + "\n")
+            f.write("{:<10s} {:<10s} {:<30s} {:<30s}\n".format("Month", "Count", "First Modified (Alphabetical)",
+                                                               "Last Modified (Alphabetical)"))
+            f.write("-" * 80 + "\n")
+            if summary_data:
+                for item in summary_data:
+                    f.write("{:<10s} {:<10d} {:<30s} {:<30s}\n".format(
+                        item["Month"], item["Count"], item["FirstFile"], item["LastFile"]
+                    ))
+            else:
+                f.write("No files found modified after the cutoff date within the scanned directories.\n")
+        print("Summary file written successfully.")
+    except IOError as e:
+        print(f"Error writing summary file {text_output_filename}: {e}")
+
+    hist_plot_start_date = start_date_obj.replace(day=1)
+    hist_plot_end_date = end_date_obj.replace(day=1)
+
+    date_index = pd.date_range(
+        start=hist_plot_start_date,
+        end=hist_plot_end_date,
+        freq='MS'
+    )
+
+    all_months_counts = pd.Series(0, index=date_index)
+
+    for ym_str, files in modified_files_by_month.items():
+        try:
+            month_dt = pd.to_datetime(ym_str, format='%Y%m')
+            if month_dt in all_months_counts.index:
+                all_months_counts[month_dt] = len(files)
+        except ValueError:
+            print(f"Warning: Could not parse date from count key: {ym_str}")
+
+    print(f"\n--- Generating Time Tuples for Months with < {MODIFIED_COUNT_THRESHOLD} Recently Modified Files ---")
+    incomplete_month_tuples = []
+
+    for month_start_dt_in_range in all_months_counts.index:
+        year = month_start_dt_in_range.year
+        month = month_start_dt_in_range.month
+        year_month_str_key = month_start_dt_in_range.strftime('%Y%m')
+
+        modified_count_for_month = len(modified_files_by_month.get(year_month_str_key, []))
+
+        if modified_count_for_month < MODIFIED_COUNT_THRESHOLD:
+            last_day_of_month = month_start_dt_in_range.days_in_month
+            tuple_start_time_str = f"{year}{month:02d}01 00"
+            tuple_end_time_str = f"{year}{month:02d}{last_day_of_month:02d} 23"
+            incomplete_month_tuples.append((tuple_start_time_str, tuple_end_time_str))
+
+    print(
+        f"Found {len(incomplete_month_tuples)} months potentially needing processing (Count < {MODIFIED_COUNT_THRESHOLD} based on scan).")
+    print("Processing Time Tuples:")
+    if incomplete_month_tuples:
+        print(incomplete_month_tuples)
+    else:
+        print("No months found with fewer than {} recently modified files within the scanned data.".format(
+            MODIFIED_COUNT_THRESHOLD))
+
+    print("\n--- Files Modified After {} By Month (YYYYMM) (Based on Scan) ---".format(CUTOFF_DATE_STR))
+    counts_df = all_months_counts.reset_index()
+    counts_df.columns = ['MonthDateTime', 'ModifiedFileCount']
+    counts_df['MonthStr'] = counts_df['MonthDateTime'].dt.strftime('%Y%m')
+
+    print("Months with recently modified files found in scan (Count):")
+    non_zero_counts_df = counts_df[counts_df['ModifiedFileCount'] > 0]
+    if not non_zero_counts_df.empty:
+        print(non_zero_counts_df[['MonthStr', 'ModifiedFileCount']].to_string(index=False))
+    else:
+        print("No files found modified after the cutoff date within the scanned directories.")
+
+    print("\nGenerating histogram...")
+    fig, ax = plt.subplots(figsize=(18, 7))
+    all_months_counts.plot(kind='bar', ax=ax, width=0.8)
+
+    title_start_month_str = date_index.min().strftime('%Y-%m')
+    title_end_month_str = date_index.max().strftime('%Y-%m')
+
+    title_main_part = f'CSV Files Modified After {CUTOFF_DATE_STR}\n(Counts per Month, {title_start_month_str} to {title_end_month_str}'
+
+    details_suffix = ""
+    path_descriptor = f'"{subdir_arg}"' if subdir_arg and subdir_arg.strip() else f'root path ("{root_dir_arg}")'
+
+    if total_station_dirs_to_scan > 0:
+        details_suffix = f' - Based on scan of {processed_dirs} director{"y" if processed_dirs == 1 else "ies"} in {path_descriptor}'
+    else:
+        details_suffix = f' - No station directories found to scan in {path_descriptor}'
+
+    title = f'{title_main_part}{details_suffix})'
+    ax.set_title(title)
+
+    ax.set_ylabel('Number of Modified Files')
+    ax.set_xlabel('Month (YYYY-MM)')
+
+    ax.xaxis.set_major_locator(mdates.YearLocator())
+    ax.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m'))
+    ax.xaxis.set_minor_locator(mdates.MonthLocator(bymonth=[1, 7]))
+
+    plt.xticks(rotation=90)
+    plt.grid(axis='y', linestyle='--', alpha=0.7)
+    plt.tight_layout()
+
+    try:
+        plt.savefig(plot_output_filename)
+        print(f"Histogram saved to {plot_output_filename}")
+    except Exception as e:
+        print(f"Error saving histogram: {e}")
+
+    plt.show()
+    plt.close(fig)
+
+    # Report status of the secondary subdirectory check
+    if secondary_subdir_name_check_arg and secondary_subdir_name_check_arg.strip():
+        if found_non_empty_secondary_subdir_overall:
+            print(
+                f"\nSecondary Directory Check: At least one non-empty instance of '{secondary_subdir_name_check_arg}' was found within the processed station directories.")
+        else:
+            print(
+                f"\nSecondary Directory Check: No non-empty instances of '{secondary_subdir_name_check_arg}' were found within the processed station directories.")
+
+    print("Script finished.")
+    return True
 
 
-# --- Output Results to Console (Counts Summary) ---
-print("\n--- Files Modified After {} By Month (YYYYMM) (Based on Scan) ---".format(CUTOFF_DATE_STR))
-# Create a DataFrame for easier viewing/sorting if needed
-counts_df = all_months_counts.reset_index()
-counts_df.columns = ['Month', 'ModifiedFileCount']
-counts_df['MonthStr'] = counts_df['Month'].dt.strftime('%Y%m')
+if __name__ == "__main__":
 
-# Print non-zero counts
-print("Months with recently modified files found in scan (Count):")
-non_zero_counts = counts_df[counts_df['ModifiedFileCount'] > 0]
-if not non_zero_counts.empty:
-    print(non_zero_counts[['MonthStr', 'ModifiedFileCount']].to_string(index=False))
-else:
-    print("No files found modified after the cutoff date within the scanned directories.")
+    d = '/media/research/IrrigationGIS'
+    if not os.path.exists(d):
+        d = '/home/dgketchum/data/IrrigationGIS'
 
-# --- Create Histogram ---
-print("\nGenerating histogram...")
+    madis = os.path.join(d, 'climate', 'madis')
 
-fig, ax = plt.subplots(figsize=(18, 7))  # Wider figure for readability
+    mesonet_dir_public = os.path.join(madis, 'LDAD_public', 'mesonet')
+    out_dir_public = os.path.join(mesonet_dir_public, 'inclusive_csv')
 
-# Plotting the series directly
-all_months_counts.plot(kind='bar', ax=ax, width=0.8)
+    mesonet_dir_research = os.path.join(madis, 'LDAD', 'mesonet')
+    out_dir_research = os.path.join(mesonet_dir_research, 'inclusive_csv')
 
-# Update title to reflect potential partial scan
-title = f'CSV Files Modified After {CUTOFF_DATE_STR}\n'
-title += f'(Counts per Month, {START_YEAR}-01 to {END_YEAR}-{END_MONTH:02d}'
-if processed_dirs < len(dirs):  # Check if scan was stopped early
-    title += f' - Based on partial scan of {processed_dirs}/{len(dirs)} dirs'
-title += ')'
-ax.set_title(title)
-
-ax.set_ylabel('Number of Modified Files')
-ax.set_xlabel('Month (YYYY-MM)')
-
-# Improve x-axis labels
-ax.xaxis.set_major_locator(mdates.YearLocator())  # Tick every year
-ax.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m'))  # Format as YYYY-MM
-ax.xaxis.set_minor_locator(mdates.MonthLocator(bymonth=[1, 7]))  # Minor ticks Jan/Jul
-
-plt.xticks(rotation=90)  # Rotate labels for better visibility
-plt.grid(axis='y', linestyle='--', alpha=0.7)
-plt.tight_layout()  # Adjust layout to prevent labels overlapping
-
-# Save the figure BEFORE showing it
-try:
-    plt.savefig('madis_hist_04MAY.png')
-    print("Histogram saved to maids_hist.png")
-except Exception as e:
-    print(f"Error saving histogram: {e}")
-
-plt.show()
-
-print("Script finished.")
+    check_madis_files(out_dir_public, 'madis_check_15MAY2025', madis)
+# ========================= EOF ====================================================================
