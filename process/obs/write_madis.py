@@ -248,7 +248,7 @@ if __name__ == "__main__":
     times = []
     processed_months = set()
     for i, r in df.iterrows():
-        if r['Count'] < 30000:
+        if r['Count'] < 25000:
             month_start_dt = pd.to_datetime(r['Month'], format='%Y%m')
             year = month_start_dt.year
             month = month_start_dt.month
@@ -267,8 +267,9 @@ if __name__ == "__main__":
         for a in args_:
             process_time_chunk(a)
 
-    workers = 10
-    with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
-        results = list(executor.map(process_time_chunk, args_))
+    # num_processes = 5
+    num_processes = 10
+    with multiprocessing.Pool(processes=num_processes) as pool:
+        pool.map(process_time_chunk, args_)
 
 # ========================= EOF ====================================================================
