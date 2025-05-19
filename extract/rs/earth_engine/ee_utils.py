@@ -50,32 +50,27 @@ def landsat_c2_sr(input_img):
     return image
 
 
-def landsat_masked(yr, roi):
+def landsat_masked(yr):
     start = '{}-01-01'.format(yr)
     end_date = '{}-01-01'.format(yr + 1)
 
-    l4_coll = ee.ImageCollection('LANDSAT/LT04/C02/T1_L2').filterBounds(
-        roi).filterDate(start, end_date).map(landsat_c2_sr)
-    l5_coll = ee.ImageCollection('LANDSAT/LT05/C02/T1_L2').filterBounds(
-        roi).filterDate(start, end_date).map(landsat_c2_sr)
-    l7_coll = ee.ImageCollection('LANDSAT/LE07/C02/T1_L2').filterBounds(
-        roi).filterDate(start, end_date).map(landsat_c2_sr)
-    l8_coll = ee.ImageCollection('LANDSAT/LC08/C02/T1_L2').filterBounds(
-        roi).filterDate(start, end_date).map(landsat_c2_sr)
-    l9_coll = ee.ImageCollection('LANDSAT/LC09/C02/T1_L2').filterBounds(
-        roi).filterDate(start, end_date).map(landsat_c2_sr)
+    l4_coll = ee.ImageCollection('LANDSAT/LT04/C02/T1_L2').filterDate(start, end_date).map(landsat_c2_sr)
+    l5_coll = ee.ImageCollection('LANDSAT/LT05/C02/T1_L2').filterDate(start, end_date).map(landsat_c2_sr)
+    l7_coll = ee.ImageCollection('LANDSAT/LE07/C02/T1_L2').filterDate(start, end_date).map(landsat_c2_sr)
+    l8_coll = ee.ImageCollection('LANDSAT/LC08/C02/T1_L2').filterDate(start, end_date).map(landsat_c2_sr)
+    l9_coll = ee.ImageCollection('LANDSAT/LC09/C02/T1_L2').filterDate(start, end_date).map(landsat_c2_sr)
 
     lsSR_masked = ee.ImageCollection(l7_coll.merge(l8_coll).merge(l9_coll).merge(l5_coll).merge(l4_coll))
 
     return lsSR_masked
 
 
-def landsat_composites(year, start, end, roi, append_name, scale=False):
+def landsat_composites(year, start, end, append_name, scale=False):
     start_year = datetime.strptime(start, '%Y-%m-%d').year
     if start_year != year:
         year = start_year
 
-    lsSR_masked = landsat_masked(year, roi)
+    lsSR_masked = landsat_masked(year)
     thermal = ee.Image(lsSR_masked.filterDate(start, end).map(
         lambda x: x.select(['B10'],
                            ['B10_{}'.format(append_name)]

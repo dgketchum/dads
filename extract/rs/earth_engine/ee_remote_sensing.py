@@ -39,7 +39,7 @@ def request_band_extract(file_prefix, points_layer, years, buffer, tiles, check_
 
     for tile in tiles:
 
-        # if tile != '15SVS':
+        # if tile != '10TER':
         #     continue
 
         clip = mgrs.filterMetadata('MGRS_TILE', 'equals', tile)
@@ -59,7 +59,7 @@ def request_band_extract(file_prefix, points_layer, years, buffer, tiles, check_
                     pass
 
             if export_tif:
-                stack = stack_bands(yr, mgrs, scale=True)
+                stack = stack_bands(yr, scale=True)
                 stack = stack.clip(clip.first().geometry().buffer(250))
                 task = ee.batch.Export.image.toCloudStorage(
                     image=stack,
@@ -87,7 +87,7 @@ def request_band_extract(file_prefix, points_layer, years, buffer, tiles, check_
                     to_export.append(desc)
 
             else:
-                stack = stack_bands(yr, mgrs, scale=False)
+                stack = stack_bands(yr, scale=False)
                 stack = stack.clip(clip.first().geometry().buffer(1000))
                 tile_pts = points.filterMetadata('MGRS_TILE', 'equals', tile)
 
@@ -96,9 +96,11 @@ def request_band_extract(file_prefix, points_layer, years, buffer, tiles, check_
                                            scale=30,
                                            tileScale=16)
 
+                bucket_file = os.path.join('dads_landsat', desc)
                 task = ee.batch.Export.table.toCloudStorage(
                     collection=data,
                     description=desc,
+                    fileNamePrefix=bucket_file,
                     bucket='wudr',
                     fileFormat='CSV')
 
@@ -123,7 +125,7 @@ def request_band_extract(file_prefix, points_layer, years, buffer, tiles, check_
         print(f'{len(to_export)} exports to be run')
 
 
-def stack_bands(yr, roi, scale=False):
+def stack_bands(yr, scale=False):
     """
     Create a stack of bands for the year and region of interest specified.
     :param yr:
@@ -146,7 +148,7 @@ def stack_bands(yr, roi, scale=False):
 
     first, input_bands, proj = True, None, None
     for name, start, end in periods:
-        bands = landsat_composites(yr, start, end, roi, name, scale=scale)
+        bands = landsat_composites(yr, start, end, name, scale=scale)
         if first:
             input_bands = bands
             proj = bands.select('B2_0').projection().getInfo()
@@ -154,7 +156,7 @@ def stack_bands(yr, roi, scale=False):
         else:
             input_bands = input_bands.addBands(bands)
 
-    input_bands = input_bands.clip(roi).reproject(crs=proj['crs'], scale=30)
+    input_bands = input_bands.reproject(crs=proj['crs'], scale=30)
 
     return input_bands
 
@@ -220,9 +222,10 @@ if __name__ == '__main__':
     station_set = 'madis'
 
     if station_set == 'madis':
-        stations = 'madis_mgrs_28OCT2024'
-        sites = os.path.join(d, 'dads', 'met', 'stations', 'madis_mgrs_28OCT2024.csv')
-        chk = os.path.join(d, 'dads', 'rs', 'madis_28OCT2024')
+        stations = 'madis_17MAY2025_gap_mgrs'
+        sites = os.path.join(d, 'dads', 'met', 'stations', f'{stations}.csv')
+        chk = os.path.join(d, 'dads', 'rs', 'landsat', stations)
+
 
     elif station_set == 'ghcn':
         stations = 'ghcn_CANUSA_stations_mgrs'
@@ -240,7 +243,7 @@ if __name__ == '__main__':
     pts = 'projects/ee-dgketchum/assets/dads/{}'.format(stations)
 
     geo = 'users/dgketchum/boundaries/western_states_expanded_union'
-    years_ = list(range(2000, 2023))
+    years_ = list(range(2023, 2024))
     years_.reverse()
 
     failed = []
