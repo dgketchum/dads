@@ -34,7 +34,10 @@ def extract_surface_reflectance(stations, gridded_dir, incomplete_out, out_data,
     else:
         incomplete = {'missing': []}
 
-    station_list = pd.read_csv(stations, index_col=index_col)
+    # roundabout index setting so np.unique(indexer[index_col].values).tolist() doesn't fail
+    station_list = pd.read_csv(stations)
+    station_list[index_col] = station_list[index_col].astype(str)
+    station_list.index = station_list[index_col]
 
     if bounds:
         w, s, e, n = bounds
@@ -90,10 +93,15 @@ def extract_surface_reflectance(stations, gridded_dir, incomplete_out, out_data,
             time_values = pd.to_datetime(ds['time'].values, unit='D', origin=pd.Timestamp('1981-01-01'))
             ds = ds.assign_coords(time=time_values).set_index(time='time')
 
+            # TODO: consider making use of zenith, overpass time and QA data
             ds = ds.sel(latitude=indexer.latitude, longitude=indexer.longitude, method='nearest')
 
-            # TODO: consider making use of zenith, overpass time and QA data
             fids = np.unique(indexer[index_col].values).tolist()
+
+            if num_workers == 1:
+                for fid in fids:
+                    process_fid(fid, year, month, ds, extract_vars, out_data, overwrite, index_col)
+
             with concurrent.futures.ThreadPoolExecutor(max_workers=num_workers) as executor:
                 futures = [executor.submit(process_fid, fid, year, month, ds, extract_vars,
                                            out_data, overwrite, index_col) for fid in fids]
@@ -107,7 +115,7 @@ def extract_surface_reflectance(stations, gridded_dir, incomplete_out, out_data,
 def process_fid(fid, year, month, ds, extract_vars, out_data, overwrite, ind_col):
     dst_dir = os.path.join(out_data, fid)
     if not os.path.exists(dst_dir):
-        os.mkdir(dst_dir)
+        os.makedirs(dst_dir, exist_ok=True)
     _file = os.path.join(dst_dir, '{}_{}_{}.csv'.format(fid, year, month))
 
     if not os.path.exists(_file) or overwrite:
@@ -135,14 +143,14 @@ def join_station_data(in_dir, dst_dir, n_workers, overwrite=False):
 
     if n_workers == 1:
         for fid in station_names:
-            process_station(fid, in_dir, dst_dir, overwrite)
+            process_station_join(fid, in_dir, dst_dir, overwrite)
     else:
         with concurrent.futures.ProcessPoolExecutor(max_workers=n_workers) as executor:
-            futures = [executor.submit(process_station, fid, in_dir, dst_dir, overwrite) for fid in station_names]
+            futures = [executor.submit(process_station_join, fid, in_dir, dst_dir, overwrite) for fid in station_names]
             concurrent.futures.wait(futures)
 
 
-def process_station(fid, in_dir, dst_dir, overwrite=False):
+def process_station_join(fid, in_dir, dst_dir, overwrite=False):
     """"""
 
     out_file = os.path.join(dst_dir, f'{fid}.csv')
@@ -195,8 +203,8 @@ if __name__ == '__main__':
         home = os.path.expanduser('~')
         d = os.path.join(home, 'data', 'IrrigationGIS')
 
-    # sites = os.path.join(d, 'dads', 'met', 'stations', 'madis_mgrs_28OCT2024.csv')
-    sites = os.path.join(d, 'climate', 'ghcn', 'stations', 'ghcn_CANUSA_stations_mgrs_CDR.csv')
+    sites = os.path.join(d, 'dads', 'met', 'stations', 'madis_17MAY2025_gap_mgrs.csv')
+    # sites = os.path.join(d, 'climate', 'ghcn', 'stations', 'ghcn_CANUSA_stations_mgrs_CDR.csv')
 
     grid_dir = os.path.join(d, 'dads', 'rs', 'cdr', 'nc')
     csv_m_dir = os.path.join(d, 'dads', 'rs', 'cdr', 'csv')
@@ -204,7 +212,7 @@ if __name__ == '__main__':
 
     workers = 16
     extract_surface_reflectance(sites, grid_dir, incomp, csv_m_dir, num_workers=workers,
-                                overwrite=False, bounds=(-180., 25., -60., 85.), index_col='STAID')
+                                overwrite=False, bounds=(-180., 25., -60., 85.), index_col='fid')
 
     joined_dir = os.path.join(d, 'dads', 'rs', 'cdr', 'joined')
     join_station_data(csv_m_dir, joined_dir, workers, overwrite=False)
