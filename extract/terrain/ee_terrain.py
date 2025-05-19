@@ -43,9 +43,12 @@ def export_terrain_features(file_prefix, points_layer, buffer_, tiles, check_dir
                                        scale=90,
                                        tileScale=16)
 
+            bucket_file = os.path.join('dads_terrain', desc)
+
             task = ee.batch.Export.table.toCloudStorage(
                 collection=data,
                 description=desc,
+                fileNamePrefix=bucket_file,
                 bucket='wudr',
                 fileFormat='CSV')
 
@@ -92,14 +95,15 @@ if __name__ == '__main__':
     # stations = 'dads_stations_mgrs_10FEB2025'
     # check = os.path.join(d, 'dads', 'dem', 'terrain', 'madis_stations')
 
-    sites = os.path.join(d, 'climate', 'ghcn', 'stations', 'ghcn_CANUSA_stations_mgrs.csv')
-    stations = 'ghcn_CANUSA_stations_mgrs'
-    stype = 'ghcn'
-    check = os.path.join(d, 'dads', 'dem', 'terrain', 'ghcn_stations')
+    # sites = os.path.join(d, 'climate', 'ghcn', 'stations', 'ghcn_CANUSA_stations_mgrs.csv')
+    # stations = 'ghcn_CANUSA_stations_mgrs'
+    # stype = 'ghcn'
+    # check = os.path.join(d, 'dads', 'dem', 'terrain', 'ghcn_stations')
 
-    # sites = os.path.join(d, 'dads', 'met', 'stations', 'madis_mgrs_28OCT2024.csv')
-    # stations = 'madis_mgrs_28OCT2024'
-    # check = os.path.join(d, 'dads', 'dem', 'terrain', 'madis_stations')
+    sites = os.path.join(d, 'dads', 'met', 'stations', 'madis_17MAY2025_gap_mgrs.csv')
+    stations = 'madis_17MAY2025_gap_mgrs'
+    check = os.path.join(d, 'dads', 'dem', 'terrain', 'madis_stations')
+    stype = 'madis'
 
     kw = station_par_map(stype)
     bounds = (-180., 25., -60., 85.)
