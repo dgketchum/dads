@@ -78,20 +78,15 @@ if __name__ == '__main__':
         root = '/home/dgketchum/data/IrrigationGIS'
 
     # this must be EPSG:5071 shapefile
-    # shapefile_path_ = os.path.join(root, 'met', 'stations', 'dads_stations_res_elev_mgrs_5071.shp')
-    shapefile_path_ = os.path.join(root, 'dads', 'met', 'stations', 'madis_mgrs_28OCT2024_3978.shp')
-    # shapefile_path_ = os.path.join(root, 'dads', 'met', 'stations', 'madis_mgrs_28OCT2024_5071.shp')
+    # shapefile_path_ = os.path.join(root, 'dads', 'met', 'stations', 'madis_mgrs_28OCT2024_3978.shp')
 
-    shapefile_path_ = os.path.join(root, 'climate', 'ghcn', 'stations', 'ghcn_CANUSA_stations_mgrs_5071.shp')
-
-    target_tiles_ = os.path.join(root, 'boundaries', 'mgrs', 'mgrs_nldas.csv')
-    target_tiles_ = pd.read_csv(target_tiles_)['MGRS_TILE'].unique().tolist()
+    shapefile_path_ = os.path.join(root, 'dads', 'met', 'stations', 'madis_17MAY2025_gap_mgrs_5071.shp')
 
     raster_dir_ = os.path.join(root, 'dads', 'dem', 'rsun')
-    # solrad_out = os.path.join(root, 'dads', 'dem', 'rsun_tables', 'madis_28OCT2024')
-    solrad_out = os.path.join(root, 'dads', 'dem', 'rsun_tables', 'ghcn')
+    solrad_out = os.path.join(root, 'dads', 'dem', 'rsun_tables', 'madis_17MAY2025_gap')
+    # solrad_out = os.path.join(root, 'dads', 'dem', 'rsun_tables', 'ghcn')
     extract_raster_values_by_tile(shapefile_path_, raster_dir_, solrad_out, num_workers=16, avoid_tiles=None,
-                                  target_tiles=target_tiles_, shuffle=True, overwrite=False, index_col='STAID',
+                                  target_tiles=None, shuffle=True, overwrite=False, index_col='fid',
                                   debug=False)
 
 # ========================= EOF ====================================================================

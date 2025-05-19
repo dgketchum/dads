@@ -263,11 +263,15 @@ def get_station_metadata(
         json.dump(station_dct, fp, indent=4)
 
 
-def write_stations_to_shapefile(station_tracker, shapefile_path):
+def write_stations_to_shapefile(station_tracker, shapefile_path, existing_check=None):
     with open(station_tracker, 'r') as f:
         station_dct = json.load(f)
     print(len(station_dct))
     data = []
+    if existing_check:
+        exists = [s.split('.')[0] for s in os.listdir(existing_check)]
+        station_dct = {k: v for k, v in station_dct.items() if k not in exists}
+
     for station_id, info in station_dct.items():
 
         geo_ = Point(info['lon'], info['lat'])
@@ -352,21 +356,23 @@ if __name__ == '__main__':
     mesonet_dir_public = os.path.join(madis, 'LDAD_public', 'mesonet', 'netCDF')
     mesonet_csv_public = os.path.join(madis, 'LDAD_public', 'mesonet', 'inclusive_csv')
 
-    tracker_old = os.path.join(madis, 'madis_meta_14MAY2025.json')
-    tracker_new = os.path.join(madis, 'madis_meta_15MAY2025.json')
+    tracker_old = os.path.join(madis, 'madis_meta_15MAY2025.json')
+    tracker_new = os.path.join(madis, 'madis_meta_17MAY2025.json')
 
-    shp = os.path.join(dads, 'met', 'stations', 'madis_14MAY2025.shp')
+    # shp = os.path.join(dads, 'met', 'stations', 'madis_17MAY2025.shp')
 
-    get_station_metadata(data_directory=mesonet_dir_research,
-                         dataset_source_label='research',
-                         csv_dir=mesonet_csv_research,
-                         output_station_tracker_path=tracker_new,
-                         open_nc_func=open_nc,
-                         metadata_fields=METADATA,
-                         input_station_tracker_path=tracker_old,
-                         time_constraint_yearmonths=None)
+    # get_station_metadata(data_directory=mesonet_dir_research,
+    #                      dataset_source_label='research',
+    #                      csv_dir=mesonet_csv_research,
+    #                      output_station_tracker_path=tracker_new,
+    #                      open_nc_func=open_nc,
+    #                      metadata_fields=METADATA,
+    #                      input_station_tracker_path=tracker_old,
+    #                      time_constraint_yearmonths=None)
 
-    write_stations_to_shapefile(tracker_new, shp)
+    shp = os.path.join(dads, 'met', 'stations', 'madis_17MAY2025_gap.shp')
+    check_dir = '/data/ssd2/dads/training/parquet'
+    write_stations_to_shapefile(tracker_new, shp, existing_check=check_dir)
 
     stations = os.path.join(d, 'dads', 'met', 'stations', 'dads_stations_elev_mgrs.csv')
     flagged = os.path.join(d, 'dads', 'met', 'stations', 'madis_research_flagged.json')
