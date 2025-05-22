@@ -76,9 +76,62 @@ def validate_raster_point_intersections(raster_directory, points_dataframe,
     return suspect_raster_files
 
 
+import subprocess
+
+
+def _internal_parse_grass_coords(output_str: str) -> dict:
+    coords = {}
+    for line in output_str.strip().split('\n'):
+        if '=' not in line:
+            continue
+        key, value_str = line.split('=', 1)
+        try:
+            coords[key.strip()] = float(value_str)
+        except ValueError:
+            pass
+    return coords
+
+
+def remove_rasters(dem_dir, tiles):
+
+    dem_files = [os.path.join(dem_dir, t) for t in tiles]
+
+    for dem_name, dem_file in zip(tiles, dem_files):
+        tile = dem_name.split('_')[-1]
+        subprocess.call(['g.remove', 'type=raster', f'name=dem_{tile}', '-f'])
+        subprocess.call(['g.remove', 'type=raster', f'name=slope_{tile}', '-f'])
+        subprocess.call(['g.remove', 'type=raster', f'name=aspect_{tile}', '-f'])
+        subprocess.call(['g.remove', 'type=raster', f'name=aspect_{tile}', '-f'])
+
+        for day in range(1, 366):
+            irradiance_output_path = 'irradiance_day_{0}_{1}'.format(day, tile)
+            subprocess.call(['g.remove', 'type=raster', f'name={irradiance_output_path}', '-f'])
+
+        print('removed {}'.format(tile))
+
+
+def reproject_dems(in_dir, tiles, output_dir, in_epsg, out_epsg):
+    file_names = sorted(os.listdir(in_dir))
+    dem_files = [os.path.join(in_dir, f) for f in file_names if f.endswith('.tif')]
+    out_files = [os.path.join(output_dir, f) for f in file_names if f.endswith('.tif')]
+
+    for in_dem, out_dem in zip(dem_files, out_files):
+        tile = in_dem.split('.')[0][-5:]
+
+        if tile not in tiles:
+            continue
+        subprocess.run([
+            "gdalwarp", "-s_srs", f"EPSG:{in_epsg}", '-overwrite',
+            "-t_srs", f"EPSG:{out_epsg}", "-r", "bilinear",
+            "-of", "GTiff", in_dem, out_dem
+        ])
+        print(tile, os.path.basename(in_dem), os.path.basename(out_dem))
+
+
 if __name__ == '__main__':
 
-    d = '/media/research/IrrigationGIS'
+    d = '/home/dgketchum/data/IrrigationGIS'
+    dem_d = '/data/ssd2/dads/dem'
 
     _bucket = 'gs://wudr'
     station_set = 'madis'
@@ -96,11 +149,16 @@ if __name__ == '__main__':
     if zone == 'north':
         bounds = (-180., 49., -60., 85.)
         epsg = '3978'
-        chk = f'/media/nvm/IrrigationGIS/dads/dem/dem_{epsg}'
+        chk = os.path.join(dem_d, f'/dem_{epsg}')
+        mapset_ = "dads_map_canada"
+
+
     elif zone == 'south':
         bounds = (-180., 23., -60., 49.)
         epsg = '5071'
-        chk = f'/media/nvm/IrrigationGIS/dads/dem/dem_{epsg}'
+        chk = os.path.join(dem_d, f'/dem_{epsg}')
+        mapset_ = "dads_map_conus"
+
     else:
         raise ValueError
 
@@ -112,17 +170,6 @@ if __name__ == '__main__':
     tiles = sites_df['MGRS_TILE'].dropna().unique().tolist()
     mgrs_tiles_list = [m for m in tiles if isinstance(m, str)]
     mgrs_tiles_list.sort()
-
-    suspect_files = validate_raster_point_intersections(
-        raster_directory=chk,
-        points_dataframe=sites_df,
-        latitude_col='latitude',
-        longitude_col='longitude',
-        mgrs_col='MGRS_TILE',
-        expected_raster_epsg_str=epsg,
-        unique_mgrs_codes_list=mgrs_tiles_list
-    )
-
-    print(suspect_files)
+    ind = [t for t in mgrs_tiles_list]
 
 # ========================= EOF ====================================================================
