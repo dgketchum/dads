@@ -59,8 +59,21 @@ if __name__ == '__main__':
         d = '/home/dgketchum/data/IrrigationGIS'
 
     _bucket = 'gs://wudr'
+    station_set = 'madis'
 
-    sites = os.path.join(d, 'dads', 'met', 'stations', 'dads_stations_mgrs_10FEB2025.csv')
+    if station_set == 'madis':
+        stations = 'madis_17MAY2025_gap_mgrs'
+        sites = os.path.join(d, 'dads', 'met', 'stations', f'{stations}.csv')
+        chk = os.path.join(d, 'dads', 'rs', 'landsat', stations)
+
+
+    elif station_set == 'ghcn':
+        stations = 'ghcn_CANUSA_stations_mgrs'
+        sites = os.path.join(d, 'climate', 'ghcn', 'stations', 'ghcn_CANUSA_stations_mgrs.csv')
+        chk = os.path.join(d, 'dads', 'rs', 'ghcn_stations', 'landsat', 'tiles')
+
+    else:
+        raise NotImplementedError
 
     bounds = (-180., 25., -60., 85.)
     sites_df = pd.read_csv(sites)

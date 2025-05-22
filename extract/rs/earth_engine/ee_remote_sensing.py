@@ -243,7 +243,7 @@ if __name__ == '__main__':
     pts = 'projects/ee-dgketchum/assets/dads/{}'.format(stations)
 
     geo = 'users/dgketchum/boundaries/western_states_expanded_union'
-    years_ = list(range(2023, 2024))
+    years_ = list(range(2000, 2023)) + [2024]
     years_.reverse()
 
     failed = []
