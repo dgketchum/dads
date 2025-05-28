@@ -1,12 +1,13 @@
 import os
-import time
 import subprocess
-from pprint import pprint
+from multiprocessing import Pool, cpu_count
 
 import pandas as pd
 
+from utils.station_parameters import station_par_map
 
-def ingest_rasters(in_dir, tiles, mapset):
+
+def ingest_rasters(in_dir, tiles, mapset, overwrite=False):
     file_names = sorted(os.listdir(in_dir))
     dem_files = [os.path.join(in_dir, f) for f in file_names if f.endswith('.tif')]
 
@@ -18,16 +19,17 @@ def ingest_rasters(in_dir, tiles, mapset):
             continue
 
         dem_name = f'dem_{tile}'
-        subprocess.call(['r.in.gdal', f'input={in_dem}', f'output={dem_name}@{mapset}', '--overwrite'])
+        cmd = ['r.in.gdal', f'input={in_dem}', f'output={dem_name}@{mapset}']
 
+        if overwrite:
+            cmd += ['--overwrite']
 
-import os
-import subprocess
-from multiprocessing import Pool, cpu_count
+        subprocess.call(cmd)
 
 
 def worker_calculate_single_tile_irradiance(args):
-    dem_name_grass, dem_file_path, terrain_dir, mapset, r_sun_nprocs = args
+    """"""
+    dem_name_grass, dem_file_path, terrain_dir, mapset, r_sun_nprocs, overwrite = args
 
     tile = dem_name_grass.split('_')[-1]
 
@@ -40,12 +42,21 @@ def worker_calculate_single_tile_irradiance(args):
     slope_grass_name = f'slope_{tile}'
     aspect_grass_name = f'aspect_{tile}'
 
-    subprocess.run(['gdaldem', 'slope', dem_file_path, slope_output_tif], check=True)
-    subprocess.run(['r.in.gdal', f'input={slope_output_tif}', f'output={slope_grass_name}', '--overwrite'],
-                   check=True)
-    subprocess.run(['gdaldem', 'aspect', dem_file_path, aspect_output_tif], check=True)
-    subprocess.run(['r.in.gdal', f'input={aspect_output_tif}', f'output={aspect_grass_name}', '--overwrite'],
-                   check=True)
+    slope_cmd = ['gdaldem', 'slope', dem_file_path, slope_output_tif]
+    aspect_cmd = ['gdaldem', 'aspect', dem_file_path, aspect_output_tif]
+
+    if overwrite:
+        slope_cmd += ['--overwrite']
+        aspect_cmd += ['--overwrite']
+
+    subprocess.run(slope_cmd, check=True)
+    subprocess.run(aspect_cmd, check=True)
+
+    slope_ingest_cmd = ['r.in.gdal', f'input={slope_output_tif}', f'output={slope_grass_name}', '--overwrite']
+    subprocess.run(slope_ingest_cmd, check=True)
+
+    aspect_ingest_cmd = ['r.in.gdal', f'input={aspect_output_tif}', f'output={aspect_grass_name}', '--overwrite']
+    subprocess.run(aspect_ingest_cmd, check=True)
 
     subprocess.run(['g.region', f'rast={dem_name_grass}@{mapset}'], check=True)
 
@@ -60,7 +71,11 @@ def worker_calculate_single_tile_irradiance(args):
                              f'glob_rad={irradiance_grass_name}',
                              f'nprocs={r_sun_nprocs}', '--overwrite']
 
-        subprocess.run(rsun_command_list, check=True)
+        try:
+            subprocess.run(rsun_command_list, check=True)
+        except subprocess.CalledProcessError:
+            print(f'{irradiance_grass_name} failed')
+            continue
 
     return f"Tile {tile}: Done"
 
@@ -90,11 +105,11 @@ def calculate_terrain_irradiance_parallel(terrain_dir, terrain_source_path,
                 print(f'{tile_id} is complete, skippin')
                 continue
             else:
-                print(f'adding {tile_id}')
+                print(f'{len(existing_irradiance_files)} files complete: adding {tile_id}')
 
         dem_file_full_path = os.path.join(terrain_source_path, dem_tif_filename)
         task_args_list.append((dem_name_grass, dem_file_full_path, terrain_dir,
-                               mapset, r_sun_nprocs_per_tile))
+                               mapset, r_sun_nprocs_per_tile, overwrite))
 
     if num_parallel_tiles is None:
         num_parallel_tiles = cpu_count()
@@ -153,16 +168,14 @@ def export_rasters(terrain_dir, rsun_out, mapset='PERMANENT', overwrite=False, m
             # print(tile, day)
 
 
-
-
 if __name__ == '__main__':
 
     root = '/home/dgketchum/data/IrrigationGIS'
     dem_d = '/data/ssd2/dads/dem'
 
     _bucket = 'gs://wudr'
-    station_set = 'madis'
-    zone = 'north'
+    station_set = 'ghcn'
+    zone = 'conus'
 
     if station_set == 'madis':
         stations = 'madis_17MAY2025_gap_mgrs'
@@ -171,39 +184,52 @@ if __name__ == '__main__':
 
     elif station_set == 'ghcn':
         stations = 'ghcn_CANUSA_stations_mgrs'
-        sites = os.path.join(root, 'climate', 'ghcn', 'stations', 'ghcn_CANUSA_stations_mgrs.csv')
+        sites = os.path.join(root, 'climate', 'ghcn', 'stations', 'ghcn_stations_mgrs_country.csv')
         chk = os.path.join(root, 'dads', 'rs', 'ghcn_stations', 'landsat', 'tiles')
 
     else:
         raise ValueError
 
-    if zone == 'north':
+    if zone == 'canada':
         bounds = (-141., 49., -60., 85.)
         epsg = '3978'
         tif_dem = os.path.join(dem_d, f'dem_{epsg}')
         mapset_ = "dads_map_canada"
 
-    elif zone == 'south':
+    elif zone == 'conus':
         bounds = (-180., 23., -60., 49.)
         epsg = '5071'
         tif_dem = os.path.join(dem_d, f'dem_{epsg}')
-        mapset_ = "dads_map_conus"
+        mapset_ = "dads_map"
+
+    elif zone == 'alaska':
+        bounds = (-180., 49., -60., 85.)
+        epsg = '6393'
+        tif_dem = os.path.join(dem_d, f'dem_{epsg}')
+        mapset_ = "dads_map_alaska"
 
     else:
         raise ValueError
 
     sites_df = pd.read_csv(sites)
-    sites_df = sites_df[(sites_df['latitude'] < bounds[3]) & (sites_df['latitude'] >= bounds[1])]
-    sites_df = sites_df[(sites_df['longitude'] < bounds[2]) & (sites_df['longitude'] >= bounds[0])]
+
+    kw = station_par_map(station_set)
+
+    sites_df = sites_df[(sites_df[kw['lat']] < bounds[3]) & (sites_df[kw['lat']] >= bounds[1])]
+    sites_df = sites_df[(sites_df[kw['lon']] < bounds[2]) & (sites_df[kw['lon']] >= bounds[0])]
+
+    if zone == 'canada':
+        sites_df = sites_df[sites_df['AFF_ISO'] == 'CA']
 
     tiles = sites_df['MGRS_TILE'].unique().tolist()
     tiles = [m for m in tiles if isinstance(m, str)]
     mgrs_tiles = list(set(tiles))
     mgrs_tiles.sort()
 
-    # calculate_terrain_irradiance(dem_d, tif_dem, mapset=mapset_, tiles=tiles, overwrite=True)
+    # ingest_rasters(tif_dem, mgrs_tiles, mapset=mapset_, overwrite=True)
+
     calculate_terrain_irradiance_parallel(dem_d, tif_dem, mapset=mapset_, tiles_filter=mgrs_tiles, overwrite=False,
-                                          num_parallel_tiles=6, r_sun_nprocs_per_tile=6)
+                                          num_parallel_tiles=1, r_sun_nprocs_per_tile=4)
 
     # rsun_out_ = os.path.join(dem_d, 'rsun_irradiance')
     # export_rasters(tif_dem, rsun_out_, mapset=mapset_, mgrs_list=tiles, overwrite=True)

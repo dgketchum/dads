@@ -7,6 +7,7 @@ import pandas as pd
 
 sys.path.insert(0, os.path.abspath('../..'))
 from extract.rs.earth_engine.ee_utils import is_authorized
+from utils.station_parameters import station_par_map
 
 sys.setrecursionlimit(2000)
 
@@ -71,23 +72,20 @@ def export_dem(tiles, check_dir=None, crs_epsg='5071', dry_run=False):
 if __name__ == '__main__':
     is_authorized()
 
-    d = '/media/research/IrrigationGIS'
-    if not os.path.exists(d):
-        d = '/home/dgketchum/data/IrrigationGIS'
+    dem_d = '/data/ssd2/dads/dem'
+    d = '/home/dgketchum/data/IrrigationGIS'
 
     _bucket = 'gs://wudr'
-    station_set = 'madis'
+    station_set = 'ghcn'
     zone = 'north'
 
     if station_set == 'madis':
         stations = 'madis_17MAY2025_gap_mgrs'
         sites = os.path.join(d, 'dads', 'met', 'stations', f'{stations}.csv')
-        chk = os.path.join(d, 'dads', 'rs', 'landsat', stations)
 
     elif station_set == 'ghcn':
         stations = 'ghcn_CANUSA_stations_mgrs'
-        sites = os.path.join(d, 'climate', 'ghcn', 'stations', 'ghcn_CANUSA_stations_mgrs.csv')
-        chk = os.path.join(d, 'dads', 'rs', 'ghcn_stations', 'landsat', 'tiles')
+        sites = os.path.join(d, 'climate', 'ghcn', 'stations', 'ghcn_stations_mgrs_country.csv')
 
     else:
         raise ValueError
@@ -95,19 +93,25 @@ if __name__ == '__main__':
     if zone == 'north':
         bounds = (-180., 49., -60., 85.)
         epsg = '3978'
-        chk = f'/media/nvm/IrrigationGIS/dads/dem/dem_{epsg}'
+        chk = os.path.join(dem_d, f'dem_{epsg}')
 
     elif zone == 'south':
         bounds = (-180., 23., -60., 49.)
         epsg = '5071'
-        chk = f'/media/nvm/IrrigationGIS/dads/dem/dem_{epsg}'
+        chk = os.path.join(dem_d, f'dem_{epsg}')
 
     else:
         raise ValueError
 
     sites_df = pd.read_csv(sites)
-    sites_df = sites_df[(sites_df['latitude'] < bounds[3]) & (sites_df['latitude'] >= bounds[1])]
-    sites_df = sites_df[(sites_df['longitude'] < bounds[2]) & (sites_df['longitude'] >= bounds[0])]
+
+    kw = station_par_map(station_set)
+
+    sites_df = sites_df[(sites_df[kw['lat']] < bounds[3]) & (sites_df[kw['lat']] >= bounds[1])]
+    sites_df = sites_df[(sites_df[kw['lon']] < bounds[2]) & (sites_df[kw['lon']] >= bounds[0])]
+
+    if zone == 'north':
+        sites_df = sites_df[sites_df['AFF_ISO'] == 'CA']
 
     tiles = sites_df['MGRS_TILE'].unique().tolist()
     tiles = [m for m in tiles if isinstance(m, str)]
