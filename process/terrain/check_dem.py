@@ -6,6 +6,8 @@ from rasterio.crs import CRS
 from rasterio.warp import transform_geom
 from shapely.geometry import Point, box
 
+from utils.station_parameters import station_par_map
+
 
 def get_mgrs_code_from_filename(filename, known_mgrs_codes):
     basename = os.path.basename(filename)
@@ -110,6 +112,51 @@ def remove_rasters(dem_dir, tiles):
         print('removed {}'.format(tile))
 
 
+def list_and_check_geotiff_crs(directory_path, expected_epsg=5071, dry_run=True):
+    ct, rm = 0, 0
+    for filename in os.listdir(directory_path):
+        filepath = os.path.join(directory_path, filename)
+        if os.path.isfile(filepath) and filename.lower().endswith('.tif'):
+            with rasterio.open(filepath) as dataset:
+                ct += 1
+                crs_object = int(dataset.crs.data['init'].split(':')[1])
+
+                if crs_object != expected_epsg:
+                    rm += 1
+                    if dry_run:
+                        print(f'{filename} has crs {crs_object}')
+                    else:
+                        base, ext = os.path.splitext(filename)
+                        temp_filename = f"{base}_TEMP_CRS_FIX{ext}"
+                        temp_filepath = os.path.join(directory_path, temp_filename)
+
+                        os.rename(filepath, temp_filepath)
+
+                        reproject_single_geotiff(
+                            input_file_path=temp_filepath,
+                            output_file_path=filepath,
+                            source_epsg=crs_object,
+                            target_epsg=expected_epsg
+                        )
+
+                        os.remove(temp_filepath)
+
+    print(f'reproject {rm} of {ct} files')
+
+
+def reproject_single_geotiff(input_file_path, output_file_path, source_epsg, target_epsg):
+    subprocess.run([
+        "gdalwarp",
+        "-s_srs", f"EPSG:{source_epsg}",
+        '-overwrite',
+        "-t_srs", f"EPSG:{target_epsg}",
+        "-r", "bilinear",
+        "-of", "GTiff",
+        input_file_path,
+        output_file_path
+    ])
+
+
 def reproject_dems(in_dir, tiles, output_dir, in_epsg, out_epsg):
     file_names = sorted(os.listdir(in_dir))
     dem_files = [os.path.join(in_dir, f) for f in file_names if f.endswith('.tif')]
@@ -135,7 +182,7 @@ if __name__ == '__main__':
 
     _bucket = 'gs://wudr'
     station_set = 'madis'
-    zone = 'north'
+    zone = 'conus'
 
     if station_set == 'madis':
         stations = 'madis_17MAY2025_gap_mgrs'
@@ -146,30 +193,43 @@ if __name__ == '__main__':
     else:
         raise ValueError
 
-    if zone == 'north':
-        bounds = (-180., 49., -60., 85.)
+    if zone == 'canada':
+        bounds = (-141., 49., -60., 85.)
         epsg = '3978'
-        chk = os.path.join(dem_d, f'/dem_{epsg}')
+        tif_dem = os.path.join(dem_d, f'dem_{epsg}')
         mapset_ = "dads_map_canada"
 
-
-    elif zone == 'south':
+    elif zone == 'conus':
         bounds = (-180., 23., -60., 49.)
         epsg = '5071'
-        chk = os.path.join(dem_d, f'/dem_{epsg}')
-        mapset_ = "dads_map_conus"
+        tif_dem = os.path.join(dem_d, f'dem_{epsg}')
+        mapset_ = "dads_map"
+
+    elif zone == 'alaska':
+        bounds = (-180., 49., -60., 85.)
+        epsg = '6393'
+        tif_dem = os.path.join(dem_d, f'dem_{epsg}')
+        mapset_ = "dads_map_alaska"
 
     else:
         raise ValueError
 
     sites_df = pd.read_csv(sites)
 
-    sites_df = sites_df[(sites_df['latitude'] < bounds[3]) & (sites_df['latitude'] >= bounds[1])]
-    sites_df = sites_df[(sites_df['longitude'] < bounds[2]) & (sites_df['longitude'] >= bounds[0])]
+    kw = station_par_map(station_set)
 
-    tiles = sites_df['MGRS_TILE'].dropna().unique().tolist()
-    mgrs_tiles_list = [m for m in tiles if isinstance(m, str)]
-    mgrs_tiles_list.sort()
-    ind = [t for t in mgrs_tiles_list]
+    sites_df = sites_df[(sites_df[kw['lat']] < bounds[3]) & (sites_df[kw['lat']] >= bounds[1])]
+    sites_df = sites_df[(sites_df[kw['lon']] < bounds[2]) & (sites_df[kw['lon']] >= bounds[0])]
+
+    if zone == 'canada':
+        sites_df = sites_df[sites_df['AFF_ISO'] == 'CA']
+
+    tiles = sites_df['MGRS_TILE'].unique().tolist()
+    tiles = [m for m in tiles if isinstance(m, str)]
+    mgrs_tiles = list(set(tiles))
+    mgrs_tiles.sort()
+
+    list_and_check_geotiff_crs(tif_dem, expected_epsg=5071, dry_run=False)
+
 
 # ========================= EOF ====================================================================

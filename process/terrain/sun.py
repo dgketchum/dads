@@ -96,16 +96,19 @@ def calculate_terrain_irradiance_parallel(terrain_dir, terrain_source_path,
             continue
 
         if not overwrite:
-            glist_result = subprocess.run(
-                ['g.list', 'type=raster', f'pattern=irradiance_day_*_{tile_id}@{mapset}'],
-                capture_output=True, text=True, check=True
-            )
-            existing_irradiance_files = [r for r in glist_result.stdout.strip().split('\n') if r]
-            if len(existing_irradiance_files) >= 365:
-                print(f'{tile_id} is complete, skippin')
-                continue
-            else:
-                print(f'{len(existing_irradiance_files)} files complete: adding {tile_id}')
+            try:
+                glist_result = subprocess.run(
+                    ['g.list', 'type=raster', f'pattern=irradiance_day_*_{tile_id}@{mapset}'],
+                    capture_output=True, text=True, check=True
+                )
+                existing_irradiance_files = [r for r in glist_result.stdout.strip().split('\n') if r]
+                if len(existing_irradiance_files) >= 365:
+                    print(f'{tile_id} is complete, skipping')
+                    continue
+                else:
+                    print(f'{len(existing_irradiance_files)} files complete: adding {tile_id}')
+            except subprocess.CalledProcessError as e:
+                print(f'error {e} on {tile_id}')
 
         dem_file_full_path = os.path.join(terrain_source_path, dem_tif_filename)
         task_args_list.append((dem_name_grass, dem_file_full_path, terrain_dir,
