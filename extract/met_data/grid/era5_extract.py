@@ -64,8 +64,8 @@ def _process_nc_file(nc_file, stations, gridded_dir, overwrite, station_type, bo
 
     if bounds:
         w, s, e, n = bounds
-        station_list = station_list[(station_list['latitude'] < n) & (station_list['latitude'] >= s)]
-        station_list = station_list[(station_list['longitude'] < e) & (station_list['longitude'] >= w)]
+        station_list = station_list[(station_list[kw['lat']] < n) & (station_list[kw['lat']] >= s)]
+        station_list = station_list[(station_list[kw['lon']] < e) & (station_list[kw['lon']] >= w)]
     else:
         ds = xr.open_dataset(nc_file)
         w = float(ds.longitude[0].values)
@@ -73,8 +73,8 @@ def _process_nc_file(nc_file, stations, gridded_dir, overwrite, station_type, bo
         s = float(ds.latitude[-1].values)
         n = float(ds.latitude[0].values)
         ds.close()
-        station_list = station_list[(station_list['latitude'] < n) & (station_list['latitude'] >= s)]
-        station_list = station_list[(station_list['longitude'] < e) & (station_list['longitude'] >= w)]
+        station_list = station_list[(station_list[kw['lat']] < n) & (station_list[kw['lat']] >= s)]
+        station_list = station_list[(station_list[kw['lon']] < e) & (station_list[kw['lon']] >= w)]
 
     record_ct = station_list.shape[0]
 
@@ -115,9 +115,14 @@ def _process_nc_file(nc_file, stations, gridded_dir, overwrite, station_type, bo
     ds.close()
 
 
-def extract_met_data(stations, gridded_dir, nc_dir, overwrite=False, station_type='dads', bounds=None, n_workers=2):
+def extract_met_data(stations, gridded_dir, nc_dir, overwrite=False, station_type='dads', bounds=None, n_workers=1):
 
-    nc_files = sorted([os.path.join(nc_dir, f) for f in os.listdir(nc_dir) if 'era5_land_' in f])
+    nc_files = sorted([f for f in os.listdir(nc_dir) if int(f.split('_')[2]) >= 2000])
+    nc_files = sorted([os.path.join(nc_dir, f) for f in os.listdir(nc_dir) if 'era5_land_' in f and f in nc_files])
+
+    if n_workers == 1:
+        for nc_file in nc_files:
+            _process_nc_file(nc_file, stations, gridded_dir, overwrite, station_type, bounds)
 
     futures = []
     with ProcessPoolExecutor(max_workers=n_workers) as executor:
@@ -142,7 +147,7 @@ if __name__ == '__main__':
     nc_dir_ = os.path.join(era5, 'netCDF')
     out_files = os.path.join(era5, 'raw_parquet')
 
-    download_era5(nc_dir_, overwrite=False)
+    # download_era5(nc_dir_, overwrite=False)
 
     dads = os.path.join(home, 'data', 'IrrigationGIS', 'dads')
     climate = os.path.join(home, 'data', 'IrrigationGIS', 'climate')
@@ -150,12 +155,11 @@ if __name__ == '__main__':
         dads = os.path.join('/media/research', 'IrrigationGIS', 'dads')
         climate = os.path.join('/media/research', 'IrrigationGIS', 'climate')
 
-    # sites = os.path.join(climate, 'ghcn', 'stations', 'ghcn_CANUSA_stations_mgrs.csv')
-    # stype = 'ghcn'
+    sites = os.path.join(climate, 'ghcn', 'stations', 'ghcn_CANUSA_stations_mgrs.csv')
+    stype = 'ghcn'
+    # sites = os.path.join(dads, 'met', 'stations', 'madis_17MAY2025_mgrs.csv')
+    # stype = 'madis'
 
-    sites = os.path.join(dads, 'met', 'stations', 'dads_stations_10FEB2025.csv')
-    stype = 'dads'
-
-    # extract_met_data(sites, out_files, nc_dir=nc_dir_, bounds=None, overwrite=True, station_type=stype)
+    extract_met_data(sites, out_files, nc_dir=nc_dir_, n_workers=50, bounds=None, overwrite=True, station_type=stype)
 
 # ========================= EOF ====================================================================
