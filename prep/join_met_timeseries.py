@@ -11,15 +11,10 @@ from utils.station_parameters import station_par_map
 warnings.filterwarnings("ignore", category=FutureWarning)
 
 GHCN_MAP = {'TMAX': 'max_temp', 'TMIN': 'min_temp', 'PRCP': 'prcp'}
-
-# this depends on comparison of existing data
-DAYMET_VARS = ['prcp', 'tmax', 'tmin', 'vpd', 'rsds']
-GRIDMET_VARS = ['prcp', 'tmax', 'tmin', 'vpd', 'rsds', 'u2']
-
-OBS_TARGETS = ['rsds', 'max_temp', 'min_temp', 'vpd', 'prcp', 'u2']
+OBS_TARGETS = ['rsds', 'tmax', 'tmin', 'ea', 'prcp', 'wind']
 
 
-def join_daily_timeseries(stations, sta_dir, nldas_dir, dst_dir, source, daymet_dir=None, gridmet_dir=None,
+def join_daily_timeseries(stations, sta_dir, gridded_met_dir, dst_dir, source,
                           overwrite=False, bounds=None, shuffle=False, write_missing=None,
                           hourly=False, clip_to_obs=True):
     """"""
@@ -42,94 +37,45 @@ def join_daily_timeseries(stations, sta_dir, nldas_dir, dst_dir, source, daymet_
         stations = stations[(stations[kw['lon']] < e) & (stations[kw['lon']] >= w)]
         print('dropped {} stations outside NLDAS-2 extent'.format(ln - stations.shape[0]))
 
-    ct, obs_dir, ndf = 0, None, None
+    ct, ndf = 0, None
     empty, eidx = pd.DataFrame(columns=['fid', 'source', 'orig_netid']), 0
     station_ct = stations.shape[0]
 
     for i, (f, row) in enumerate(stations.iterrows(), start=1):
 
-        if source == 'ghcn':
-            obs_dir = None
-        elif source == 'madis':
-            obs_dir = 'madis_daily'
-        else:
-            print(f'Observation source unknown for {f}')
-            continue
-
-        if hourly:
-            out = os.path.join(dst_dir, 'hourly', '{}.parquet'.format(f))
-        else:
-            if clip_to_obs:
-                out = os.path.join(dst_dir, 'daily', '{}.parquet'.format(f))
-            else:
-                out = os.path.join(dst_dir, 'daily_untrunc', '{}.parquet'.format(f))
+        out = os.path.join(dst_dir, f'{f}.parquet')
 
         if os.path.exists(out) and not overwrite:
             print('{} in {} exists, skipping'.format(os.path.basename(out), source))
             continue
 
-        nldas_file = os.path.join(nldas_dir, '{}.parquet'.format(f))
+        gridded_met_file = os.path.join(gridded_met_dir, '{}.parquet'.format(f))
 
         try:
             if hourly:
-                nldas_file = os.path.join(nldas_dir, '{}.parquet.gzip'.format(f))
-                ndf = pd.read_parquet(nldas_file)
-                nld_cols = ['{}_nl_hr'.format(c) for c in ndf.columns]
+                gridded_met_file = os.path.join(hourly_, '{}.parquet.gzip'.format(f))
+                ndf = pd.read_parquet(gridded_met_file)
+                nld_cols = ['{}_e5l_hr'.format(c) for c in ndf.columns]
                 ndf.columns = nld_cols
             else:
-                ndf = pd.read_parquet(nldas_file)
-                nld_cols = ['{}_nl'.format(c) for c in ndf.columns]
+                ndf = pd.read_parquet(gridded_met_file)
+                nld_cols = ['{}_e5l'.format(c) for c in ndf.columns]
                 ndf.columns = nld_cols
 
         except FileNotFoundError:
-            empty, eidx = add_empty_entry(empty, eidx, f, row, 'does not exist', nldas_file)
-            print('nldas_file {} does not exist'.format(os.path.basename(nldas_file)))
+            empty, eidx = add_empty_entry(empty, eidx, f, row, 'does not exist', gridded_met_file)
+            print('gridded_file {} does not exist'.format(os.path.basename(gridded_met_file)))
             continue
 
         except pyarrow.lib.ArrowInvalid:
-            empty, eidx = add_empty_entry(empty, eidx, f, row, 'is empty', nldas_file)
-            print('nldas_file {} is empty'.format(os.path.basename(nldas_file)))
+            empty, eidx = add_empty_entry(empty, eidx, f, row, 'is empty', gridded_met_file)
+            print('gridded_file {} is empty'.format(os.path.basename(gridded_met_file)))
             continue
 
-        # DAYMET
-
-        daymet_file = os.path.join(daymet_dir, '{}.parquet'.format(f))
-        try:
-            dmet = pd.read_parquet(daymet_file)
-            dmet = dmet[DAYMET_VARS]
-            dmt_cols = ['{}_dm'.format(c) for c in dmet.columns]
-            dmet.columns = dmt_cols
-
-        except (FileNotFoundError, pyarrow.lib.ArrowInvalid):
-            print('daymet_file {} does not exist'.format(os.path.basename(daymet_file)))
-            dmet = pd.DataFrame(index=ndf.index, columns=ndf.columns, data=np.ones_like(ndf.values) * np.nan)
-            dmt_cols = [c.replace('_nl', '_dm') for c in dmet.columns]
-            dmet.columns = dmt_cols
-
-        # GRIDMET
-
-        gridmet_file = os.path.join(gridmet_dir, '{}.parquet'.format(f))
-        try:
-            gmet = pd.read_parquet(gridmet_file)
-            gmet = gmet[GRIDMET_VARS]
-            grd_cols = ['{}_gm'.format(c) for c in gmet.columns]
-            gmet.columns = grd_cols
-
-        except (FileNotFoundError, pyarrow.lib.ArrowInvalid):
-            print('gridmet_file {} does not exist'.format(os.path.basename(gridmet_file)))
-            gmet = pd.DataFrame(index=ndf.index, columns=ndf.columns, data=np.ones_like(ndf.values) * np.nan)
-            grd_cols = [c.replace('_nl', '_gm') for c in gmet.columns]
-            gmet.columns = grd_cols
-
-        if obs_dir:
-            sta_file = os.path.join(sta_dir, obs_dir, '{}.csv'.format(f))
-        else:
-            sta_file = os.path.join(sta_dir, '{}.csv'.format(f))
+        sta_file = os.path.join(sta_dir, '{}.parquet'.format(f))
 
         try:
-            sdf = pd.read_csv(sta_file, index_col='Unnamed: 0', parse_dates=True)
-        except ValueError:
-            sdf = pd.read_csv(sta_file, index_col='date', parse_dates=True)
+            sdf = pd.read_parquet(sta_file)
         except FileNotFoundError:
             empty, eidx = add_empty_entry(empty, eidx, f, source, 'does not exist', sta_file)
             print('sta_file {} does not exist'.format(os.path.basename(sta_file)))
@@ -163,16 +109,22 @@ def join_daily_timeseries(stations, sta_dir, nldas_dir, dst_dir, source, daymet_
         obs_cols = ['{}_obs'.format(c) for c in sdf.columns]
         sdf.columns = obs_cols
 
-        if hourly:
-            dmet = dmet.resample('h').ffill()
-            gmet = gmet.resample('h').ffill()
-            sdf = sdf.resample('h').ffill()
+        # drop any observation columns where the entire column is 0 and/or NaN
+        # noinspection PyUnresolvedReferences
+        valid_obs_cols = sdf.columns[~((sdf[obs_cols] == 0) | sdf[obs_cols].isna()).all(axis=0)].to_list()
 
-        data_cols = obs_cols + grd_cols + dmt_cols + nld_cols
+        if hourly:
+            try:
+                sdf = sdf.resample('h').ffill()
+            except ValueError as exc:
+                print(f'\n{sta_file} has duplicates\n')
+                continue
+
+        data_cols = valid_obs_cols +  nld_cols
         all_cols = ['FID'] + data_cols
 
         try:
-            sdf = pd.concat([sdf, gmet, dmet, ndf], ignore_index=False, axis=1)
+            sdf = pd.concat([sdf, ndf], ignore_index=False, axis=1)
         except pd.errors.InvalidIndexError:
             print('Non-unique index in {}'.format(f))
             continue
@@ -181,8 +133,7 @@ def join_daily_timeseries(stations, sta_dir, nldas_dir, dst_dir, source, daymet_
         sdf = sdf[all_cols].copy()
 
         if clip_to_obs:
-            sdf.dropna(subset=['rsds_obs', 'max_temp_obs', 'min_temp_obs', 'vpd_obs', 'prcp_obs', 'u2_obs'],
-                       how='all', inplace=True, axis=0)
+            sdf.dropna(subset=valid_obs_cols,  how='all', inplace=True, axis=0)
 
         if sdf.empty:
             empty, eidx = add_empty_entry(empty, eidx, f, row, 'col all nan', sta_file)
@@ -197,8 +148,9 @@ def join_daily_timeseries(stations, sta_dir, nldas_dir, dst_dir, source, daymet_
         print(f'{ct} days of observations, {i} of {station_ct}')
 
     if write_missing:
-        empty.to_csv(missing_list)
-        print('wrote', missing_list)
+        if len(empty) > 0:
+            empty.to_csv(missing_list)
+            print('wrote', missing_list)
 
 
 def add_empty_entry(edf, idx, feat, source_, reason, file_):
@@ -212,35 +164,32 @@ def add_empty_entry(edf, idx, feat, source_, reason, file_):
 
 if __name__ == '__main__':
 
-    d = '/media/research/IrrigationGIS'
-    if not os.path.exists(d):
-        d = '/home/dgketchum/data/IrrigationGIS'
+    data = '/data/ssd2'
+    root = '/media/research/IrrigationGIS'
+    if not os.path.exists(root):
+        root = '/home/dgketchum/data/IrrigationGIS'
 
-    # fields = os.path.join(d, 'dads', 'met', 'stations', 'dads_stations_10FEB2025.csv')
-    # obs = os.path.join(d, 'dads', 'met', 'obs')
-    # src_ = 'madis'
+    sites = os.path.join(root, 'dads', 'met', 'stations', 'madis_17MAY2025_mgrs.csv')
+    obs = os.path.join(data, 'madis', 'daily')
+    src_ = 'madis'
 
-    fields = os.path.join(d, 'dads', 'met', 'stations', 'ghcn_CANUSA_stations_mgrs.csv')
-    obs = os.path.join(d, 'climate', 'ghcn', 'station_data')
-    src_ = 'ghcn'
+    # sites = os.path.join(root, 'climate', 'stations', 'ghcn_stations.csv')
+    # obs = os.path.join(root, 'climate', 'ghcn', 'station_data')
+    # src_ = 'ghcn'
 
-    dm = os.path.join(d, 'dads', 'met', 'gridded', 'processed_parquet', 'daymet')
-    gm = os.path.join(d, 'dads', 'met', 'gridded', 'processed_parquet', 'gridmet')
+    joined = os.path.join(data, 'dads', 'met', 'joined')
+    now_str = datetime.datetime.now().strftime('%Y%m%d%H%M')
+    missing_list = os.path.join(data, 'dads', 'met', f'join_missing_{now_str}.csv')
 
-    joined = os.path.join(d, 'dads', 'met', 'joined')
-    missing_list = os.path.join(d, 'dads', 'met', 'joined', 'missing_data.csv')
-
-    clip_to_obs = True
-    hourly_ = True
+    clip_to_obs_ = True
     overwrite = False
 
-    if hourly_:
-        nl = os.path.join(d, 'dads', 'met', 'gridded', 'raw_parquet', 'nldas2')
-    else:
-        nl = os.path.join(d, 'dads', 'met', 'gridded', 'processed_parquet', 'nldas2')
+    era5_land = os.path.join(data, 'dads', 'era5_land', 'processed_parquet')
+    daily = os.path.join(era5_land, 'daily')
+    hourly_ = os.path.join(era5_land, 'hourly')
 
-    join_daily_timeseries(fields, obs, nl, joined, source=src_, daymet_dir=dm, gridmet_dir=gm, overwrite=overwrite,
+    join_daily_timeseries(sites, obs, daily, joined, source=src_, overwrite=overwrite,
                           bounds=(-180., 25., -60., 85.), shuffle=True, write_missing=missing_list, hourly=hourly_,
-                          clip_to_obs=clip_to_obs)
+                          clip_to_obs=clip_to_obs_)
 
 # ========================= EOF ====================================================================
