@@ -98,7 +98,7 @@ def calculate_terrain_irradiance_parallel(terrain_dir, terrain_source_path,
         if not overwrite:
             try:
                 glist_result = subprocess.run(
-                    ['g.list', 'type=raster', f'pattern=irradiance_day_*_{tile_id}@{mapset}'],
+                    ['g.list', 'type=raster', f'pattern=irradiance_day_*_{tile_id}'],
                     capture_output=True, text=True, check=True
                 )
                 existing_irradiance_files = [r for r in glist_result.stdout.strip().split('\n') if r]
@@ -178,7 +178,7 @@ if __name__ == '__main__':
 
     _bucket = 'gs://wudr'
     station_set = 'ghcn'
-    zone = 'conus'
+    zone = 'canada'
 
     if station_set == 'madis':
         stations = 'madis_17MAY2025_gap_mgrs'
@@ -231,10 +231,10 @@ if __name__ == '__main__':
 
     # ingest_rasters(tif_dem, mgrs_tiles, mapset=mapset_, overwrite=True)
 
-    calculate_terrain_irradiance_parallel(dem_d, tif_dem, mapset=mapset_, tiles_filter=mgrs_tiles, overwrite=False,
-                                          num_parallel_tiles=1, r_sun_nprocs_per_tile=4)
+    # calculate_terrain_irradiance_parallel(dem_d, tif_dem, mapset=mapset_, tiles_filter=mgrs_tiles, overwrite=False,
+    #                                       num_parallel_tiles=1, r_sun_nprocs_per_tile=4)
 
-    # rsun_out_ = os.path.join(dem_d, 'rsun_irradiance')
-    # export_rasters(tif_dem, rsun_out_, mapset=mapset_, mgrs_list=tiles, overwrite=True)
+    rsun_out_ = os.path.join(dem_d, 'rsun_irradiance', f'rsun_{epsg}')
+    export_rasters(tif_dem, rsun_out_, mapset=mapset_, mgrs_list=tiles, overwrite=True)
 
 # ========================= EOF ====================================================================

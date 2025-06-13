@@ -1,14 +1,20 @@
 import os
-import datetime
+import json
+import glob
+from datetime import datetime
 import collections
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
+from pprint import pprint
+
+import numpy as np
 import pandas as pd
+
+from utils.station_parameters import station_par_map
 
 
 def check_madis_files(subdir_arg, output_file_prefix_arg, root_dir_arg,
-                         secondary_subdir_name_check_arg=None):
-
+                      secondary_subdir_name_check_arg=None):
     CUTOFF_DATE_STR = '2024-04-01'
     MODIFIED_COUNT_THRESHOLD = 1000
 
@@ -20,7 +26,6 @@ def check_madis_files(subdir_arg, output_file_prefix_arg, root_dir_arg,
 
     start_date_str_arg = '2001-01-01'
     end_date_str_arg = '2025-05-15'
-
 
     try:
         start_date_obj = pd.to_datetime(start_date_str_arg)
@@ -252,6 +257,81 @@ def check_madis_files(subdir_arg, output_file_prefix_arg, root_dir_arg,
     return True
 
 
+def check_madis_index(stations, csv_hourly, parquet_daily, source='madis', out_json=None):
+    kw = station_par_map(source)
+    stations = pd.read_csv(stations, index_col=kw['index'])
+    stations.sort_index(inplace=True)
+
+    ct, dupes = 0, 0
+
+    for i, (station_id, row) in enumerate(stations.iterrows(), start=1):
+        ct += 1
+
+        sta_file = os.path.join(parquet_daily, f'{station_id}.parquet')
+
+        if not os.path.exists(sta_file):
+            continue
+
+        sdf = pd.read_parquet(sta_file)
+
+        obs_cols = [f'{c}_obs' for c in sdf.columns]
+        sdf.columns = obs_cols
+        bad_csv = {}
+
+        if sdf.index.has_duplicates:
+            dupes += 1
+
+            station_csv_dir = os.path.join(csv_hourly, station_id)
+            if not os.path.isdir(station_csv_dir):
+                print(f"    WARNING: Source CSV directory not found: {station_csv_dir}")
+                continue
+
+            csv_files = glob.glob(os.path.join(station_csv_dir, '*.csv'))
+
+            if not csv_files:
+                print(f"    INFO: No source CSV files found for station {station_id}.")
+
+            for csv_path in sorted(csv_files):
+
+                filename = os.path.basename(csv_path)
+
+                filename_yyyymm = filename.split('_')[1].split('.')[0]
+                assert (len(filename_yyyymm) == 6 and filename_yyyymm.isdigit())
+
+                monthly_df = pd.read_csv(csv_path, index_col=0, parse_dates=True, on_bad_lines='skip')
+                if monthly_df.empty:
+                    continue
+
+                data_yyyymm = list(set(monthly_df.index.strftime('%Y%m')))
+
+                if len(data_yyyymm) == 0:
+                    # print(f'empty {os.path.basename(filename)}')
+                    mismatches_found = False
+
+                elif len(data_yyyymm) > 1:
+                    # print(f'multiple months in {os.path.basename(filename)}: {data_yyyymm}')
+                    mismatches_found = True
+
+                elif data_yyyymm[0] != filename_yyyymm:
+                    # print(f'mismatch in {os.path.basename(filename)}: {data_yyyymm}')
+                    mismatches_found = True
+
+                else:
+                    continue
+
+                if mismatches_found:
+                    if station_id not in bad_csv:
+                        bad_csv[station_id] = [filename]
+                    else:
+                        bad_csv[station_id].append(filename)
+
+            print(f'{station_id} has {len(bad_csv[station_id])} mismatched files, {dupes} of {ct}')
+
+        with open(out_json, 'w') as fp:
+            json.dump(bad_csv, fp, indent=4)
+
+
+
 if __name__ == "__main__":
 
     d = '/media/research/IrrigationGIS'
@@ -266,5 +346,12 @@ if __name__ == "__main__":
     mesonet_dir_research = os.path.join(madis, 'LDAD', 'mesonet')
     out_dir_research = os.path.join(mesonet_dir_research, 'inclusive_csv')
 
-    check_madis_files(out_dir_public, 'madis_check_15MAY2025', madis)
+    # check_madis_files(out_dir_public, 'madis_check_15MAY2025', madis)
+
+    data = '/data/ssd2'
+    sites = os.path.join(d, 'dads', 'met', 'stations', 'madis_17MAY2025_mgrs.csv')
+    pqt = os.path.join(data, 'madis', 'daily')
+    out_json_ = os.path.join(data, 'madis', 'bad_files_12JUN2025.json')
+
+    check_madis_index(sites, out_dir_research, pqt, source='madis', out_json=out_json_)
 # ========================= EOF ====================================================================

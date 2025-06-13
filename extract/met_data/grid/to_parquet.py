@@ -19,7 +19,7 @@ def process_and_concat_csv(root, source, start_date, end_date, outdir, workers, 
     if source in ['gridmet', 'prism', 'daymet']:
         expected_index = pd.date_range(start=start, end=end, freq='d')
         str_dtime = [d.strftime('%Y%m%d') for d in expected_index]
-    elif source == 'nldas2':
+    elif source in ['nldas2', 'era5_land']:
         expected_index = pd.date_range(start=start, end=end, freq='h')
         str_dtime = [d.strftime('%Y%m%d%H') for d in expected_index]
     else:
@@ -37,16 +37,23 @@ def process_and_concat_csv(root, source, start_date, end_date, outdir, workers, 
         for sd in subdirs:
             if source == 'nldas2':
                 nldas2_parquet(root, sd, required_months, expected_index, str_dtime, outdir)
+            if source == 'era5_land':
+                era5_land_parquet(root, sd, required_months, expected_index, str_dtime, outdir)
             elif source in ['gridmet', 'prism', 'daymet']:
                 general_parquet(root, sd, required_years, str_dtime, outdir)
             else:
                 raise ValueError(f"Invalid source: {source}")
-            print(sd)
 
     else:
         with concurrent.futures.ProcessPoolExecutor(max_workers=workers) as executor:
             if source == 'nldas2':
                 executor.map(nldas2_parquet, [root] * len(subdirs), subdirs,
+                             [required_months] * len(subdirs),
+                             [expected_index] * len(subdirs), [str_dtime] * len(subdirs),
+                             [outdir] * len(subdirs))
+
+            if source == 'era5_land':
+                executor.map(era5_land_parquet, [root] * len(subdirs), subdirs,
                              [required_months] * len(subdirs),
                              [expected_index] * len(subdirs), [str_dtime] * len(subdirs),
                              [outdir] * len(subdirs))
@@ -135,6 +142,60 @@ def nldas2_parquet(root_, subdir_, required_months_, expected_index_, strdt_, ou
         return
 
 
+def era5_land_parquet(root_, subdir_, required_months_, expected_index_, strdt_, outdir_):
+    subdir_path = os.path.join(root_, subdir_)
+    out_file = os.path.join(outdir_, f'{subdir_}.parquet.gzip')
+
+    if os.path.isdir(subdir_path):
+
+        extract_files_ = [f for f in os.listdir(subdir_path) if f.endswith('.parquet')]
+
+        if os.path.exists(out_file) and extract_files_:
+            shutil.rmtree(subdir_path)
+            # print(f'\n{os.path.basename(out_file)} exists, removing {len(extract_files_)} parquet files')
+            return
+
+        dtimes = [''.join(f.split('_')[-2:]).replace('.parquet', '') for f in extract_files_]
+        rm_files = extract_files_.copy()
+
+        if len(dtimes) < len(required_months_):
+            missing = [m for m in required_months_ if m not in dtimes]
+            if len(missing) > 0:
+                print(f'{subdir_}: missing {len(missing)} months: {np.random.choice(missing, size=5, replace=False)}')
+                return
+
+        dfs = []
+        for file in extract_files_:
+            c = pd.read_parquet(os.path.join(subdir_path, file))
+            dfs.append(c)
+
+        df = pd.concat(dfs)
+        df = df.sort_index()
+        df = df[~df.index.duplicated(keep='first')]
+        df = df.loc[expected_index_[0]: expected_index_[-1]]
+        df = df.dropna(how='all', axis=1)
+
+        missing = len(expected_index_) - df.shape[0]
+        if missing > 0:
+            missing_idx = set([f'{i.year}_{i.month}' for i in expected_index_ if i not in df.index])
+            print(f'{subdir_}: missing data for  on {missing_idx}')
+            return
+
+        df['dt'] = strdt_
+
+        df.to_parquet(out_file, compression='gzip')
+        shutil.rmtree(subdir_path)
+        # print(f'wrote {out_file}, removed {len(rm_files)} .parquet files,'
+        #       f' {datetime.strftime(datetime.now(), '%Y%m%d %H:%M')}')
+        return
+    else:
+        if os.path.exists(out_file):
+            print(f'{os.path.basename(out_file)} exists, skipping')
+        else:
+            print(f'{subdir_} not found')
+        return
+
+
 def general_parquet(root_, subdir_, required_years_, expected_index_, outdir_):
     """Use for PRISM, Daymet, and GridMET"""
     subdir_path = os.path.join(root_, subdir_)
@@ -189,23 +250,28 @@ if __name__ == '__main__':
     home = os.path.expanduser('~')
     r = os.path.join('/data')
 
-    source_ = 'daymet'
+    source_ = 'era5_land'
 
     if source_ in ['gridmet', 'prism', 'daymet']:
         csv_files = os.path.join(r, source_, 'station_data')
         p_files = os.path.join(r, source_, 'parquet')
 
     elif source_ == 'nldas2':
-        csv_files = '/data/ssd1/nldas2/station_data/'
+        csv_files = '/data/ssd1/nldas2/station_data'
         d = os.path.join(home, 'data', 'IrrigationGIS')
         p_files = os.path.join(d, 'dads', 'met', 'gridded', 'nldas2_parquet')
+
+    elif source_ == 'era5_land':
+        csv_files = '/data/ssd2/dads/era5_land/extract_parquet'
+        d = os.path.join(home, 'data', 'IrrigationGIS')
+        p_files = '/data/ssd2/dads/era5_land/processed_parquet'
 
     else:
         raise ValueError
 
     print(f'{csv_files} exists: {os.path.exists(csv_files)}')
     print(f'{p_files} exists: {os.path.exists(p_files)}')
-    process_and_concat_csv(csv_files, source_, start_date='1990-01-01', end_date='2023-12-31', outdir=p_files,
-                           workers=10, missing_file=None, debug=False)
+    process_and_concat_csv(csv_files, source_, start_date='2000-01-01', end_date='2023-12-31', outdir=p_files,
+                           workers=50, missing_file=None, debug=False)
 
 # ========================= EOF ====================================================================

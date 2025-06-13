@@ -10,6 +10,7 @@ from refet import calcs
 
 from utils.station_parameters import station_par_map
 from utils.calc_eto import calc_asce_params
+from timezonefinder import TimezoneFinder
 
 PACIFIC = pytz.timezone('US/Pacific')
 
@@ -23,13 +24,27 @@ NLDAS_RESAMPLE_MAP = {'rsds': 'sum',
                       'wind': 'mean',
                       'ea': 'mean'}
 
+ERA5LAND_RESAMPLE_MAP = {'rsds_hourly_mj': 'sum',
+                         'prcp': 'sum',
+                         'tmin': 'min',
+                         'tmax': 'max',
+                         'tmean': 'mean',
+                         'wind': 'mean',
+                         'ea': 'mean'}
 
-def extract_met_data(stations, gridded_dir, overwrite=False, station_type='openet',
-                     shuffle=True, bounds=None, hourly=False, pd_parallel=False, **targets):
+
+def process_gridded_data(stations, gridded_dir, overwrite=False, station_type='openet',
+                         shuffle=True, bounds=None, hourly=False, pd_parallel=False, **kwargs):
     """"""
     kw = station_par_map(station_type)
 
     station_list = pd.read_csv(stations, index_col=kw['index'])
+
+    targets = kwargs['targets']
+    if 'alt_dirs' in kwargs:
+        alt_dirs = kwargs['alt_dirs']
+    else:
+        alt_dirs = None
 
     if shuffle:
         station_list = station_list.sample(frac=1)
@@ -43,11 +58,9 @@ def extract_met_data(stations, gridded_dir, overwrite=False, station_type='opene
     out_file_gm = None
     out_file_prism = None
     out_file_dm = None
+    out_file_era5land = None
 
     for i, (fid, row) in enumerate(station_list.iterrows(), start=1):
-
-        # if fid != 'USC00265705':
-        #     continue
 
         lon, lat, elv = row[kw['lon']], row[kw['lat']], row[kw['elev']]
         if np.isnan(elv):
@@ -73,6 +86,33 @@ def extract_met_data(stations, gridded_dir, overwrite=False, station_type='opene
                     print('nldas', fid)
                 else:
                     print('nldas {} exists'.format(fid))
+                    pass
+
+        if targets['era5_land']:
+
+            if alt_dirs:
+                in_file_ = os.path.join(alt_dirs['era5_land'], 'processed_parquet', 'hourly',
+                                        '{}.parquet.gzip'.format(fid))
+            else:
+                in_file_ = os.path.join(gridded_dir, 'raw_parquet', 'era5_land', '{}.parquet.gzip'.format(fid))
+
+            if not os.path.exists(in_file_):
+                print(f'ERA5LAND at {os.path.basename(in_file_)} does not exist, skipping, {lat:.1f} {lon:.1f}')
+
+            else:
+                if alt_dirs:
+                    out_file_era5land = os.path.join(alt_dirs['era5_land'], 'processed_parquet', 'daily',
+                                           '{}.parquet'.format(fid))
+                else:
+                    out_file_era5land = os.path.join(gridded_dir, 'processed_parquet', 'era5_land_hourly',
+                                           '{}.parquet'.format(fid))
+
+                if not os.path.exists(out_file_era5land) or overwrite:
+                    proc_era5_land(in_file_=in_file_, lat=lat, lon=lon, elev=elv, out_file_=out_file_era5land,
+                                   hourly_=hourly, parallel=pd_parallel)
+                    print('era5_land', fid)
+                else:
+                    print('era5_land {} exists'.format(fid))
                     pass
 
         if targets['gridmet']:
@@ -120,11 +160,12 @@ def extract_met_data(stations, gridded_dir, overwrite=False, station_type='opene
                 else:
                     pass
 
-        if fid == 'USC00265705':
-            target_files = {'nldas2': out_file_, 'gridmet': out_file_gm,
-                            'prism': out_file_prism, 'daymet': out_file_dm}
-
-            compare_sources(**target_files)
+        # if fid == 'COVM':
+        #     target_files = {'nldas2': out_file_, 'gridmet': out_file_gm,
+        #                     'prism': out_file_prism, 'daymet': out_file_dm,
+        #                     'era5_land': out_file_era5land}
+        #
+        #     compare_sources(**target_files)
 
 
 def compare_sources(**targets):
@@ -142,7 +183,80 @@ def compare_sources(**targets):
                 print(f'{p} - {k} mean: {v[p].mean()}')
 
 
+def proc_era5_land(in_file_, lat, lon, elev, out_file_, hourly_=False, parallel=False):
+    try:
+        df = pd.read_parquet(in_file_)
+
+        # U is the velocity toward east and V is the velocity toward north
+        wind_u = df['wind_u']
+        wind_v = df['wind_v']
+        df['wind'] = np.sqrt(wind_v ** 2 + wind_u ** 2)
+        df['wind_dir'] = np.degrees(np.arctan2(wind_u, wind_v))
+
+        # shift index back 1 sec to put final value of accumulation period in day of interest
+        grouping_key = (df.index - pd.Timedelta('1s')).date
+        df['rsds_hourly_joules'] = df.groupby(grouping_key)['ssrd'].diff().fillna(df['ssrd'])
+        df['rsds_hourly_mj'] = df['rsds_hourly_joules'] / 1000000
+
+        df['prcp'] = df['precip']
+        df['psurf'] = df['psurf']
+
+        df['ea'] = 0.61094 * np.exp((17.625 * df['tdew']) / (df['tdew'] + 243.04))
+
+        df['hour'] = [i.hour for i in df.index]
+
+        df['tmean'] = df['temp'].copy()
+
+        if hourly_:
+            df['doy'] = [i.dayofyear for i in df.index]
+            df.to_parquet(out_file_)
+            return
+
+        df['tmax'] = df['temp'].copy()
+        df['tmin'] = df['temp'].copy()
+
+        tf = TimezoneFinder()
+
+        timezone_str = tf.timezone_at(lng=lon, lat=lat)
+        if timezone_str is None:
+            print(f"Could not determine timezone for {os.path.basename(in_file_)} coords ({lat}, {lon})")
+
+        local_tz = pytz.timezone(timezone_str)
+
+        if df.index.tz is None:
+            df.index = df.index.tz_localize('GMT')
+
+        df.index = df.index.tz_convert(local_tz)
+
+        df = df.resample('D').agg(ERA5LAND_RESAMPLE_MAP)
+
+        df['rsds'] = df['rsds_hourly_mj']
+
+        df['doy'] = [i.dayofyear for i in df.index]
+
+        if parallel:
+            asce_params = df.parallel_apply(calc_asce_params, lat=lat, elev=elev, zw=10, axis=1)
+        else:
+            asce_params = df.apply(calc_asce_params, lat=lat, elev=elev, zw=10, axis=1)
+
+        df[['tmean', 'vpd', 'rn', 'u2', 'eto']] = pd.DataFrame(asce_params.tolist(),
+                                                               index=df.index)
+
+        df['year'] = [i.year for i in df.index]
+        df['date_str'] = [i.strftime('%Y-%m-%d') for i in df.index]
+
+    except (KeyError, pyarrow.lib.ArrowInvalid, FileNotFoundError) as exc:
+        bad_files = os.path.join(os.path.dirname(__file__), 'bad_files.txt')
+        with open(bad_files, 'a') as f:
+            f.write(in_file_ + ' ' + ' '.join(exc.args) + '\n')
+        print(os.path.basename(in_file_), ' '.join(exc.args))
+        return None
+
+    df.to_parquet(out_file_)
+
+
 def proc_nldas(in_file_, lat, elev, out_file_, hourly_=False, parallel=False):
+    # TODO: timezone localizer here
     try:
         df = pd.read_parquet(in_file_)
 
@@ -291,32 +405,44 @@ def proc_daymet(in_file_, elev, out_file_):
 
 if __name__ == '__main__':
     d = '/media/research/IrrigationGIS'
+    alt_gridded = '/data/ssd2/dads/era5_land'
     if not os.path.isdir(d):
         home = os.path.expanduser('~')
         d = os.path.join(home, 'data', 'IrrigationGIS')
 
-    overwrite = True
-    processing_targets = {'nldas2': True, 'gridmet': True,
-                          'prism': True, 'daymet': True}
+    overwrite = False
+    processing_targets = {'nldas2': False, 'gridmet': False,
+                          'prism': False, 'daymet': False,
+                          'era5_land': True}
 
-    parallel_ = True
+    alt_dirs_ = {'era5_land': alt_gridded}
+
+    args = {'targets': processing_targets, 'alt_dirs': alt_dirs_}
+
+    parallel_ = False
     if parallel_:
         pandarallel.initialize(nb_workers=4)
 
-    network = 'ghcn'
+    network = 'madis'
 
     if network == 'madis':
-        sites = os.path.join(d, 'dads', 'met', 'stations', 'madis_mgrs_28OCT2024.csv')
+        sites = os.path.join(d, 'dads', 'met', 'stations', 'madis_17MAY2025_mgrs.csv')
 
     elif network == 'ghcn':
-        sites = os.path.join(d, 'dads', 'met', 'stations', 'ghcn_CANUSA_stations_mgrs.csv')
+        sites = os.path.join(d, 'climate', 'stations', 'ghcn_stations.csv')
+
+    else:
+        raise ValueError
 
     grid_dirs = os.path.join(d, 'dads', 'met', 'gridded')
 
     # daymet bounds
-    bounds = (-178., 7., -53., 83.)
+    # bounds = (-178., 7., -53., 83.)
 
-    extract_met_data(sites, grid_dirs, overwrite=overwrite, station_type=network, shuffle=True,
-                     bounds=bounds, hourly=False, pd_parallel=parallel_, **processing_targets)
+    # era5_land download extent
+    bounds = (-125, 25, -67, 53)
+
+    process_gridded_data(sites, grid_dirs, overwrite=overwrite, station_type=network, shuffle=True,
+                         bounds=bounds, hourly=False, pd_parallel=parallel_, **args)
 
 # ========================= EOF ====================================================================

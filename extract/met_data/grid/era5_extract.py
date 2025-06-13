@@ -60,7 +60,7 @@ def download_era5(target_dir, overwrite=False):
 def _process_nc_file(nc_file, stations, gridded_dir, overwrite, station_type, bounds):
     """"""
     kw = station_par_map(station_type)
-    station_list = pd.read_csv(stations, index_col=kw['index']).sort_index()
+    station_list = pd.read_csv(stations, index_col=kw['index']).sort_index(ascending=True)
 
     if bounds:
         w, s, e, n = bounds
@@ -117,7 +117,7 @@ def _process_nc_file(nc_file, stations, gridded_dir, overwrite, station_type, bo
 
 def extract_met_data(stations, gridded_dir, nc_dir, overwrite=False, station_type='dads', bounds=None, n_workers=1):
 
-    nc_files = sorted([f for f in os.listdir(nc_dir) if int(f.split('_')[2]) >= 2000])
+    nc_files = sorted([f for f in os.listdir(nc_dir) if f[-10:-3] == '2017_02'])
     nc_files = sorted([os.path.join(nc_dir, f) for f in os.listdir(nc_dir) if 'era5_land_' in f and f in nc_files])
 
     if n_workers == 1:
@@ -155,11 +155,12 @@ if __name__ == '__main__':
         dads = os.path.join('/media/research', 'IrrigationGIS', 'dads')
         climate = os.path.join('/media/research', 'IrrigationGIS', 'climate')
 
-    sites = os.path.join(climate, 'ghcn', 'stations', 'ghcn_CANUSA_stations_mgrs.csv')
-    stype = 'ghcn'
-    # sites = os.path.join(dads, 'met', 'stations', 'madis_17MAY2025_mgrs.csv')
-    # stype = 'madis'
+    # sites = os.path.join(climate, 'ghcn', 'stations', 'ghcn_CANUSA_stations_mgrs.csv')
+    # stype = 'ghcn'
 
-    extract_met_data(sites, out_files, nc_dir=nc_dir_, n_workers=50, bounds=None, overwrite=True, station_type=stype)
+    sites = os.path.join(dads, 'met', 'stations', 'madis_17MAY2025_mgrs.csv')
+    stype = 'madis'
+
+    extract_met_data(sites, out_files, nc_dir=nc_dir_, n_workers=1, bounds=None, overwrite=False, station_type=stype)
 
 # ========================= EOF ====================================================================

@@ -36,6 +36,7 @@ def process_daily_data(hourly_df, rsun_data, lat_, elev_, zw_=2.0, qaqc=False):
             hourly_df.set_index('datetime', inplace=True)
             hourly_df.drop(columns=['date', 'hour'], inplace=True)
 
+    # U is the velocity toward east and V is the velocity toward north
     wind_direction_rad = np.deg2rad(hourly_df['wind_dir'])
     hourly_df['u'] = hourly_df['wind'] * (-np.sin(wind_direction_rad))
     hourly_df['v'] = hourly_df['wind'] * (-np.cos(wind_direction_rad))
@@ -130,7 +131,11 @@ def process_single_station(fid, row, kw, madis_src, madis_dst, rsun_tables, over
     if os.path.exists(out_file) and not overwrite:
         return fid, 'exists', 'File exists', 0
 
-    station_dir = os.path.join(madis_src, fid)
+    try:
+        station_dir = os.path.join(madis_src, fid)
+    except TypeError as exc:
+        return fid, 'no_dir', f'{exc}', 0
+
     if not os.path.isdir(station_dir):
         if alt_src:
             station_dir = os.path.join(alt_src, fid)
@@ -141,7 +146,10 @@ def process_single_station(fid, row, kw, madis_src, madis_dst, rsun_tables, over
     years = []
     valid_files = []
     for f in files_:
-        year = int(os.path.basename(f).split('.')[0].split('_')[-1])
+        try:
+            year = int(os.path.basename(f).split('.')[0].split('_')[-1])
+        except ValueError:
+            continue
         years.append(year)
         valid_files.append(f)
 
@@ -162,8 +170,11 @@ def process_single_station(fid, row, kw, madis_src, madis_dst, rsun_tables, over
 
     df, first, local_tz = None, True, None
     tf = TimezoneFinder()
+    
+    valid_files.sort()
+    skipped = 0
 
-    for file_, yr in zip(valid_files, years):
+    for file_ in valid_files:
         try:
             c = pd.read_csv(file_, index_col=0, parse_dates=True, low_memory=False)
         except pd.errors.EmptyDataError:
@@ -178,6 +189,14 @@ def process_single_station(fid, row, kw, madis_src, madis_dst, rsun_tables, over
         c = c.sort_index()
         c['doy'] = c.index.dayofyear
 
+        filename_yyyymm = os.path.basename(file_).split('_')[1].split('.')[0]
+        data_yyyymm = list(set(c.index.strftime('%Y%m')))
+
+        if data_yyyymm[0] != filename_yyyymm:
+            skipped += 1
+            os.remove(file_)
+            continue
+
         if first:
             timezone_str = tf.timezone_at(lng=lon, lat=lat)
             if timezone_str is None:
@@ -185,7 +204,7 @@ def process_single_station(fid, row, kw, madis_src, madis_dst, rsun_tables, over
             local_tz = pytz.timezone(timezone_str)
 
         if c.index.tz is None:
-            c.index = c.index.tz_localize('GMT')
+            c.index = c.index.tz_localize('UTC')
         c.index = c.index.tz_convert(local_tz)
 
         required_cols = ['temperature', 'relHumidity', 'solarRadiation', 'windSpeed', 'windDir', 'precipAccum']
@@ -208,11 +227,8 @@ def process_single_station(fid, row, kw, madis_src, madis_dst, rsun_tables, over
         if c_processed is None or c_processed.empty:
             continue
 
-        if plot and not c_processed.empty:
-            out_plot_dir = plot.format('to_check')
-            os.makedirs(out_plot_dir, exist_ok=True)
-            out_plot_file = os.path.join(out_plot_dir, '{}_{}.png'.format(fid, yr))
-            # plot_daily_data(c_processed, fid, yr, out_plot_file) # Assumed external function
+        if plot:
+            raise NotImplementedError
 
         if first:
             df = c_processed.copy()
@@ -232,7 +248,7 @@ def process_single_station(fid, row, kw, madis_src, madis_dst, rsun_tables, over
     df = df.sort_index()
     df.to_parquet(out_file)
     obs_ct = df.shape[0]
-    return fid, 'success', f'Wrote {obs_ct} records', obs_ct
+    return fid, 'success', f'Wrote {obs_ct} records, skipped {skipped}', obs_ct
 
 
 def read_hourly_data(stations, madis_src, madis_dst, rsun_tables, shuffle=False, bounds=None, overwrite=False,
@@ -245,10 +261,6 @@ def read_hourly_data(stations, madis_src, madis_dst, rsun_tables, shuffle=False,
 
     if bounds:
         w, s, e, n = bounds
-        station_list = station_list[(station_list[kw['lat']] < n) & (station_list[kw['lat']] >= s)]
-        station_list = station_list[(station_list[kw['lon']] < e) & (station_list[kw['lon']] >= w)]
-    else:
-        w, s, e, n = (-125.0, 25.0, -67.0, 53.0)
         station_list = station_list[(station_list[kw['lat']] < n) & (station_list[kw['lat']] >= s)]
         station_list = station_list[(station_list[kw['lon']] < e) & (station_list[kw['lon']] >= w)]
 
@@ -270,7 +282,7 @@ def read_hourly_data(stations, madis_src, madis_dst, rsun_tables, shuffle=False,
     if debug:
         for i, (fid, row) in enumerate(station_list.iterrows(), start=1):
 
-            # if fid != 'COVM':
+            # if fid != 'CBAL1':
             #     continue
 
             result = process_single_station(fid, row, kw, madis_src, madis_dst, rsun_tables, overwrite, qaqc, plot,
@@ -293,7 +305,7 @@ def read_hourly_data(stations, madis_src, madis_dst, rsun_tables, shuffle=False,
             elif status == 'nodata':
                 nodata_count += 1
 
-            print(f'{fid}: {status}')
+            print(f'{fid}: {status}, {message}, obs: {obs_count}')
             if len(no_files) >= 100:
                 print(no_files)
                 break
@@ -302,7 +314,7 @@ def read_hourly_data(stations, madis_src, madis_dst, rsun_tables, shuffle=False,
         if n_workers is None:
             n_workers = os.cpu_count()
         futures = []
-        with concurrent.futures.ThreadPoolExecutor(max_workers=n_workers) as executor:
+        with concurrent.futures.ProcessPoolExecutor(max_workers=n_workers) as executor:
             for fid, row in station_list.iterrows():
                 future = executor.submit(process_single_station, fid, row, kw, madis_src, madis_dst, rsun_tables,
                                          overwrite, qaqc, plot, alt_src)
@@ -415,17 +427,17 @@ if __name__ == '__main__':
 
     # pandarallel.initialize(nb_workers=6)
 
-    sites = os.path.join(d, 'dads', 'met', 'stations', 'dads_stations_10FEB2025.csv')
+    sites = os.path.join(d, 'dads', 'met', 'stations', 'madis_17MAY2025_mgrs.csv')
 
     madis_hourly_public = os.path.join(d, 'climate', 'madis', 'LDAD_public', 'mesonet', 'csv')
     madis_hourly_research = os.path.join(d, 'climate', 'madis', 'LDAD', 'mesonet', 'inclusive_csv')
 
     madis_daily_ = '/data/ssd2/madis/daily'
 
-    solrad = os.path.join(d, 'dads', 'dem', 'rsun_tables', 'station_rsun')
+    solrad = os.path.join(d, 'dads', 'dem', 'rsun_stations')
 
-    read_hourly_data(sites, madis_hourly_public, madis_daily_, solrad, shuffle=True, stype='dads',
-                     bounds=(-180., 25., -60., 85.), overwrite=False, qaqc=True, plot=None, debug=True,
-                     alt_src=madis_hourly_research, n_workers=8)
+    read_hourly_data(sites, madis_hourly_public, madis_daily_, solrad, shuffle=True, stype='madis',
+                     bounds=None, overwrite=True, qaqc=True, plot=None, debug=False,
+                     alt_src=madis_hourly_research, n_workers=40)
 
 # ========================= EOF ====================================================================
