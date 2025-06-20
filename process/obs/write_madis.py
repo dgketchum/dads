@@ -14,12 +14,19 @@ import xarray as xr
 
 warnings.filterwarnings("ignore", category=xr.SerializationWarning)
 
-DESIRED_PARAMS = ['stationId', 'reportTime', 'elevation', 'stationType', 'latitude', 'longitude',
-                  'precipAccum',
-                  'solarRadiation',
-                  'temperature',
-                  'dewpoint', 'relHumidity',
-                  'windSpeed', 'windDir']
+DESIRED_PARAMS = {'stationId': str,
+                  'reportTime': str,
+                  'stationType': str,
+                  'elevation': float,
+                  'latitude': float,
+                  'longitude': float,
+                  'precipAccum': float,
+                  'solarRadiation': float,
+                  'temperature': float,
+                  'dewpoint': float,
+                  'relHumidity': float,
+                  'windSpeed': float,
+                  'windDir': float}
 
 SUBHOUR_RESAMPLE_MAP = {
     'longitude': 'first',
@@ -34,10 +41,6 @@ SUBHOUR_RESAMPLE_MAP = {
     'windSpeed': 'mean',
     'windDir': 'mean',
 }
-
-MET_PARAMS = DESIRED_PARAMS[6:]
-
-METADATA = ['elevation', 'stationType', 'latitude', 'longitude']
 
 
 def copy_file(source_file, dest_file):
@@ -127,72 +130,78 @@ def open_nc(f):
 
 
 def read_madis_hourly(data_directory, year_mo_str, output_directory, bounds=(-125., 24., -66., 53.),
-                      select=None, check_mod_dt=None):
+                      select=None):
     """"""
-
     file_pattern = os.path.join(data_directory, f"*{year_mo_str}*.gz")
     file_list = sorted(glob.glob(file_pattern))
     if not file_list:
         print(f"No files found for date: {year_mo_str}")
         return
 
-    data, sites = {}, pd.DataFrame().to_dict()
-
     start = time.perf_counter()
-    for j, filename in enumerate(file_list):
 
-        dt_str = os.path.basename(filename).split('.')[0].replace('_', '')
+    all_dfs = []
 
+    for filename in file_list:
         ds = open_nc(filename)
         if ds is None:
             continue
 
-        valid_data = ds[DESIRED_PARAMS]
-        df = valid_data.to_dataframe()
-        df['stationId'] = df['stationId'].astype(str)
-        df['stationType'] = df['stationType'].astype(str)
+        df = ds[DESIRED_PARAMS.keys()].to_dataframe()
 
-        if bounds is not None:
-            df = df[(df['latitude'] < bounds[3]) & (df['latitude'] >= bounds[1])]
-            df = df[(df['longitude'] < bounds[2]) & (df['longitude'] >= bounds[0])]
+        if df.empty:
+            continue
+
+        df = df.astype(DESIRED_PARAMS)
+        df['reportTime'] = pd.to_datetime(df['reportTime'], format='%Y-%m-%d %H:%M:%S', errors='coerce')
 
         df.dropna(how='all', inplace=True)
-        df.set_index('stationId', inplace=True, drop=True)
 
-        if select is not None:
-            match = [s for s in df['stationId'] if s in select]
-            if len(match) == 0:
-                continue
-            else:
-                df = df.loc[match]
+        if bounds is not None:
+            df = df.loc[
+                (df['latitude'] < bounds[3]) & (df['latitude'] >= bounds[1]) &
+                (df['longitude'] < bounds[2]) & (df['longitude'] >= bounds[0])
+                ]
 
-        df = df.groupby(df.index).agg(SUBHOUR_RESAMPLE_MAP)
+        if df.empty:
+            continue
 
-        df['v'] = df.apply(lambda row: [float(row[v]) for v in MET_PARAMS], axis=1)
-        df.drop(columns=METADATA, inplace=True)
-        dct = df.to_dict(orient='index')
+        all_dfs.append(df)
 
-        for k, v in dct.items():
-            if not k in data.keys():
-                data[k] = {dt_str: v['v']}
-            else:
-                data[k][dt_str] = v['v']
+    if not all_dfs:
+        print("No valid data found in any files.")
+        return
 
-    for k, v in data.items():
+    master_df = pd.concat(all_dfs, ignore_index=True)
 
-        out_dir = os.path.join(output_directory, k)
-        if not os.path.exists(out_dir):
-            os.mkdir(out_dir)
+    if select is not None:
+        master_df = master_df[master_df['stationId'].isin(select)]
 
-        out_file = os.path.join(out_dir, '{}_{}.csv'.format(k, year_mo_str))
-        df = pd.DataFrame.from_dict(v, orient='index')
-        df.columns = MET_PARAMS
-        df['datetime'] = df.index
-        df = df[['datetime'] + MET_PARAMS]
-        df.to_csv(out_file, index=False)
+    for station_id, station_df in master_df.groupby('stationId'):
+
+        station_df = station_df.set_index('reportTime')
+        resampled_df = station_df.resample('h').agg(SUBHOUR_RESAMPLE_MAP)
+
+        if resampled_df.empty:
+            continue
+
+        out_dir = os.path.join(output_directory, station_id)
+        os.makedirs(out_dir, exist_ok=True)
+
+        out_file = os.path.join(out_dir, f'{station_id}_{year_mo_str}.parquet')
+
+        resampled_df.reset_index(inplace=True)
+        resampled_df.rename(columns={'reportTime': 'datetime'}, inplace=True)
+
+        resampled_df['stationId'] = station_id
+
+        final_cols = ['datetime', 'stationId'] + list(DESIRED_PARAMS.keys())[1:]
+        final_cols = [c for c in final_cols if c in resampled_df.columns]
+
+        resampled_df[final_cols].to_parquet(out_file)
 
     end = time.perf_counter()
-    print(f"Processing {len(file_list)} files took {end - start:0.4f} seconds")
+    print(f"{year_mo_str}: {len(file_list)} files took {end - start:0.4f} seconds")
 
 
 def process_time_chunk(args):
@@ -203,72 +212,29 @@ def process_time_chunk(args):
 
 if __name__ == "__main__":
 
-    d = '/media/research/IrrigationGIS'
-    if not os.path.exists(d):
-        d = '/home/dgketchum/data/IrrigationGIS'
-
-    # mesonet_dir = os.path.join(d, 'climate', 'madis', 'LDAD_public', 'mesonet')
-    # out_dir_ = os.path.join(mesonet_dir, 'inclusive_csv')
-
-    mesonet_dir = os.path.join(d, 'climate', 'madis', 'LDAD', 'mesonet')
-    out_dir_ = os.path.join(mesonet_dir, 'inclusive_csv')
+    mesonet_dir = '/data/ssd2/madis'
+    out_dir_ = os.path.join(mesonet_dir, 'extracts')
 
     tracker_ = os.path.join(mesonet_dir, 'stations.json')
     netcdf_src = os.path.join(mesonet_dir, 'netCDF')
-    netcdf_dst = os.path.join(mesonet_dir, 'netCDF')
     print('operating on network drive data')
 
-    # get_station_metadata(netcdf_src, tracker_)
-    shp_ = os.path.join(mesonet_dir, 'stations_25OCT2024.shp')
-    # write_stations_to_shapefile(tracker_, shp_)
+    bnds = None
 
-    # dt = pd.date_range('2001-01-01', '2009-12-31', freq='MS')
-    # dts = [d.strftime('%Y%m') for d in dt]
-    # transfer_list(netcdf_src, netcdf_dst, progress_json=None, yrmo_str=dts, workers=20)
-
-    bnds = (-180., 25., -60., 85.)
-
-    # times = generate_monthly_time_tuples(2001, 2025, check_dir=None)
-    COLUMN_NAMES = ["Month", "Count", "FirstFile", "LastFile"]
-    mod_summary = os.path.join(os.path.expanduser('~'), 'PycharmProjects', 'dads', 'modification_summary.txt')
-    df = pd.read_csv(
-        mod_summary,
-        skiprows=5,
-        sep='\s+',
-        header=None,
-        names=COLUMN_NAMES,
-        engine='python',
-        on_bad_lines='skip'
-    )
-    df['Month'] = df['Month'].astype(str)
-    df['Count'] = pd.to_numeric(df['Count'], errors='coerce')
-    df.dropna(subset=['Count'], inplace=True)
-    df['Count'] = df['Count'].astype(int)
-
-    times = []
-    processed_months = set()
-    for i, r in df.iterrows():
-        if r['Count'] < 25000:
-            month_start_dt = pd.to_datetime(r['Month'], format='%Y%m')
-            year = month_start_dt.year
-            month = month_start_dt.month
-            last_day = month_start_dt.days_in_month
-
-            start_time_str = f"{year}{month:02d}01 00"
-            end_time_str = f"{year}{month:02d}{last_day:02d} 23"
-            times.append((start_time_str, end_time_str))
-
+    times = generate_monthly_time_tuples(2001, 2016, check_dir=None)
     [print(t) for t in times]
-    args_ = [(t, netcdf_dst, out_dir_, bnds, None) for t in times]
+
+    args_ = [(t, netcdf_src, out_dir_, bnds, None) for t in times]
 
     debug = False
 
     if debug:
         for a in args_:
             process_time_chunk(a)
+            print(f'success on {a[0]}')
 
     # num_processes = 5
-    num_processes = 10
+    num_processes = 20
     with multiprocessing.Pool(processes=num_processes) as pool:
         pool.map(process_time_chunk, args_)
 
