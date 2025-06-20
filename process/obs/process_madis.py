@@ -129,18 +129,20 @@ def process_single_station(fid, row, kw, madis_src, madis_dst, rsun_tables, over
     out_file = os.path.join(madis_dst, '{}.parquet'.format(fid))
 
     if os.path.exists(out_file) and not overwrite:
-        return fid, 'exists', 'File exists', 0
+        return
 
     try:
         station_dir = os.path.join(madis_src, fid)
     except TypeError as exc:
-        return fid, 'no_dir', f'{exc}', 0
+        print(fid, 'no_dir')
+        return
 
     if not os.path.isdir(station_dir):
         if alt_src:
             station_dir = os.path.join(alt_src, fid)
         if not os.path.isdir(station_dir):
-            return fid, 'no_dir', 'Source directory not found', 0
+            print(fid, 'Source directory not found')
+            return
 
     files_ = [os.path.join(station_dir, f) for f in os.listdir(station_dir)]
     years = []
@@ -154,25 +156,33 @@ def process_single_station(fid, row, kw, madis_src, madis_dst, rsun_tables, over
         valid_files.append(f)
 
     if not valid_files:
-        return fid, 'no_files', 'No valid data files found', 0
+        print(fid, 'no_files')
+        return
 
     rsun_file = os.path.join(rsun_tables, '{}.csv'.format(fid))
     if not os.path.exists(rsun_file):
-        return fid, 'error', f'RSun file missing: {os.path.basename(rsun_file)}', 0
+        print(fid, 'error', f'RSun file missing: {rsun_file}')
+        return
 
     rsun = pd.read_csv(rsun_file, index_col=0)
     if fid not in rsun.columns:
-        raise KeyError(f"Station {fid} not found in RSun table {os.path.basename(rsun_file)}")
+        print(fid, 'error', f'RSun file missing {fid}: {rsun_file}')
+        return
+
     rsun = (rsun[fid] * 0.0036)
+
     if np.any(np.isnan(rsun.values)):
-        raise ValueError("NaN values found in RSun data")
+        print(f"Tile {row['MGRS_TILE']} nan in RSun data, removing {rsun_file}")
+        os.remove(rsun_file)
+        return
+
     rsun = rsun.to_dict()
 
     df, first, local_tz = None, True, None
     tf = TimezoneFinder()
-    
+
     valid_files.sort()
-    skipped = 0
+    skipped, remove_ct, rewrite_ct = 0, 0, 0
 
     for file_ in valid_files:
         try:
@@ -192,15 +202,30 @@ def process_single_station(fid, row, kw, madis_src, madis_dst, rsun_tables, over
         filename_yyyymm = os.path.basename(file_).split('_')[1].split('.')[0]
         data_yyyymm = list(set(c.index.strftime('%Y%m')))
 
-        if data_yyyymm[0] != filename_yyyymm:
+        if len(data_yyyymm) > 1:
+            idx = [i for i in c.index if i.strftime('%Y%m') == filename_yyyymm]
+            if len(idx) < 18:
+                os.remove(file_)
+                remove_ct += 1
+                continue
+
+            c = c.loc[idx]
+            rewrite = c.copy().drop(columns=['doy'])
+            rewrite.to_csv(file_)
+            rewrite_ct += 1
+
+        elif data_yyyymm[0] != filename_yyyymm:
             skipped += 1
             os.remove(file_)
+            remove_ct += 1
             continue
 
         if first:
             timezone_str = tf.timezone_at(lng=lon, lat=lat)
             if timezone_str is None:
-                return fid, 'error', f"Could not determine timezone for coords ({lat}, {lon})", 0
+                print(f'{fid}: Could not determine timezone for coords', flush=True)
+                return
+
             local_tz = pytz.timezone(timezone_str)
 
         if c.index.tz is None:
@@ -243,12 +268,18 @@ def process_single_station(fid, row, kw, madis_src, madis_dst, rsun_tables, over
             df = pd.concat([df, c_processed], ignore_index=False, axis=0)
 
     if df is None or df.empty:
-        return fid, 'nodata', 'No processable records found across all years', 0
+        print(f'{fid}: No processable records found across all years', flush=True)
+        return
 
     df = df.sort_index()
+    if df.index.has_duplicates:
+        print(f'{fid} has duplicates')
+        return
+
     df.to_parquet(out_file)
     obs_ct = df.shape[0]
-    return fid, 'success', f'Wrote {obs_ct} records, skipped {skipped}', obs_ct
+    print(f'{fid}: rewrote {rewrite_ct}, removed {remove_ct}, {obs_ct} obs')
+    return
 
 
 def read_hourly_data(stations, madis_src, madis_dst, rsun_tables, shuffle=False, bounds=None, overwrite=False,
@@ -268,47 +299,9 @@ def read_hourly_data(stations, madis_src, madis_dst, rsun_tables, shuffle=False,
     if total_stations_to_process == 0:
         return
 
-    processed_count = 0
-    success_count = 0
-    skipped_count = 0
-    error_count = 0
-    nodata_count = 0
-    total_obs_ct = 0
-    exists_count = 0
-
-    os.makedirs(madis_dst, exist_ok=True)
-    no_files = []
-
     if debug:
         for i, (fid, row) in enumerate(station_list.iterrows(), start=1):
-
-            # if fid != 'CBAL1':
-            #     continue
-
-            result = process_single_station(fid, row, kw, madis_src, madis_dst, rsun_tables, overwrite, qaqc, plot,
-                                            alt_src)
-            processed_count += 1
-            _fid, status, message, obs_count = result
-            total_obs_ct += obs_count
-            if status == 'success':
-                success_count += 1
-            elif status == 'no_dir':
-                skipped_count += 1
-            elif status == 'no_files':
-                skipped_count += 1
-                no_files.append(fid)
-
-            elif status == 'exists':
-                exists_count += 1
-            elif status == 'error':
-                error_count += 1
-            elif status == 'nodata':
-                nodata_count += 1
-
-            print(f'{fid}: {status}, {message}, obs: {obs_count}')
-            if len(no_files) >= 100:
-                print(no_files)
-                break
+            process_single_station(fid, row, kw, madis_src, madis_dst, rsun_tables, overwrite, qaqc, plot, alt_src)
 
     else:
         if n_workers is None:
@@ -321,33 +314,8 @@ def read_hourly_data(stations, madis_src, madis_dst, rsun_tables, shuffle=False,
                 futures.append(future)
 
             for future in concurrent.futures.as_completed(futures):
-                processed_count += 1
-                result = future.result()
-                _fid, status, message, obs_count = result
-                total_obs_ct += obs_count
+                pass
 
-                if status == 'success':
-                    success_count += 1
-                elif status == 'no_dir':
-                    skipped_count += 1
-                elif status == 'no_files':
-                    skipped_count += 1
-                elif status == 'exists':
-                    exists_count += 1
-                elif status == 'error':
-                    error_count += 1
-                elif status == 'nodata':
-                    nodata_count += 1
-
-    print("\n--- Processing Summary ---")
-    print(f"Total stations attempted: {total_stations_to_process}")
-    print(f"Successfully processed:   {success_count}")
-    print(f"Skipped (no src dir/no files):  {skipped_count}")
-    print(f"No processable data:    {nodata_count}")
-    print(f"File exists:    {exists_count}")
-    print(f"Errors encountered:     {error_count}")
-    print(f"Total observations written: {total_obs_ct}")
-    print("-------------------------\n")
 
 
 def plot_daily_data(pdf, station_id, year, out_fig):
@@ -436,8 +404,8 @@ if __name__ == '__main__':
 
     solrad = os.path.join(d, 'dads', 'dem', 'rsun_stations')
 
-    read_hourly_data(sites, madis_hourly_public, madis_daily_, solrad, shuffle=True, stype='madis',
-                     bounds=None, overwrite=True, qaqc=True, plot=None, debug=False,
-                     alt_src=madis_hourly_research, n_workers=40)
+    read_hourly_data(sites, madis_hourly_research, madis_daily_, solrad, shuffle=True, stype='madis',
+                     bounds=None, overwrite=False, qaqc=True, plot=None, debug=True,
+                     alt_src=madis_hourly_public, n_workers=40)
 
 # ========================= EOF ====================================================================

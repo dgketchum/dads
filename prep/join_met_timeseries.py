@@ -10,7 +10,7 @@ from utils.station_parameters import station_par_map
 
 warnings.filterwarnings("ignore", category=FutureWarning)
 
-GHCN_MAP = {'TMAX': 'max_temp', 'TMIN': 'min_temp', 'PRCP': 'prcp'}
+GHCN_MAP = {'TMAX': 'tmax', 'TMIN': 'tmin', 'PRCP': 'prcp'}
 OBS_TARGETS = ['rsds', 'tmax', 'tmin', 'ea', 'prcp', 'wind']
 
 
@@ -73,9 +73,15 @@ def join_daily_timeseries(stations, sta_dir, gridded_met_dir, dst_dir, source,
             continue
 
         sta_file = os.path.join(sta_dir, '{}.parquet'.format(f))
+        if not os.path.isfile(sta_file):
+            sta_file = os.path.join(sta_dir, '{}.csv'.format(f))
 
         try:
-            sdf = pd.read_parquet(sta_file)
+            if sta_file.endswith('csv'):
+                sdf = pd.read_csv(sta_file, index_col=0, parse_dates=True)
+            else:
+                sdf = pd.read_parquet(sta_file)
+
         except FileNotFoundError:
             empty, eidx = add_empty_entry(empty, eidx, f, source, 'does not exist', sta_file)
             print('sta_file {} does not exist'.format(os.path.basename(sta_file)))
@@ -117,8 +123,13 @@ def join_daily_timeseries(stations, sta_dir, gridded_met_dir, dst_dir, source,
             try:
                 sdf = sdf.resample('h').ffill()
             except ValueError as exc:
-                print(f'\n{sta_file} has duplicates\n')
-                continue
+                if 'duplicate labels' in exc.args[0]:
+                    print(f'\n{sta_file} has duplicates: {exc}, removing\n')
+                    os.remove(sta_file)
+                    continue
+                else:
+                    print(f'\n{sta_file} error: {exc}\n')
+                    continue
 
         data_cols = valid_obs_cols +  nld_cols
         all_cols = ['FID'] + data_cols
