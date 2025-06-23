@@ -8,7 +8,7 @@ import time
 import warnings
 import concurrent.futures
 from datetime import datetime, timedelta
-
+from tqdm import tqdm
 import pandas as pd
 import xarray as xr
 
@@ -53,28 +53,22 @@ def copy_file(source_file, dest_file):
     except Exception as e:
         print(e, os.path.basename(source_file))
 
+def transfer_list(data_directory, dst, yrmo_str=None, workers=2):
+    files_ = sorted(os.listdir(data_directory))
+    yrmo = [str(f[:6]) for f in files_]
 
-def transfer_list(data_directory, dst, progress_json=None, yrmo_str=None, workers=2):
-    if progress_json:
-        with open(progress_json, 'r') as f:
-            progress = json.load(f)
-            yrmo_str = progress['complete']
-
-        files_ = os.listdir(data_directory)
-        yrmo = [str(f[:6]) for f in files_]
-        file_list = [os.path.join(data_directory, f) for f, ym in zip(files_, yrmo) if ym not in yrmo_str]
-        dst_list = [os.path.join(dst, f) for f, ym in zip(files_, yrmo) if ym not in yrmo_str]
-        print(len(file_list), 'files')
-
-    else:
-        files_ = os.listdir(data_directory)
-        yrmo = [str(f[:6]) for f in files_]
+    if yrmo_str:
         file_list = [os.path.join(data_directory, f) for f, ym in zip(files_, yrmo) if ym in yrmo_str]
         dst_list = [os.path.join(dst, f) for f, ym in zip(files_, yrmo) if ym in yrmo_str]
-        print(len(file_list), 'files')
+    else:
+        file_list = [os.path.join(data_directory, f) for f in files_]
+        dst_list = [os.path.join(dst, f) for f in files_]
+
+    print(f"{len(file_list)} files to transfer.")
 
     with multiprocessing.Pool(processes=workers) as pool:
-        pool.starmap(copy_file, zip(file_list, dst_list))
+        tqdm(pool.starmap(copy_file, zip(file_list, dst_list)), total=len(file_list),
+             desc="Transferring files", unit="file")
 
 
 def generate_monthly_time_tuples(start_year, end_year, check_dir=None):
@@ -201,7 +195,7 @@ def read_madis_hourly(data_directory, year_mo_str, output_directory, bounds=(-12
         resampled_df[final_cols].to_parquet(out_file)
 
     end = time.perf_counter()
-    print(f"{year_mo_str}: {len(file_list)} files took {end - start:0.4f} seconds")
+    print(f"{year_mo_str}: {len(file_list)} files took {end - start:0.4f} seconds", flush=True)
 
 
 def process_time_chunk(args):
@@ -217,12 +211,28 @@ if __name__ == "__main__":
 
     tracker_ = os.path.join(mesonet_dir, 'stations.json')
     netcdf_src = os.path.join(mesonet_dir, 'netCDF')
-    print('operating on network drive data')
+
+    missing_yrmos = None
+
+    log = os.path.join(mesonet_dir, 'write_madis_23JUN2025.txt')
+    if os.path.isfile(log):
+        with open(log, 'r') as fp:
+            lines = fp.readlines()
+
+        complete_yrmos = [l[:6] for l in lines]
+    else:
+        complete_yrmos = None
 
     bnds = None
 
-    times = generate_monthly_time_tuples(2001, 2016, check_dir=None)
-    [print(t) for t in times]
+    times = generate_monthly_time_tuples(2001, 2025, check_dir=None)
+
+    if complete_yrmos:
+        times = [t for t in times if t[0][:6] not in complete_yrmos and 200107 < int(t[0][:6]) <= 202506]
+        missing_yrmos = [s[0][:6] for s in times]
+
+    # src = '/home/dgketchum/data/IrrigationGIS/climate/madis/LDAD/mesonet/netCDF/'
+    # transfer_list(src, netcdf_src, yrmo_str=missing_yrmos, workers=6)
 
     args_ = [(t, netcdf_src, out_dir_, bnds, None) for t in times]
 
@@ -234,7 +244,7 @@ if __name__ == "__main__":
             print(f'success on {a[0]}')
 
     # num_processes = 5
-    num_processes = 20
+    num_processes = 10
     with multiprocessing.Pool(processes=num_processes) as pool:
         pool.map(process_time_chunk, args_)
 

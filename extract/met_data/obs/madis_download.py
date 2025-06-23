@@ -20,8 +20,8 @@ from utils.elevation import elevation_from_coordinate
 
 warnings.filterwarnings("ignore", category=xr.SerializationWarning)
 
-# BASE_URL = "https://madis-data.ncep.noaa.gov/madisResearch/data"
-BASE_URL = "https://madis-data.ncep.noaa.gov/madisPublic/data"
+BASE_URL = "https://madis-data.ncep.noaa.gov/madisResearch/data"
+# BASE_URL = "https://madis-data.ncep.noaa.gov/madisPublic/data"
 
 credentials_file = os.path.join(os.path.expanduser('~'), 'PycharmProjects', 'dads', 'extract', 'met_data',
                                 'obs', 'madis_credentials.json')
@@ -56,10 +56,6 @@ def generate_monthly_time_tuples(start_year, end_year):
 
 def download(start_time, end_time, madis_data_dir, username, password, downloader='wget'):
     """"""
-    dataset_path = 'LDAD/mesonet/netCDF'
-    local_dir = os.path.join(madis_data_dir, dataset_path)
-    Path(local_dir).mkdir(parents=True, exist_ok=True)
-
     start_dt = datetime.strptime(start_time, "%Y%m%d %H")
     end_dt = datetime.strptime(end_time, "%Y%m%d %H")
 
@@ -69,11 +65,11 @@ def download(start_time, end_time, madis_data_dir, username, password, downloade
     while current_dt <= end_dt:
         start = time.perf_counter()
         date_str = current_dt.strftime("%Y/%m/%d")
-        remote_dir = f"/archive/{date_str}/{dataset_path}"
+        remote_dir = f"/archive/{date_str}/LDAD/mesonet/netCDF"
 
         hr_files = ['{}_{}.gz'.format(current_dt.strftime("%Y%m%d"),
                                       str(hr).rjust(2, '0').ljust(4, '0')) for hr in range(0, 24)]
-        targets = [os.path.join(local_dir, hrfile) for hrfile in hr_files]
+        targets = [os.path.join(madis_data_dir, hrfile) for hrfile in hr_files]
 
         if not all([os.path.exists(f) for f in targets]):
             try:
@@ -82,7 +78,7 @@ def download(start_time, end_time, madis_data_dir, username, password, downloade
                         "wget", "--user", username, "--password", password,
                         "--no-check-certificate", "--no-directories", "--recursive", "--level=1",
                         "--accept", "*.gz", "-q", "--timeout=600", f"{BASE_URL}{remote_dir}/"]
-                    subprocess.run(wget_cmd, check=True, cwd=local_dir)
+                    subprocess.run(wget_cmd, check=True, cwd=madis_data_dir)
                     download_count += 1
                 elif downloader == 'aria2c':
                     input_file = "aria2c_input.txt"
@@ -92,7 +88,7 @@ def download(start_time, end_time, madis_data_dir, username, password, downloade
                             f.write(strfile)
                     aria2c_cmd = [
                         "aria2c", "-x", "16", "-s", "16", "--http-user", username, "--http-passwd", password,
-                        "--allow-overwrite=true", "--dir", local_dir, "--input-file", input_file,
+                        "--allow-overwrite=true", "--dir", madis_data_dir, "--input-file", input_file,
                     ]
                     subprocess.run(aria2c_cmd, check=True)
                 else:
@@ -100,7 +96,7 @@ def download(start_time, end_time, madis_data_dir, username, password, downloade
 
             except subprocess.CalledProcessError as e:
                 print(f"{BASE_URL}{remote_dir}/")
-                print(f"Failed download to {local_dir} for day {current_dt.strftime('%Y%m%d')} {e}")
+                print(f"Failed download to {madis_data_dir} for day {current_dt.strftime('%Y%m%d')} {e}")
 
             if download_count % 10 == 0:
                 print('sleep wait')
@@ -116,46 +112,38 @@ def download(start_time, end_time, madis_data_dir, username, password, downloade
 
 
 def process_time_chunk(time_tuple):
-    start_time, end_time = time_tuple
+    start_time, end_time, madis_data_dir_ = time_tuple
     dt = pd.date_range(start_time, end_time, freq='h')
     dt = [d.strftime("%Y%m%d_%H00") for d in dt]
     hr_files = ['{}.gz'.format(d) for d in dt]
-    target_dir = os.path.join(madis_data_dir_, 'LDAD', 'mesonet', 'netCDF')
-    targets = [os.path.join(target_dir, hrfile) for hrfile in hr_files]
+    targets = [os.path.join(madis_data_dir_, hrfile) for hrfile in hr_files]
     if not all([os.path.exists(f) for f in targets]):
         download(start_time, end_time, madis_data_dir_, USR, PSWD, downloader='aria2c')
     else:
-        print('{} data exists in {}'.format(time_tuple, target_dir))
+        print('{} data exists in {}'.format(time_tuple, madis_data_dir_))
 
 
 if __name__ == "__main__":
 
-    d = '/media/research/IrrigationGIS'
-    if not os.path.exists(d):
-        d = '/home/dgketchum/data/IrrigationGIS'
-
-    usr, pswd = 'usr', 'pswd'
-    madis_data_dir_ = os.path.join(d, 'climate', 'madis')
-
-    stn_meta = os.path.join(d, 'climate', 'madis', 'public_stn_list.csv')
-
-    mesonet_dir = os.path.join(madis_data_dir_, 'LDAD_public', 'mesonet')
-    # mesonet_dir = os.path.join(madis_data_dir_, 'LDAD', 'mesonet')
+    madis_data_dir = '/data/ssd2/madis/netCDF/'
 
     # the FTP we're currently using has from 2001-07-01
-    times = generate_monthly_time_tuples(2024, 2026)
-    times = [t for t in times if int(t[0][:8]) >= 20240901]
-    times = [t for t in times if int(t[0][:8]) <= 20250501]
+    times = generate_monthly_time_tuples(2015, 2026)
+    times = [t for t in times if int(t[0][:6]) in [201508, 202506]]
     # random.shuffle(times)
+
+    args = [(t[0], t[1], madis_data_dir) for t in times]
 
     # num_processes = 1
     num_processes = 10
 
-    # debug
-    # for t in times:
-    #     process_time_chunk(t)
+    debug = False
+
+    if debug:
+        for t in args:
+            process_time_chunk(t)
 
     with multiprocessing.Pool(processes=num_processes) as pool:
-        pool.map(process_time_chunk, times)
+        pool.map(process_time_chunk, args)
 
 # ========================= EOF ====================================================================
