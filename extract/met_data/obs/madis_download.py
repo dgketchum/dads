@@ -123,14 +123,36 @@ def process_time_chunk(time_tuple):
         print('{} data exists in {}'.format(time_tuple, madis_data_dir_))
 
 
+def download_file_list(txt_file, output_dir):
+
+    with open(txt_file, 'r') as fp:
+        lines = fp.read().splitlines()
+
+    for filename in lines:
+        target_path = os.path.join(output_dir, filename)
+        if os.path.exists(target_path):
+            return
+        date_str = filename.split('_')[0]
+        year, month, day = date_str[0:4], date_str[4:6], date_str[6:8]
+        remote_url = f"{BASE_URL}/archive/{year}/{month}/{day}/LDAD/mesonet/netCDF/{filename}"
+        subprocess.run([
+            "wget", "--user", USR, "--password", PSWD, "--no-check-certificate",
+            "-q", "--timeout=600", "-O", target_path, remote_url
+        ], check=False, capture_output=True)
+
 if __name__ == "__main__":
+
+    home = os.path.expanduser('~')
 
     madis_data_dir = '/data/ssd2/madis/netCDF/'
 
     # the FTP we're currently using has from 2001-07-01
-    times = generate_monthly_time_tuples(2015, 2026)
-    times = [t for t in times if int(t[0][:6]) in [201508, 202506]]
+    times = generate_monthly_time_tuples(2017, 2026)
+    # times = [t for t in times if int(t[0][:6]) in [201508, 202506]]
     # random.shuffle(times)
+
+    txt_file_ = os.path.join(home, 'PycharmProjects', 'dads', 'missing_madis.txt')
+    download_file_list(txt_file_, madis_data_dir)
 
     args = [(t[0], t[1], madis_data_dir) for t in times]
 

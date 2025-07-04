@@ -8,6 +8,7 @@ import pandas as pd
 import pytz
 import seaborn as sns
 from timezonefinder import TimezoneFinder
+import pyarrow
 
 from utils.calc_eto import calc_asce_params
 from utils.station_parameters import station_par_map
@@ -123,9 +124,11 @@ def process_daily_data(hourly_df, rsun_data, lat_, elev_, zw_=2.0, qaqc=False):
     return daily_df
 
 
-def process_single_station(fid, row, kw, madis_src, madis_dst, rsun_tables, overwrite, qaqc, plot, alt_src):
-    """"""
-    lon, lat, elv = row[kw['lon']], row[kw['lat']], row[kw['elev']]
+def process_single_station(fid, madis_src, madis_dst, rsun_tables, overwrite, qaqc, plot, alt_src):
+    """
+    Processes all data for a single station by first concatenating all monthly
+    files and then processing the combined dataframe.
+    """
     out_file = os.path.join(madis_dst, '{}.parquet'.format(fid))
 
     if os.path.exists(out_file) and not overwrite:
@@ -133,7 +136,7 @@ def process_single_station(fid, row, kw, madis_src, madis_dst, rsun_tables, over
 
     try:
         station_dir = os.path.join(madis_src, fid)
-    except TypeError as exc:
+    except TypeError:
         print(fid, 'no_dir')
         return
 
@@ -144,16 +147,7 @@ def process_single_station(fid, row, kw, madis_src, madis_dst, rsun_tables, over
             print(fid, 'Source directory not found')
             return
 
-    files_ = [os.path.join(station_dir, f) for f in os.listdir(station_dir)]
-    years = []
-    valid_files = []
-    for f in files_:
-        try:
-            year = int(os.path.basename(f).split('.')[0].split('_')[-1])
-        except ValueError:
-            continue
-        years.append(year)
-        valid_files.append(f)
+    valid_files = [f for f in glob.glob(os.path.join(station_dir, '*.parquet'))]
 
     if not valid_files:
         print(fid, 'no_files')
@@ -166,150 +160,127 @@ def process_single_station(fid, row, kw, madis_src, madis_dst, rsun_tables, over
 
     rsun = pd.read_csv(rsun_file, index_col=0)
     if fid not in rsun.columns:
-        print(fid, 'error', f'RSun file missing {fid}: {rsun_file}')
+        print(fid, 'error', f'RSun file missing {fid}: {rsun_file}', flush=True)
         return
 
     rsun = (rsun[fid] * 0.0036)
 
     if np.any(np.isnan(rsun.values)):
-        print(f"Tile {row['MGRS_TILE']} nan in RSun data, removing {rsun_file}")
+        print(f"Station {fid} has nan in RSun data, removing {rsun_file}")
         os.remove(rsun_file)
         return
 
     rsun = rsun.to_dict()
 
-    df, first, local_tz = None, True, None
-    tf = TimezoneFinder()
-
-    valid_files.sort()
-    skipped, remove_ct, rewrite_ct = 0, 0, 0
-
+    df_list = []
     for file_ in valid_files:
         try:
-            c = pd.read_csv(file_, index_col=0, parse_dates=True, low_memory=False)
-        except pd.errors.EmptyDataError:
+            df_list.append(pd.read_parquet(file_))
+        except (pd.errors.EmptyDataError, pyarrow.lib.ArrowInvalid):
+            print(f'file {file_} is invalid or empty, skipping')
             continue
 
-        if c.empty:
-            continue
+    if not df_list:
+        print(f'{fid}: No valid data files found.')
+        return
 
-        if not isinstance(c.index, pd.DatetimeIndex):
-            continue
+    c = pd.concat(df_list)
+    c.index = pd.to_datetime(c['datetime'])
+    c = c.drop(columns=['datetime'])
 
-        c = c.sort_index()
-        c['doy'] = c.index.dayofyear
+    if c.empty:
+        print(f'{fid}: Combined dataframe is empty.')
+        return
 
-        filename_yyyymm = os.path.basename(file_).split('_')[1].split('.')[0]
-        data_yyyymm = list(set(c.index.strftime('%Y%m')))
+    c = c.sort_index()
 
-        if len(data_yyyymm) > 1:
-            idx = [i for i in c.index if i.strftime('%Y%m') == filename_yyyymm]
-            if len(idx) < 18:
-                os.remove(file_)
-                remove_ct += 1
-                continue
+    try:
+        lon = c['longitude'].iloc[0]
+        lat = c['latitude'].iloc[0]
+        elv = c['elevation'].iloc[0]
+    except (KeyError, IndexError) as e:
+        print(f'{fid}: Failed to extract metadata. Ensure "longitude", "latitude", and "elevation" exist. Error: {e}')
+        return
 
-            c = c.loc[idx]
-            rewrite = c.copy().drop(columns=['doy'])
-            rewrite.to_csv(file_)
-            rewrite_ct += 1
+    tf = TimezoneFinder()
+    timezone_str = tf.timezone_at(lng=lon, lat=lat)
+    if timezone_str is None:
+        print(f'{fid}: Could not determine timezone for coords', flush=True)
+        return
+    local_tz = pytz.timezone(timezone_str)
 
-        elif data_yyyymm[0] != filename_yyyymm:
-            skipped += 1
-            os.remove(file_)
-            remove_ct += 1
-            continue
+    c['doy'] = c.index.dayofyear
+    if c.index.tz is None:
+        c.index = c.index.tz_localize('UTC')
+    c.index = c.index.tz_convert(local_tz)
 
-        if first:
-            timezone_str = tf.timezone_at(lng=lon, lat=lat)
-            if timezone_str is None:
-                print(f'{fid}: Could not determine timezone for coords', flush=True)
-                return
+    required_cols = ['temperature', 'relHumidity', 'solarRadiation', 'windSpeed', 'windDir', 'precipAccum']
+    for col in required_cols:
+        if col not in c.columns:
+            c[col] = np.nan
 
-            local_tz = pytz.timezone(timezone_str)
+    c['temperature'] -= 273.15
+    es = 0.6108 * np.exp(17.27 * c['temperature'] / (c['temperature'] + 237.3))
+    c['ea'] = (c['relHumidity'] / 100) * es
+    c['rsds'] = c['solarRadiation'] * 0.0036
+    c['wind'] = c['windSpeed']
+    c['wind_dir'] = c['windDir']
 
-        if c.index.tz is None:
-            c.index = c.index.tz_localize('UTC')
-        c.index = c.index.tz_convert(local_tz)
-
-        required_cols = ['temperature', 'relHumidity', 'solarRadiation', 'windSpeed', 'windDir', 'precipAccum']
-        if not any(col in c.columns for col in required_cols):
-            continue
-
-        for col in required_cols:
-            if col not in c.columns:
-                c[col] = np.nan
-
-        c['temperature'] -= 273.15
-        es = 0.6108 * np.exp(17.27 * c['temperature'] / (c['temperature'] + 237.3))
-        c['ea'] = (c['relHumidity'] / 100) * es
-        c['rsds'] = c['solarRadiation'] * 0.0036
-        c['wind'] = c['windSpeed']
-        c['wind_dir'] = c['windDir']
-
-        c_processed = process_daily_data(c, rsun, lat_=lat, elev_=elv, zw_=2.0, qaqc=qaqc)
-
-        if c_processed is None or c_processed.empty:
-            continue
-
-        if plot:
-            raise NotImplementedError
-
-        if first:
-            df = c_processed.copy()
-            first = False
-        else:
-            df_cols = set(df.columns)
-            c_cols = set(c_processed.columns)
-            if df_cols != c_cols:
-                all_cols = df_cols.union(c_cols)
-                df = df.reindex(columns=all_cols)
-                c_processed = c_processed.reindex(columns=all_cols)
-            df = pd.concat([df, c_processed], ignore_index=False, axis=0)
+    df = process_daily_data(c, rsun, lat_=lat, elev_=elv, zw_=2.0, qaqc=qaqc)
 
     if df is None or df.empty:
-        print(f'{fid}: No processable records found across all years', flush=True)
+        print(f'{fid}: No processable records found after daily aggregation', flush=True)
         return
+
+    if plot:
+        raise NotImplementedError
 
     df = df.sort_index()
     if df.index.has_duplicates:
-        print(f'{fid} has duplicates')
-        return
+        # It's possible for daily data to have duplicates if source files overlap.
+        # We can keep the first entry.
+        df = df[~df.index.duplicated(keep='first')]
+        print(f'{fid} had duplicates, kept first entry.')
+
+    # Add metadata to the final daily dataframe before saving
+    df['latitude'] = lat
+    df['longitude'] = lon
+    df['elevation'] = elv
 
     df.to_parquet(out_file)
     obs_ct = df.shape[0]
-    print(f'{fid}: rewrote {rewrite_ct}, removed {remove_ct}, {obs_ct} obs')
+    print(f'{fid}: successfully processed {obs_ct} daily observations')
     return
 
-
-def read_hourly_data(stations, madis_src, madis_dst, rsun_tables, shuffle=False, bounds=None, overwrite=False,
-                     qaqc=False, plot=None, alt_src=None, stype='madis', n_workers=4, debug=False):
-    kw = station_par_map(stype)
-    station_list = pd.read_csv(stations, index_col=kw['index'])
-
-    if shuffle:
-        station_list = station_list.sample(frac=1)
-
-    if bounds:
-        w, s, e, n = bounds
-        station_list = station_list[(station_list[kw['lat']] < n) & (station_list[kw['lat']] >= s)]
-        station_list = station_list[(station_list[kw['lon']] < e) & (station_list[kw['lon']] >= w)]
-
-    total_stations_to_process = station_list.shape[0]
-    if total_stations_to_process == 0:
+def read_hourly_data(madis_src, madis_dst, rsun_tables, overwrite=False,
+                     qaqc=False, plot=None, alt_src=None, n_workers=4, debug=False):
+    """
+    Scans a directory for station data, and processes each station.
+    This function no longer requires a station metadata file.
+    """
+    try:
+        station_fids = [d for d in os.listdir(madis_src) if os.path.isdir(os.path.join(madis_src, d))]
+    except FileNotFoundError:
+        print(f"Error: Source directory not found at {madis_src}")
         return
 
-    if debug:
-        for i, (fid, row) in enumerate(station_list.iterrows(), start=1):
-            process_single_station(fid, row, kw, madis_src, madis_dst, rsun_tables, overwrite, qaqc, plot, alt_src)
+    if not station_fids:
+        print(f"No station subdirectories found in {madis_src}")
+        return
 
+    total_stations_to_process = len(station_fids)
+    print(f"Found {total_stations_to_process} stations to process.")
+
+    if debug:
+        for fid in station_fids:
+            process_single_station(fid, madis_src, madis_dst, rsun_tables, overwrite, qaqc, plot, alt_src)
     else:
         if n_workers is None:
             n_workers = os.cpu_count()
         futures = []
         with concurrent.futures.ProcessPoolExecutor(max_workers=n_workers) as executor:
-            for fid, row in station_list.iterrows():
-                future = executor.submit(process_single_station, fid, row, kw, madis_src, madis_dst, rsun_tables,
+            for fid in station_fids:
+                future = executor.submit(process_single_station, fid, madis_src, madis_dst, rsun_tables,
                                          overwrite, qaqc, plot, alt_src)
                 futures.append(future)
 
@@ -395,17 +366,17 @@ if __name__ == '__main__':
 
     # pandarallel.initialize(nb_workers=6)
 
-    sites = os.path.join(d, 'dads', 'met', 'stations', 'madis_17MAY2025_mgrs.csv')
+    # sites = os.path.join(d, 'dads', 'met', 'stations', 'madis_17MAY2025_mgrs.csv')
 
     madis_hourly_public = os.path.join(d, 'climate', 'madis', 'LDAD_public', 'mesonet', 'csv')
-    madis_hourly_research = os.path.join(d, 'climate', 'madis', 'LDAD', 'mesonet', 'inclusive_csv')
+    madis_hourly_research = '/data/ssd2/madis/extracts'
 
     madis_daily_ = '/data/ssd2/madis/daily'
 
     solrad = os.path.join(d, 'dads', 'dem', 'rsun_stations')
 
-    read_hourly_data(sites, madis_hourly_research, madis_daily_, solrad, shuffle=True, stype='madis',
-                     bounds=None, overwrite=False, qaqc=True, plot=None, debug=True,
-                     alt_src=madis_hourly_public, n_workers=40)
+    read_hourly_data(madis_hourly_research, madis_daily_, solrad,
+                     overwrite=True, qaqc=True, plot=None, debug=False,
+                     alt_src=madis_hourly_public, n_workers=25)
 
 # ========================= EOF ====================================================================
