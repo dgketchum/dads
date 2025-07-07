@@ -26,102 +26,47 @@ DESIRED_PARAMS = {
     'latitude': float,
     'longitude': float,
 
+    # --- Add PST codes to be merged and saved ---
+    'code1PST': str, # Defines precipAccum period
+    'code2PST': str, # Defines solarRadiation period/type
+
     # --- Temperature and its full QC suite ---
     'temperature': float,
     'temperatureDD': str,
-    # 'temperatureQCA': int,
-    # 'temperatureQCR': int,
-    # 'temperatureQCD': 'object',
-    # 'temperatureICA': int,
-    # 'temperatureICR': int,
 
     # --- Dewpoint and its full QC suite ---
     'dewpoint': float,
     'dewpointDD': str,
-    # 'dewpointQCA': int,
-    # 'dewpointQCR': int,
-    # 'dewpointQCD': 'object',
-    # 'dewpointICA': int,
-    # 'dewpointICR': int,
 
     # --- Relative Humidity and its QC suite ---
     'relHumidity': float,
     'relHumidityDD': str,
-    # 'relHumidityQCA': int,
-    # 'relHumidityQCR': int,
-    # 'relHumidityQCD': 'object',
 
     # --- Wind Speed and its full QC suite ---
     'windSpeed': float,
     'windSpeedDD': str,
-    # 'windSpeedQCA': int,
-    # 'windSpeedQCR': int,
-    # 'windSpeedQCD': 'object',
-    # 'windSpeedICA': int,
-    # 'windSpeedICR': int,
 
     # --- Wind Direction and its full QC suite ---
     'windDir': float,
     'windDirDD': str,
-    # 'windDirQCA': int,
-    # 'windDirQCR': int,
-    # 'windDirQCD': 'object',
-    # 'windDirICA': int,
-    # 'windDirICR': int,
 
     # --- Precipitation and its full QC suite ---
     'precipAccum': float,
     'precipAccumDD': str,
-    # 'precipAccumQCA': int,
-    # 'precipAccumQCR': int,
-    # 'precipAccumQCD': 'object',
-    # 'precipAccumICA': int,
-    # 'precipAccumICR': int,
 
-    # --- Solar Radiation (lacks standard QC flags in this file type) ---
+    # --- Solar Radiation ---
     'solarRadiation': float,
-
 }
 
-# --- Provider-Subprovider Table (PST) ---
+# --- Provider-Subprovider Tables (PST) ---
 PST = {
-    'code1PST': str,
-    'code2PST': str,
-    'code3PST': str,
-    'code4PST': str,
-    'namePST': str,
-    'typePST': str,
+    'code1PST': str, # method of precip reporting
+    'code2PST': str, # method of solrad reporting
+    'code3PST': str, # PST code1/code2 usage definition
+    'code4PST': str, # rawPrecip variable definition -- not used
+    'namePST': str, # PST Provider or Subprovider name
+    'typePST': str, # PST type
 }
-
-
-def copy_file(source_file, dest_file):
-    if os.path.exists(dest_file):
-        return
-    try:
-        shutil.copy(source_file, dest_file)
-        if dest_file.endswith('01_0000.gz'):
-            print(dest_file)
-    except Exception as e:
-        print(e, os.path.basename(source_file))
-
-
-def transfer_list(data_directory, dst, yrmo_str=None, workers=2):
-    files_ = sorted(os.listdir(data_directory))
-    yrmo = [str(f[:6]) for f in files_]
-
-    if yrmo_str:
-        file_list = [os.path.join(data_directory, f) for f, ym in zip(files_, yrmo) if ym in yrmo_str]
-        dst_list = [os.path.join(dst, f) for f, ym in zip(files_, yrmo) if ym in yrmo_str]
-    else:
-        file_list = [os.path.join(data_directory, f) for f in files_]
-        dst_list = [os.path.join(dst, f) for f in files_]
-
-    print(f"{len(file_list)} files to transfer.")
-
-    with multiprocessing.Pool(processes=workers) as pool:
-        tqdm(pool.starmap(copy_file, zip(file_list, dst_list)), total=len(file_list),
-             desc="Transferring files", unit="file")
-
 
 def generate_monthly_time_tuples(start_year, end_year, check_dir=None):
     idxs = []
@@ -179,7 +124,7 @@ def open_nc(f):
 
 
 def read_madis_hourly(data_directory, year_mo_str, output_directory, bounds=(-125., 24., -66., 53.),
-                      select=None, pst_dir=None):
+                      select=None):
     """"""
     file_pattern = os.path.join(data_directory, f"*{year_mo_str}*.gz")
     file_list = sorted(glob.glob(file_pattern))
@@ -198,29 +143,33 @@ def read_madis_hourly(data_directory, year_mo_str, output_directory, bounds=(-12
         if ds is None:
             continue
 
-        if first:
-            providers = ds['namePST'].values.astype(str)
-            pst_lookup = {k: list([i.item() for i in ds[k].values.astype(v)]) for k, v in PST.items()}
-            first = False
-        else:
-            ds_prov = ds['namePST'].values.astype(str)
-            assert all([x == y for x, y in zip(providers, ds_prov)])
+        pstdct = {k: [int(i) for i in ds[k].values if np.isfinite(i)] for k in PST if 'code' in k}
+        [pstdct.update({k: [i.strip() for i in ds[k].values.astype(str) if i != ''] for k in PST if 'code' not in k})]
+        pst_map_df = pd.DataFrame(pstdct)
+        pst_map_df = pst_map_df[pst_map_df['namePST'] != '']
 
         data_vars = {}
+        params_to_extract = {k: v for k, v in DESIRED_PARAMS.items() if k not in PST}
 
-        for var_name, var_type in DESIRED_PARAMS.items():
+        for var_name, var_type in params_to_extract.items():
             if var_name in ds:
-                data_vars[var_name] = ds[var_name].values.astype(var_type)
+                if var_name == 'observationTime':
+                    data_vars[var_name] = pd.to_datetime(ds[var_name].values, errors='coerce')
+                elif var_type == str:
+                    data_vars[var_name] = [val.decode().strip() for val in ds[var_name].values]
+                else:
+                    data_vars[var_name] = ds[var_name].values.astype(var_type)
             else:
                 if 'recNum' in ds.dims:
-                    data_vars[var_name] = [np.nan] * ds.dims['recNum']
+                    default_val = '' if var_type == str else np.nan
+                    data_vars[var_name] = [default_val] * ds.dims['recNum']
 
         df = pd.DataFrame(data_vars)
 
         if df.empty:
             continue
 
-        df['observationTime'] = pd.to_datetime(df['observationTime'], errors='coerce')
+        df = pd.merge(df, pst_map_df, left_on='dataProvider', right_on='namePST', how='left')
 
         df.dropna(how='all', inplace=True)
 
@@ -234,11 +183,6 @@ def read_madis_hourly(data_directory, year_mo_str, output_directory, bounds=(-12
             continue
 
         all_dfs.append(df)
-
-    if pst_dir:
-        pst_file = os.path.join(pst_dir, f'pst_{year_mo_str}.json')
-        with open(pst_file, 'w') as fp:
-            json.dump(pst_lookup, fp, indent=4)
 
     if not all_dfs:
         print("No valid data found in any files.")
@@ -260,20 +204,22 @@ def read_madis_hourly(data_directory, year_mo_str, output_directory, bounds=(-12
             out_dir = os.path.join(output_directory, station_id)
             os.makedirs(out_dir, exist_ok=True)
 
-            out_file = os.path.join(out_dir, f'{station_id}_{year_mo_str}.parquet.gz')
+            out_file = os.path.join(out_dir, f'{station_id}_{year_mo_str}.parquet')
 
             station_df.reset_index(inplace=True)
             station_df.rename(columns={'observationTime': 'datetime'}, inplace=True)
 
             station_df['stationId'] = station_id
 
-            final_cols = ['datetime', 'stationId'] + list(DESIRED_PARAMS.keys())[1:]
-            final_cols = [c for c in final_cols if c in station_df.columns]
+            final_cols = [c for c in DESIRED_PARAMS.keys() if c in station_df.columns]
+            final_cols.insert(0, 'stationId')
+            final_cols.insert(0, 'datetime')
+            final_cols = list(dict.fromkeys(final_cols))
 
-            station_df[final_cols].to_parquet(out_file, compression='gzip')
+            station_df[final_cols].to_parquet(out_file)
 
         except Exception as err:
-            print(f'error on {station_id}, {year_mo_str}: {err}')
+            print(f'error on {station_id}, {year_mo_str}: {err}', flush=True)
             continue
 
     end = time.perf_counter()
@@ -283,54 +229,34 @@ def read_madis_hourly(data_directory, year_mo_str, output_directory, bounds=(-12
 
 
 def process_time_chunk(args):
-    time_tuple, meso_dir, out_dir, bnds, sel, pst_d = args
+    time_tuple, meso_dir, out_dir, bnds, sel = args
     start_time, end_time = time_tuple
-    read_madis_hourly(meso_dir, start_time[:6], out_dir, bounds=bnds, select=sel, pst_dir=pst_d)
+    read_madis_hourly(meso_dir, start_time[:6], out_dir, bounds=bnds, select=sel)
 
 
 if __name__ == "__main__":
 
     mesonet_dir = '/data/ssd2/madis'
     out_dir_ = os.path.join(mesonet_dir, 'extracts_qaqc')
-    pst_ = os.path.join(mesonet_dir, 'pst')
 
     tracker_ = os.path.join(mesonet_dir, 'stations.json')
     netcdf_src = os.path.join(mesonet_dir, 'netCDF')
 
     bnds = None
 
-    missing_yrmos = None
-
-    log = os.path.join(mesonet_dir, 'write_madis_04JUL2025.txt')
-    if os.path.isfile(log):
-        with open(log, 'r') as fp:
-            lines = fp.readlines()
-            lines = [l for l in lines if 'files took']
-
-        complete_yrmos = [l[:6] for l in lines]
-    else:
-        complete_yrmos = None
-
-    print(f'{len(complete_yrmos)} completed months')
-    bnds = None
-
     times = generate_monthly_time_tuples(2017, 2025, check_dir=None)
 
-    if complete_yrmos:
-        times = [t for t in times if t[0][:6] not in complete_yrmos]
-        missing_yrmos = [s[0][:6] for s in times]
-
-    args_ = [(t, netcdf_src, out_dir_, bnds, None, pst_) for t in times]
+    args_ = [(t, netcdf_src, out_dir_, bnds, None) for t in times]
     print(f'{len(args_)} months to process')
 
-    debug = False
+    debug = True
 
     if debug:
         for a in args_:
             process_time_chunk(a)
             print(f'success on {a[0]}')
 
-    num_processes = 5
+    num_processes = 8
     with multiprocessing.Pool(processes=num_processes) as pool:
         pool.map(process_time_chunk, args_)
 

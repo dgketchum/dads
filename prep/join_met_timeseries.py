@@ -180,7 +180,7 @@ if __name__ == '__main__':
     if not os.path.exists(root):
         root = '/home/dgketchum/data/IrrigationGIS'
 
-    sites = os.path.join(root, 'dads', 'met', 'stations', 'madis_17MAY2025_mgrs.csv')
+    sites = os.path.join(root, 'dads', 'met', 'stations', 'madis_02JULY2025_mgrs.csv')
     obs = os.path.join(data, 'madis', 'daily')
     src_ = 'madis'
 
@@ -200,7 +200,7 @@ if __name__ == '__main__':
     hourly_ = os.path.join(era5_land, 'hourly')
 
     join_daily_timeseries(sites, obs, daily, joined, source=src_, overwrite=overwrite,
-                          bounds=(-180., 25., -60., 85.), shuffle=True, write_missing=missing_list, hourly=hourly_,
+                          bounds=(-180., 25., -60., 85.), shuffle=True, write_missing=missing_list, hourly=False,
                           clip_to_obs=clip_to_obs_)
 
 # ========================= EOF ====================================================================
