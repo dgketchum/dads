@@ -272,12 +272,14 @@ def read_madis_hourly(data_directory, year_mo_str, output_directory, bounds=(-12
 
             station_df[final_cols].to_parquet(out_file, compression='gzip')
 
-        except AttributeError as err:
-            print(f'attribute error on {station_id}, {year_mo_str}: {err}')
+        except Exception as err:
+            print(f'error on {station_id}, {year_mo_str}: {err}')
             continue
 
     end = time.perf_counter()
-    print(f"{year_mo_str}: {len(file_list)} files took {end - start:0.4f} seconds", flush=True)
+    current_datetime = datetime.now()
+    dtstr = current_datetime.strftime("%Y-%m-%d %H:%M")
+    print(f"{year_mo_str}: {len(file_list)} files took {end - start:0.4f} seconds {dtstr}", flush=True)
 
 
 def process_time_chunk(args):
@@ -297,11 +299,26 @@ if __name__ == "__main__":
 
     bnds = None
 
-    times = generate_monthly_time_tuples(2001, 2025, check_dir=None)
-    times = [t for t in times if int(t[0][:6]) <= 201701]
+    missing_yrmos = None
 
-    # src = '/home/dgketchum/data/IrrigationGIS/climate/madis/LDAD/mesonet/netCDF/'
-    # transfer_list(src, netcdf_src, yrmo_str=missing_yrmos, workers=6)
+    log = os.path.join(mesonet_dir, 'write_madis_04JUL2025.txt')
+    if os.path.isfile(log):
+        with open(log, 'r') as fp:
+            lines = fp.readlines()
+            lines = [l for l in lines if 'files took']
+
+        complete_yrmos = [l[:6] for l in lines]
+    else:
+        complete_yrmos = None
+
+    print(f'{len(complete_yrmos)} completed months')
+    bnds = None
+
+    times = generate_monthly_time_tuples(2017, 2025, check_dir=None)
+
+    if complete_yrmos:
+        times = [t for t in times if t[0][:6] not in complete_yrmos]
+        missing_yrmos = [s[0][:6] for s in times]
 
     args_ = [(t, netcdf_src, out_dir_, bnds, None, pst_) for t in times]
     print(f'{len(args_)} months to process')
@@ -313,8 +330,7 @@ if __name__ == "__main__":
             process_time_chunk(a)
             print(f'success on {a[0]}')
 
-    # num_processes = 5
-    num_processes = 10
+    num_processes = 5
     with multiprocessing.Pool(processes=num_processes) as pool:
         pool.map(process_time_chunk, args_)
 
