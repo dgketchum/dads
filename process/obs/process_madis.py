@@ -14,32 +14,32 @@ from utils.calc_eto import calc_asce_params
 from utils.station_parameters import station_par_map
 
 
-def process_daily_data(hourly_df, rsun_data, lat_, elev_, zw_=2.0, qaqc=False):
-    hourly_df['date'] = hourly_df.index.date
-    hourly_df['hour'] = hourly_df.index.hour
+def process_daily_data(raw_df, rsun_data, lat_, elev_, zw_=2.0, qaqc=False):
+    raw_df['date'] = raw_df.index.date
+    raw_df['hour'] = raw_df.index.hour
 
-    valid_obs_count = hourly_df[['date']].groupby('date').agg({'date': 'count'}).copy()
-    if np.nanmax(valid_obs_count['date']) > 24:
-        agg_rules = {
-            'temperature': 'mean',
-            'relHumidity': 'mean',
-            'rsds': 'mean',
-            'ea': 'mean',
-            'wind': 'mean',
-            'wind_dir': 'mean',
-            'doy': 'first',
-            'precipAccum': 'first',  # Keep these for the custom precip function
-            'precipAccumPeriod': 'first'
-        }
-        valid_agg_rules = {k: v for k, v in agg_rules.items() if k in hourly_df.columns}
+    agg_rules = {
+        'code1PST': 'first',
+        'code2PST': 'first',
+        'temperature': 'mean',
+        'relHumidity': 'mean',
+        'rsds': 'mean',
+        'ea': 'mean',
+        'wind': 'mean',
+        'wind_dir': 'mean',
+        'doy': 'first',
+        'precipAccum': 'first',
+        'precipAccumPeriod': 'first'
+    }
+    valid_agg_rules = {k: v for k, v in agg_rules.items() if k in raw_df.columns}
 
-        hourly_df = hourly_df.groupby(['date', 'hour']).agg(**valid_agg_rules)
-        hourly_df.reset_index(inplace=True)
-        if 'date' in hourly_df.columns and 'hour' in hourly_df.columns:
-            hourly_df['datetime'] = pd.to_datetime(
-                hourly_df['date'].astype(str) + ' ' + hourly_df['hour'].astype(str) + ':00:00', errors='coerce')
-            hourly_df.set_index('datetime', inplace=True)
-            hourly_df.drop(columns=['date', 'hour'], inplace=True)
+    hourly_df = raw_df.groupby(['date', 'hour']).agg(valid_agg_rules)
+    hourly_df.reset_index(inplace=True)
+    if 'date' in hourly_df.columns and 'hour' in hourly_df.columns:
+        hourly_df['datetime'] = pd.to_datetime(
+            hourly_df['date'].astype(str) + ' ' + hourly_df['hour'].astype(str) + ':00:00', errors='coerce')
+        hourly_df.set_index('datetime', inplace=True)
+        hourly_df.drop(columns=['date', 'hour'], inplace=True)
 
     # U is the velocity toward east and V is the velocity toward north
     wind_direction_rad = np.deg2rad(hourly_df['wind_dir'])
@@ -51,26 +51,21 @@ def process_daily_data(hourly_df, rsun_data, lat_, elev_, zw_=2.0, qaqc=False):
     hourly_df['date'] = hourly_df.index.date
     valid_obs_count = hourly_df[['date']].groupby('date').agg({'date': 'count'}).copy()
 
-    daily_agg_rules = {
-        'tmax': ('temperature', 'max'),
-        'tmin': ('temperature', 'min'),
-        'tmean': ('temperature', 'mean'),
-        'rsds': ('rsds', 'sum'),
-        'ea': ('ea', 'mean'),
-        'wind': ('wind', 'mean'),
-        'wind_dir': ('wind_dir', 'mean'),
-        'u': ('u', 'mean'),
-        'v': ('v', 'mean'),
-        'doy': ('doy', 'first')
-    }
-    valid_daily_agg_rules = {k: v for k, v in daily_agg_rules.items() if v in hourly_df.columns}
-    daily_df = hourly_df.groupby('date').agg(**valid_daily_agg_rules).copy()
+    daily_df = hourly_df.groupby('date').agg(
+        tmax=('temperature', 'max'),
+        tmin=('temperature', 'min'),
+        tmean=('temperature', 'mean'),
+        rsds=('rsds', 'sum'),
+        ea=('ea', 'mean'),
+        wind=('wind', 'mean'),
+        wind_dir=('wind_dir', 'mean'),
+        u=('u', 'mean'),
+        v=('v', 'mean'),
+        doy=('doy', 'first')
+    ).copy()
 
-    if 'precipAccum' in hourly_df.columns and 'precipAccumPeriod' in hourly_df.columns:
-        daily_prcp = hourly_df.groupby('date').apply(calculate_daily_precipitation).to_frame('prcp')
-        daily_df = daily_df.join(daily_prcp)
-    else:
-        daily_df['prcp'] = np.nan
+    daily_prcp = hourly_df.groupby('date').apply(calculate_daily_precipitation).to_frame('prcp')
+    daily_df = daily_df.join(daily_prcp)
 
     daily_df['obs_ct'] = valid_obs_count
     daily_df = daily_df[daily_df['obs_ct'] >= 18]
@@ -102,7 +97,6 @@ def process_daily_data(hourly_df, rsun_data, lat_, elev_, zw_=2.0, qaqc=False):
             daily_df['rsds'] = np.nan
 
     required_asce_cols = ['tmax', 'tmin', 'rsds', 'wind', 'ea']
-    daily_df.rename(columns={'tmax': 'max_temp', 'tmin': 'min_temp'}, inplace=True)
 
     if not all(col in daily_df.columns for col in required_asce_cols):
         return daily_df
@@ -121,7 +115,7 @@ def process_daily_data(hourly_df, rsun_data, lat_, elev_, zw_=2.0, qaqc=False):
 
 
 def apply_madis_qc(df):
-    acceptable_qc_flags = ['S', 'V']
+    acceptable_qc_flags = ['S', 'V', 'C']
     qc_vars = {'temperature': float,
                'dewpoint': float,
                'relHumidity': float,
@@ -137,24 +131,33 @@ def apply_madis_qc(df):
 
     return df
 
-
 def calculate_daily_precipitation(daily_group):
-    # Prioritize 24-hour accumulation reports if they exist.
-    # Codes -1, -2, -3 represent various 24-hour totals.
-    daily_reports = daily_group[daily_group['precipAccumPeriod'].isin([-1, -2, -3])]
+
+
+    daily_reports = daily_group[daily_group['code1PST'].isin([-1, -2, -3])]
     if not daily_reports.empty:
-        # Return the maximum reported 24-hour value for the day.
         return daily_reports['precipAccum'].max()
 
-    # If no 24-hour reports, sum the hourly reports.
-    # Code 1 indicates the value is for the "last 1 hr".
-    hourly_reports = daily_group[daily_group['precipAccumPeriod'] == 1]
-    if not hourly_reports.empty:
-        return hourly_reports['precipAccum'].sum()
+    sub_daily_periods = {
+        18: '18H',
+        12: '12H',
+        6: '6H',
+        3: '3H',
+        1: '1H',
+        -5: '15min',
+        -4: '5min'
+    }
 
-    # Handle other accumulation periods (3, 6, 12 hr) if necessary,
-    # or return NaN if no usable data is found.
-    # For simplicity, this example prioritizes 24h and 1h reports.
+    for period_code, freq in sub_daily_periods.items():
+        period_df = daily_group[daily_group['precipAccumPeriod'] == period_code]
+
+        if not period_df.empty:
+            resampled_precip = period_df['precipAccum'].resample(freq).max()
+            daily_total = resampled_precip.sum()
+
+            if pd.notna(daily_total) and daily_total >= 0:
+                return daily_total
+
     return np.nan
 
 
@@ -181,7 +184,7 @@ def process_single_station(fid, madis_src, madis_dst, rsun_tables, overwrite, qa
             print(fid, 'Source directory not found')
             return
 
-    valid_files = [f for f in glob.glob(os.path.join(station_dir, '*.parquet.gz'))]
+    valid_files = [f for f in glob.glob(os.path.join(station_dir, '*.parquet'))]
 
     if not valid_files:
         print(fid, 'no_files')
@@ -264,6 +267,7 @@ def process_single_station(fid, madis_src, madis_dst, rsun_tables, overwrite, qa
     c['wind_dir'] = c['windDir']
 
     df = process_daily_data(c, rsun, lat_=lat, elev_=elv, zw_=2.0, qaqc=qaqc)
+    df.index = df.index.tz_localize(local_tz)
 
     if df is None or df.empty:
         print(f'{fid}: No processable records found after daily aggregation', flush=True)
@@ -405,44 +409,20 @@ if __name__ == '__main__':
 
     madis_hourly_public = os.path.join(d, 'climate', 'madis', 'LDAD_public', 'mesonet', 'csv')
     madis_hourly_research = '/data/ssd2/madis/extracts_qaqc'
-    madis_pst = '/data/ssd2/madis/pst'
-
-    import json
-
-    pst_files = [os.path.join(madis_pst, f) for f in os.listdir(madis_pst) if f.endswith('.json')]
-    tables = ['code1PST', 'code2PST', 'code3PST', 'code4PST', 'typePST', 'namePST']
-    pst_dct = {}
-    first = True
-
-    for f in sorted(pst_files):
-        with open(f, 'r') as fp:
-            dct = json.load(fp)
-
-        for t in tables:
-            if 'code' in t:
-                dct[t] = [int(float(i)) for i in dct[t] if i != 'nan']
-            else:
-                dct[t] = [i.strip() for i in dct[t] if i != '']
-        print(os.path.basename(f), len(dct['namePST']))
-
-        for idx, k in enumerate(dct['namePST']):
-            if k == 'nan':
-                continue
-            if k not in pst_dct:
-                pst_dct[k] = {t: dct[t][idx] for t in tables[:-1]}
-            else:
-                for kk, vv in pst_dct[k].items():
-                    try:
-                        assert pst_dct[k][kk] == dct[kk][idx]
-                    except AssertionError:
-                        print(f'{kk} mismatch: {pst_dct[k][kk]}, {dct[kk][idx]}')
 
     madis_daily_ = '/data/ssd2/madis/daily'
 
     solrad = os.path.join(d, 'dads', 'dem', 'rsun_stations')
 
-    read_hourly_data(madis_hourly_research, madis_daily_, solrad,
-                     overwrite=True, qaqc=True, plot=None, debug=True,
-                     alt_src=madis_hourly_public, n_workers=25)
+    read_hourly_data(madis_hourly_research,
+                     madis_daily_,
+                     solrad,
+                     overwrite=True,
+                     qaqc=True,
+                     plot=None,
+                     alt_src=None,
+                     n_workers=25,
+                     debug=False,
+                     )
 
 # ========================= EOF ====================================================================

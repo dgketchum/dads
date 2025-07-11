@@ -189,11 +189,12 @@ if __name__ == '__main__':
     # src_ = 'ghcn'
 
     joined = os.path.join(data, 'dads', 'met', 'joined')
+
     now_str = datetime.datetime.now().strftime('%Y%m%d%H%M')
     missing_list = os.path.join(data, 'dads', 'met', f'join_missing_{now_str}.csv')
 
     clip_to_obs_ = True
-    overwrite = False
+    overwrite = True
 
     era5_land = os.path.join(data, 'dads', 'era5_land', 'processed_parquet')
     daily = os.path.join(era5_land, 'daily')
