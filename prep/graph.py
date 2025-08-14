@@ -159,27 +159,30 @@ def haversine_distance(lat1, lon1, lat2, lon2):
 
 if __name__ == '__main__':
 
-
-    d = '/media/research/IrrigationGIS/dads'
+    d = '/media/research/IrrigationGIS'
     if not os.path.exists(d):
-        d = '/home/dgketchum/data/IrrigationGIS/dads'
+        d = '/home/dgketchum/data/IrrigationGIS'
 
+    target_var = 'tmax_obs'
 
-    zoran = '/data/ssd2/dads/training'
-    nvm = '/media/nvm/training'
-    if os.path.exists(zoran):
-        print('modeling with data from zoran')
-        training = zoran
-    elif os.path.exists(nvm):
-        print('modeling with data from NVM drive')
-        training = nvm
+    _source = 'madis'
+
+    if _source == 'madis':
+        glob_ = 'madis_02JULY2025_mgrs'
+        fields = os.path.join(d, 'dads', 'met', 'stations', '{}.csv'.format(glob_))
+
+    elif _source == 'ghcn':
+        glob_ = 'ghcn_CANUSA_stations_mgrs'
+        fields = os.path.join(d, 'climate', 'ghcn', 'stations', '{}.csv'.format(glob_))
+
     else:
-        print('modeling with data from UM drive')
-        training = os.path.join(d, 'training')
+        raise ValueError()
 
+    training = '/data/ssd2/dads/training'
 
-    stations_ = os.path.join(training, 'graph', 'stations.shp')
+    csv_dir_ = os.path.join(training, 'parquet', target_var)
     output_dir_ = os.path.join(training, 'graph')
+    stations_ = os.path.join(output_dir_, 'stations.shp')
 
     node_prep = Graph(stations_, output_dir_, k_nearest=10, index_col='index')
     node_prep.generate_edge_index()

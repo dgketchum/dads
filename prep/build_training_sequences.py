@@ -1,5 +1,7 @@
 import os
+from datetime import datetime
 import multiprocessing
+
 
 import numpy as np
 import pandas as pd
@@ -107,15 +109,6 @@ def process_station(fid, row, ts_dir, landsat_dir, cdr_dir, dem_dir, terrain_dir
     obs_targets = ['tmax_obs', 'tmin_obs', 'rsds_obs', 'ea_obs', 'wind_obs', 'prcp_obs']
     gridded_suffix = comparison_glob
 
-    # TODO: modify hard-coded full-record requirement
-    # s, e = '2015-01-01', '2023-12-31'
-    # req_len = len(pd.date_range(s, e, freq='D'))
-    # ts = ts.loc[s: e]
-
-    # if len(ts) < req_len:
-    #     print(f'{fid}: {ts.shape[0]} is short')
-    #     return fid, None, missing
-
     for obs_var in obs_targets:
         if obs_var in ts.columns and ts[obs_var].notna().any():
             base_var_name = obs_var.replace('_obs', '')
@@ -124,23 +117,18 @@ def process_station(fid, row, ts_dir, landsat_dir, cdr_dir, dem_dir, terrain_dir
             cols_to_keep = [obs_var, gridded_var] + GEO_FEATURES
             existing_cols = [col for col in cols_to_keep if col in ts.columns]
 
-            # TODO: modify hard-coded full-record requirement
-            var_df = ts.loc[existing_cols].copy()
+            var_df = ts[existing_cols].copy()
             var_df = var_df.dropna(subset=[obs_var]).astype(float)
 
-            # if len(var_df) < req_len:
-            #     print(f'{fid}: {var_df.shape[0]} is short')
-            #     continue
-
             if not var_df.empty:
-                var_out_dir = os.path.join(out_dir, obs_var)
-                os.makedirs(var_out_dir, exist_ok=True)
 
+                var_out_dir = os.path.join(out_dir, obs_var)
                 out_file = os.path.join(var_out_dir, f'{fid}.parquet')
 
                 if not os.path.exists(out_file) or overwrite:
                     var_df.to_parquet(out_file)
-                    print(f'{fid}: {var_df.shape[0]} written to {out_file}')
+                    now = datetime.now().strftime('%m%d %H%M')
+                    print(f'{fid}: {var_df.shape[0]} written to {out_file} {now}', flush=True)
                 else:
                     missing['exists'] += 1
 
@@ -246,6 +234,7 @@ def join_training(stations, ts_dir, landsat_dir, cdr, sol_dir, terrain_dir, out_
                      'sol_fid': 0,
                      'cdr_file': 0,
                      'exists': 0}
+
     for f, _, missing in results:
         if missing:
             for k, v in missing.items():
@@ -261,34 +250,35 @@ if __name__ == '__main__':
     if not os.path.exists(d):
         d = '/home/dgketchum/data/IrrigationGIS'
 
-    for _source in ['madis', 'ghcn']:
+    _source = 'madis'
 
-        if _source == 'madis':
-            glob_ = 'madis_02JULY2025_mgrs'
-            fields = os.path.join(d, 'dads', 'met', 'stations', '{}.csv'.format(glob_))
+    if _source == 'madis':
+        glob_ = 'madis_02JULY2025_mgrs'
+        fields = os.path.join(d, 'dads', 'met', 'stations', '{}.csv'.format(glob_))
 
-        elif _source == 'ghcn':
-            glob_ = 'ghcn_CANUSA_stations_mgrs'
-            fields = os.path.join(d, 'climate', 'ghcn', 'stations', '{}.csv'.format(glob_))
+    elif _source == 'ghcn':
+        glob_ = 'ghcn_CANUSA_stations_mgrs'
+        fields = os.path.join(d, 'climate', 'ghcn', 'stations', '{}.csv'.format(glob_))
 
-        else:
-            raise ValueError
+    else:
+        raise ValueError
 
-        landsat_ = os.path.join(d, 'dads', 'rs', 'landsat', 'station_data')
-        cdr_ = os.path.join(d, 'dads', 'rs', 'cdr', 'joined')
-        solrad = os.path.join(d, 'dads', 'dem', 'rsun_stations')
-        terrain = os.path.join(d, 'dads', 'dem', 'terrain', 'station_data')
+    landsat_ = os.path.join(d, 'dads', 'rs', 'landsat', 'station_data')
+    cdr_ = os.path.join(d, 'dads', 'rs', 'cdr', 'joined')
+    solrad = os.path.join(d, 'dads', 'dem', 'rsun_stations')
+    terrain = os.path.join(d, 'dads', 'dem', 'terrain', 'station_data')
 
-        training = '/data/ssd2/dads/training/parquet'
-        joined = '/data/ssd2/dads/met/joined'
+    training = '/data/ssd2/dads/training/parquet'
+    joined = '/data/ssd2/dads/met/joined'
 
-        overwrite_ = True
+    overwrite_ = False
 
-        join_training(fields, joined, landsat_, cdr_, solrad, terrain, training,
-                      source=_source,
-                      overwrite=overwrite_,
-                      workers=14,
-                      debug=False,
-                      )
+    join_training(fields, joined, landsat_, cdr_, solrad, terrain,
+                  out_dir=training,
+                  source=_source,
+                  overwrite=overwrite_,
+                  workers=14,
+                  debug=False,
+                  )
 
 # ========================= EOF ==============================================================================

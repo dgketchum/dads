@@ -43,6 +43,9 @@ def join_daily_timeseries(stations, sta_dir, gridded_met_dir, dst_dir, source,
 
     for i, (f, row) in enumerate(stations.iterrows(), start=1):
 
+        if f != 'US1WAWM0006':
+            continue
+
         out = os.path.join(dst_dir, f'{f}.parquet')
 
         if os.path.exists(out) and not overwrite:
@@ -131,6 +134,9 @@ def join_daily_timeseries(stations, sta_dir, gridded_met_dir, dst_dir, source,
                     print(f'\n{sta_file} error: {exc}\n')
                     continue
 
+        else:
+            ndf.index = ndf.index.tz_localize(None)
+
         data_cols = valid_obs_cols +  nld_cols
         all_cols = ['FID'] + data_cols
 
@@ -180,13 +186,13 @@ if __name__ == '__main__':
     if not os.path.exists(root):
         root = '/home/dgketchum/data/IrrigationGIS'
 
-    sites = os.path.join(root, 'dads', 'met', 'stations', 'madis_02JULY2025_mgrs.csv')
-    obs = os.path.join(data, 'madis', 'daily')
-    src_ = 'madis'
+    # sites = os.path.join(root, 'dads', 'met', 'stations', 'madis_02JULY2025_mgrs.csv')
+    # obs = os.path.join(data, 'madis', 'daily')
+    # src_ = 'madis'
 
-    # sites = os.path.join(root, 'climate', 'stations', 'ghcn_stations.csv')
-    # obs = os.path.join(root, 'climate', 'ghcn', 'station_data')
-    # src_ = 'ghcn'
+    sites = os.path.join(root, 'climate', 'stations', 'ghcn_stations.csv')
+    obs = os.path.join(root, 'climate', 'ghcn', 'station_data')
+    src_ = 'ghcn'
 
     joined = os.path.join(data, 'dads', 'met', 'joined')
 

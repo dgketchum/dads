@@ -300,6 +300,7 @@ def read_hourly_data(madis_src, madis_dst, rsun_tables, overwrite=False,
     Scans a directory for station data, and processes each station.
     This function no longer requires a station metadata file.
     """
+
     try:
         station_fids = [d for d in os.listdir(madis_src)]
     except FileNotFoundError:

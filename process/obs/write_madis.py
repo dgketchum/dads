@@ -146,7 +146,12 @@ def read_madis_hourly(data_directory, year_mo_str, output_directory, bounds=(-12
         if ds is None:
             continue
 
-        pstdct = {k: [int(i) for i in ds[k].values if np.isfinite(i)] for k in PST if 'code' in k}
+        try:
+            pstdct = {k: [int(i) for i in ds[k].values if np.isfinite(i)] for k in PST if 'code' in k}
+        except KeyError:
+            print(f'{year_mo_str} missing code data')
+            break
+
         [pstdct.update({k: [i.strip() for i in ds[k].values.astype(str) if i != ''] for k in PST if 'code' not in k})]
         pst_map_df = pd.DataFrame(pstdct)
         pst_map_df = pst_map_df[pst_map_df['namePST'] != '']
@@ -267,7 +272,7 @@ if __name__ == "__main__":
     print(f'{len(complete_yrmos)} completed months')
     bnds = None
 
-    times = generate_monthly_time_tuples(2017, 2025, check_dir=None)
+    times = generate_monthly_time_tuples(2005, 2016, check_dir=None)
 
     if complete_yrmos:
         times = [t for t in times if t[0][:6] not in complete_yrmos]
@@ -276,7 +281,7 @@ if __name__ == "__main__":
     args_ = [(t, netcdf_src, out_dir_, bnds, None) for t in times]
     print(f'{len(args_)} months to process')
 
-    debug = True
+    debug = False
 
     if debug:
         for a in args_:
