@@ -86,7 +86,7 @@ class DadsDataset(Dataset):
 
         if lstm_meta['model'] == 'lstm':
 
-            from models.lstm.train import PTHLSTMDataset
+            from models.lstm.train import LSTMDataset
             self.model = 'lstm'
             # idxs: obs, gm, start_daily: end_daily, start_hourly:
             hf_idx = data_frequency.index('hf')
@@ -94,12 +94,12 @@ class DadsDataset(Dataset):
             self.tensor_width = data_frequency.count('lf') + data_frequency.count('hf')
             chunk_size = lstm_meta['chunk_size']
 
-            self.lstm_dataset = PTHLSTMDataset(file_paths=filter_files,
-                                               col_index=self.column_indices,
-                                               expected_width=self.tensor_width,
-                                               sample_dimensions=chunk_size,
-                                               return_station_name=True,
-                                               scaler_json=scaler)
+            self.lstm_dataset = LSTMDataset(file_paths=filter_files,
+                                            col_index=self.column_indices,
+                                            expected_width=self.tensor_width,
+                                            sample_dimensions=chunk_size,
+                                            return_station_name=True,
+                                            scaler_json=scaler)
 
         elif lstm_meta['model'] == 'simple_lstm':
 
