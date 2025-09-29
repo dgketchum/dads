@@ -1,7 +1,7 @@
 import glob
 import gzip
 import json
-import multiprocessing
+from concurrent.futures import ProcessPoolExecutor, as_completed
 import os
 import shutil
 import time
@@ -132,6 +132,9 @@ def read_madis_hourly(data_directory, year_mo_str, output_directory, bounds=(-12
         print(f"No files found for date: {year_mo_str}")
         return
 
+    current_datetime = datetime.now()
+    dtstr = current_datetime.strftime("%Y-%m-%d %H:%M")
+    print(f'{year_mo_str}: {len(file_list)} files found {dtstr}', flush=True)
     start = time.perf_counter()
 
     all_dfs, first, pst_lookup, providers = [], True, None, None
@@ -143,7 +146,12 @@ def read_madis_hourly(data_directory, year_mo_str, output_directory, bounds=(-12
         if ds is None:
             continue
 
-        pstdct = {k: [int(i) for i in ds[k].values if np.isfinite(i)] for k in PST if 'code' in k}
+        try:
+            pstdct = {k: [int(i) for i in ds[k].values if np.isfinite(i)] for k in PST if 'code' in k}
+        except KeyError:
+            print(f'{year_mo_str} missing code data')
+            break
+
         [pstdct.update({k: [i.strip() for i in ds[k].values.astype(str) if i != ''] for k in PST if 'code' not in k})]
         pst_map_df = pd.DataFrame(pstdct)
         pst_map_df = pst_map_df[pst_map_df['namePST'] != '']
@@ -183,12 +191,17 @@ def read_madis_hourly(data_directory, year_mo_str, output_directory, bounds=(-12
             continue
 
         all_dfs.append(df)
+        print(f'{year_mo_str} appended dataframe from {os.path.basename(filename)}')
 
     if not all_dfs:
-        print("No valid data found in any files.")
+        print("No valid data found in any files.", flush=True)
         return
 
     master_df = pd.concat(all_dfs, ignore_index=True)
+
+    current_datetime = datetime.now()
+    dtstr = current_datetime.strftime("%Y-%m-%d %H:%M")
+    print(f'{year_mo_str}: read and concatenated {len(file_list)} files, writing stations {dtstr}', flush=True)
 
     if select is not None:
         master_df = master_df[master_df['stationId'].isin(select)]
@@ -197,6 +210,9 @@ def read_madis_hourly(data_directory, year_mo_str, output_directory, bounds=(-12
 
         try:
             station_df = station_df.set_index('observationTime')
+
+            if station_id == '':
+                continue
 
             if station_df.empty:
                 continue
@@ -211,10 +227,7 @@ def read_madis_hourly(data_directory, year_mo_str, output_directory, bounds=(-12
 
             station_df['stationId'] = station_id
 
-            final_cols = [c for c in DESIRED_PARAMS.keys() if c in station_df.columns]
-            final_cols.insert(0, 'stationId')
-            final_cols.insert(0, 'datetime')
-            final_cols = list(dict.fromkeys(final_cols))
+            final_cols = ['datetime'] + [c for c in DESIRED_PARAMS.keys() if c in station_df.columns]
 
             station_df[final_cols].to_parquet(out_file)
 
@@ -244,20 +257,51 @@ if __name__ == "__main__":
 
     bnds = None
 
-    times = generate_monthly_time_tuples(2017, 2025, check_dir=None)
+    missing_yrmos = None
+
+    log = os.path.join(mesonet_dir, 'write_madis_07JUL2025.txt')
+    if os.path.isfile(log):
+        with open(log, 'r') as fp:
+            lines = fp.readlines()
+            lines = [l for l in lines if 'files took']
+
+        complete_yrmos = [l[:6] for l in lines]
+    else:
+        complete_yrmos = None
+
+    print(f'{len(complete_yrmos)} completed months')
+    bnds = None
+
+    times = generate_monthly_time_tuples(2005, 2016, check_dir=None)
+
+    if complete_yrmos:
+        times = [t for t in times if t[0][:6] not in complete_yrmos]
+        missing_yrmos = [s[0][:6] for s in times]
 
     args_ = [(t, netcdf_src, out_dir_, bnds, None) for t in times]
     print(f'{len(args_)} months to process')
 
-    debug = True
+    debug = False
 
     if debug:
         for a in args_:
             process_time_chunk(a)
             print(f'success on {a[0]}')
 
-    num_processes = 8
-    with multiprocessing.Pool(processes=num_processes) as pool:
-        pool.map(process_time_chunk, args_)
+    num_processes = 4
+    with ProcessPoolExecutor(max_workers=num_processes) as executor:
+        future_to_args = {executor.submit(process_time_chunk, arg): arg for arg in args_}
+
+        print(f"Submitted {len(args_)} tasks to the pool.")
+
+        for future in as_completed(future_to_args):
+            args = future_to_args[future]
+            year_month_str = args[0][0][:6]
+
+            try:
+                future.result()
+                print(f"Task for month {year_month_str} completed successfully.")
+            except Exception as exc:
+                print(f"Task for month {year_month_str} generated an exception: {exc}")
 
 # ========================= EOF ====================================================================
