@@ -7,14 +7,17 @@ import pandas as pd
 from shapely.geometry import Point
 
 from prep.columns_desc import GEO_FEATURES
+from utils.station_parameters import station_par_map
 
 GRAPH_FEATURES = ['lat', 'lon', 'B10', 'nd', 'slope', 'aspect',
                   'elevation', 'tpi_1250', 'tpi_250', 'tpi_150', 'rsun']
 
 
-def get_stations(stations, csv_dir, out_csv, bounds=None):
-    stations = gpd.read_file(stations)
-    stations.index = stations['fid']
+def get_stations(stations, csv_dir, out_csv, source='madis', bounds=None):
+
+    kw = station_par_map(source)
+
+    stations = pd.read_csv(stations, index_col=kw['index'])
     stations.sort_index(inplace=True)
 
     if bounds:
@@ -47,34 +50,30 @@ def get_stations(stations, csv_dir, out_csv, bounds=None):
 
 if __name__ == '__main__':
 
-    d = '/media/research/IrrigationGIS/dads'
+    d = '/media/research/IrrigationGIS'
     if not os.path.exists(d):
-        d = '/home/dgketchum/data/IrrigationGIS/dads'
+        d = '/home/dgketchum/data/IrrigationGIS'
 
-    target_var = 'mean_temp'
+    target_var = 'tmax_obs'
 
-    glob_ = 'dads_stations_10FEB2025'
+    _source = 'madis'
 
-    fields = os.path.join(d, 'met', 'stations', '{}.shp'.format(glob_))
-    landsat_ = os.path.join(d, 'rs', 'dads_stations', 'landsat', 'station_data')
-    solrad = os.path.join(d, 'dem', 'rsun_tables')
+    if _source == 'madis':
+        glob_ = 'madis_02JULY2025_mgrs'
+        fields = os.path.join(d, 'dads', 'met', 'stations', '{}.csv'.format(glob_))
 
-    zoran = '/data/ssd2/dads/training'
-    nvm = '/media/nvm/training'
+    elif _source == 'ghcn':
+        glob_ = 'ghcn_CANUSA_stations_mgrs'
+        fields = os.path.join(d, 'climate', 'ghcn', 'stations', '{}.csv'.format(glob_))
 
-    if os.path.exists(zoran):
-        print('reading from zoran')
-        training = zoran
-    elif os.path.exists(nvm):
-        print('reading from nvm drive')
-        training = nvm
     else:
-        print('reading from UM drive')
-        training = os.path.join(d, 'training')
+        raise ValueError()
 
-    csv_dir_ = os.path.join(training, 'parquet')
+    training = '/data/ssd2/dads/training'
+
+    csv_dir_ = os.path.join(training, 'parquet', target_var)
     out_csv_ = os.path.join(training, 'graph', 'stations.csv')
 
-    get_stations(fields, csv_dir_, out_csv_, bounds=None)
+    get_stations(fields, csv_dir_, out_csv_, bounds=None, source=_source)
 
 # ========================= EOF ===============================================================================
