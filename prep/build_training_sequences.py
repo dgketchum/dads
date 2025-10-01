@@ -250,7 +250,7 @@ if __name__ == '__main__':
     if not os.path.exists(d):
         d = '/home/dgketchum/data/IrrigationGIS'
 
-    _source = 'madis'
+    _source = 'ghcn'
 
     if _source == 'madis':
         glob_ = 'madis_02JULY2025_mgrs'

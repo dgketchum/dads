@@ -135,6 +135,7 @@ def join_daily_timeseries(stations, sta_dir, gridded_met_dir, dst_dir, source,
             ndf.index = ndf.index.tz_localize(None)
 
         data_cols = valid_obs_cols +  nld_cols
+        print(f'{f}: {valid_obs_cols}')
         all_cols = ['FID'] + data_cols
 
         try:
@@ -197,7 +198,7 @@ if __name__ == '__main__':
     missing_list = os.path.join(data, 'dads', 'met', f'join_missing_{now_str}.csv')
 
     clip_to_obs_ = True
-    overwrite = True
+    overwrite = False
 
     era5_land = os.path.join(data, 'dads', 'era5_land', 'processed_parquet')
     daily = os.path.join(era5_land, 'daily')
