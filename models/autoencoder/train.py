@@ -1,28 +1,18 @@
 import json
 import os
+import resource
 from datetime import datetime
 
-import numpy as np
 import pytorch_lightning as pl
-import resource
 import torch
 from pytorch_lightning.callbacks import ModelCheckpoint, EarlyStopping
-from torch.nn import functional as F
-from torch.utils.data import Dataset, DataLoader
-from torch.utils.data._utils.collate import default_collate
+from torch.utils.data import DataLoader
 
+from models.autoencoder.dataset import WeatherDataset
 from models.autoencoder.weather_encoder import WeatherAutoencoder
-from models.scalers import MinMaxScaler
-from prep.columns_desc import MET_FEATURES
 
-OBS_NLDAS_MAPPING = {'vpd_obs': 'Qair_nl_hr',
-                     'prcp_obs': 'Rainf_nl_hr',
-                     'rsds_obs': 'SWdown_nl_hr',
-                     'mean_temp_obs': 'Tair_nl_hr',
-                     'u2_obs': ['Wind_E_nl_hr', 'Wind_N_nl_hr']}
-
-TARGETS = ['rsds_obs', 'mean_temp_obs', 'vpd_obs', 'prcp_obs',
-           'rn_obs', 'u2_obs', 'doy_obs']
+from prep.columns_desc import GEO_FEATURES
+import pandas as pd
 
 device_name = None
 if torch.cuda.is_available():
@@ -38,232 +28,71 @@ rlimit = resource.getrlimit(resource.RLIMIT_NOFILE)
 resource.setrlimit(resource.RLIMIT_NOFILE, (4096, rlimit[1]))
 
 
-class WeatherDataset(Dataset):
-    def __init__(self, file_paths, expected_width, col_indices, chunk_size,
-                 features_path, target_indices=None, similarity_file=None, transform=None):
-
-        self.chunk_size = chunk_size
-        self.transform = transform
-        self.col_indices = col_indices
-        self.target_indices = target_indices
-
-        self.station_idx = []
-
-        self.features_path = features_path
-        self.station_features, self.stations = self.load_station_features(features_path, file_paths)
-        self.similarity_matrix, ub, lb = self.calculate_similarity_matrix(similarity_file)
-        self.similarity_thresholds = ub, lb
-
-        all_data = []
-        for file_path in file_paths:
-
-            staid = os.path.basename(file_path).replace('.pth', '')
-            if staid not in self.stations:
-                continue
-
-            data = torch.load(file_path, weights_only=True)
-
-            if data.shape[2] != expected_width:
-                print(f"Skipping {file_path}, shape mismatch. Expected {expected_width} columns, got {data.shape[2]}")
-                continue
-
-            all_data.append(data)
-            self.station_idx.extend([self.stations.index(staid)] * len(data))
-
-        self.data = torch.cat(all_data, dim=0)
-
-        self.scaler = MinMaxScaler()
-        self.scaler.fit(self.get_valid_data_for_scaling())
-
-    @staticmethod
-    def load_station_features(features_path, file_paths):
-
-        seq_stations = [os.path.basename(fp).replace('.parquet', '') for fp in file_paths]
-
-        with open(features_path, 'r') as f:
-            features = json.load(f)
-
-        data, stations = [], []
-        for s in seq_stations:
-            try:
-                data.append(features[s])
-                stations.append(s)
-            except KeyError:
-                continue
-
-        features = np.array(data)
-        return features, stations
-
-    def calculate_similarity_matrix(self, similarity_file):
-        num_stations = len(self.station_features)
-
-        if os.path.exists(similarity_file):
-            similarity_matrix = np.loadtxt(similarity_file, dtype=float)
-            self.stations = np.loadtxt(similarity_file.replace('.np', '.txt'), dtype=str)
-
-        else:
-
-            similarity_matrix = np.zeros((num_stations, num_stations))
-
-            for i in range(num_stations):
-                for j in range(i, num_stations):
-                    features_i = np.array(self.station_features[i])
-                    features_j = np.array(self.station_features[j])
-                    similarity = F.cosine_similarity(
-                        torch.from_numpy(features_i), torch.from_numpy(features_j), dim=0
-                    ).item()
-                    similarity_matrix[i, j] = similarity
-                    similarity_matrix[j, i] = similarity
-
-        min_value = np.min(similarity_matrix)
-        max_value = np.max(similarity_matrix)
-        similarity_matrix = (similarity_matrix - min_value) / (max_value - min_value)
-
-        ub, lb = find_similarity_thresholds(similarity_matrix, 0.7)
-
-        return similarity_matrix, ub, lb
-
-    def get_positive_pair(self, idx):
-        station_idx = self.station_idx[idx]
-        for j, other_idx in enumerate(self.station_idx):
-            if other_idx == station_idx:
-                continue
-            if self.similarity_matrix[station_idx, other_idx] > self.similarity_thresholds[1]:
-                return self.data[j]
-        return None
-
-    def get_negative_pair(self, idx):
-        s_idx = self.station_idx[idx]
-        for j, other_idx in enumerate(self.station_idx):
-            if other_idx == s_idx:
-                continue
-            if self.similarity_matrix[s_idx, other_idx] < self.similarity_thresholds[0]:
-                return self.data[j]
-        return None
-
-    def scale_chunk(self, chunk):
-        chunk_np = chunk.numpy()
-        reshaped_chunk = chunk_np.reshape(-1, chunk_np.shape[-1])
-        scaled_chunk = self.scaler.transform(reshaped_chunk)
-        return torch.from_numpy(scaled_chunk.reshape(chunk_np.shape))
-
-    def get_valid_data_for_scaling(self):
-        valid_data = []
-        for chunk in self.data:
-            chunk_without_pe = chunk[:, :self.col_indices]
-            valid_rows = chunk_without_pe[~torch.isnan(chunk_without_pe).any(dim=1)]
-            valid_data.append(valid_rows)
-        return torch.cat(valid_data, dim=0).numpy()
-
-    def save_scaler(self, scaler_path):
-
-        bias_ = self.scaler.bias.flatten().tolist()
-        scale_ = self.scaler.scale.flatten().tolist()
-        dct = {'bias': bias_, 'scale': scale_}
-        with open(scaler_path, 'w') as fp:
-            json.dump(dct, fp, indent=4)
-        print(f"Scaler saved to {scaler_path}")
-
-    def __len__(self):
-        return len(self.data)
-
-    def __getitem__(self, idx):
-
-        chunk = self.data[idx]
-
-        chunk = chunk[:, self.col_indices]
-
-        chunk[:, self.col_indices] = self.scale_chunk(chunk[:, self.col_indices])
-
-        if isinstance(self.target_indices[0], tuple):
-            target = diff_pairs(chunk, self.target_indices)
-        else:
-            target = chunk[:, self.target_indices]
-
-        # pytorch has counterintuitive mask logic (opposite
-        # i.e., False where there is valid data
-        mask = ~torch.isnan(chunk[:, 0]).unsqueeze(1).repeat_interleave(chunk.size(1), dim=1)
-
-        positive_chunk = self.get_positive_pair(idx)
-        negative_chunk = self.get_negative_pair(idx)
-
-        return chunk, target, mask, positive_chunk, negative_chunk
-
-
-def diff_pairs(tensor, pairs):
-    diffs = []
-    for i, j in pairs:
-        diff = tensor[:, i] - tensor[:, j]
-        diffs.append(diff.unsqueeze(-1))
-    return torch.cat(diffs, dim=-1)
-
-
-def find_similarity_thresholds(similarity_matrix, percentage=0.5):
-    similarity_values = similarity_matrix[np.triu_indices_from(similarity_matrix, k=1)]
-
-    sorted_values = np.sort(similarity_values)
-
-    lower_index = int(len(sorted_values) * (percentage / 2))
-    upper_index = int(len(sorted_values) * (1 - percentage / 2))
-
-    lower_threshold = sorted_values[lower_index]
-    upper_threshold = sorted_values[upper_index]
-
-    return upper_threshold, lower_threshold
-
-
-def custom_collate(batch):
-    batch = list(filter(lambda x: x is not None, batch))
-    if not batch:
-        return None
-    return default_collate(batch)
-
-
-def train_model(dirpath, parquet, target_var, columns, chunk_size,
-                feature_dir, batch_size=64, learning_rate=0.001, n_workers=1, device='gpu',
-                bias_target=False, logging_csv=None):
+def train_model(dirpath, parquet, target_var, columns, chunk_size, meta_path,
+                batch_size=64, learning_rate=0.001, n_workers=1, device='gpu',
+                logging_csv=None):
     """"""
 
-    target, comparison = f'{target_var}_obs', f'{target_var}_dm'
-    target_idx = [columns.index(target)]
-    comp_idx = [columns.index(comparison)]
-    met_idx = [columns.index(p) for p in MET_FEATURES]
+    target_idx = [columns.index(target_var)]
 
-    idx = target_idx + comp_idx + met_idx
-
-    if bias_target:
-        difference_idx = []
-        for k, v in OBS_NLDAS_MAPPING.items():
-            if isinstance(v, list):
-                cc = [columns.index(vv) for vv in v]
-                difference_idx.append((cc, columns.index(k)))
-            else:
-                difference_idx.append((columns.index(v), columns.index(k)))
-
-    else:
-        difference_idx = [columns.index(k) for k, v in OBS_NLDAS_MAPPING.items()]
-
-    train_features = os.path.join(feature_dir, 'train_edge_attr.json')
-    with open(train_features, 'r') as f:
-        train_feats = json.load(f)
+    # simple split by presence in provided mapping file removed; use filename hashing for split
+    # If a station list exists elsewhere, integrate here.
+    train_feats = {}
 
     file_map = {'train': [], 'val': []}
     for filename in os.listdir(parquet):
-        station = filename.split('.')[0]
-        if station in train_feats.keys():
-            file_map['train'].append(os.path.join(parquet, filename))
-        else:
-            file_map['val'].append(os.path.join(parquet, filename))
+        if not filename.endswith('.parquet'):
+            continue
+        # naive split: alternate files between train/val
+        (file_map['train'] if len(file_map['train']) <= len(file_map['val'])
+         else file_map['val']).append(os.path.join(parquet, filename))
 
-    train_similarity = os.path.join(feature_dir, 'train_similarity.np')
+    sample = file_map['train'][0] if file_map['train'] else (file_map['val'][0] if file_map['val'] else None)
+    if sample is None:
+        raise FileNotFoundError(f'No parquet files found in {parquet}')
+
+    actual_cols = pd.read_parquet(sample).columns.tolist()
+    missing = [c for c in columns if c not in actual_cols]
+    if missing:
+        raise ValueError(f'Missing expected columns in parquet: {missing}')
+
+    selected_indices = [actual_cols.index(c) for c in columns]
+
+    meta = {
+        'chunk_size': chunk_size,
+        'data_columns': columns,
+        'column_order': columns,
+        'selected_indices': selected_indices,
+        'expected_width': len(actual_cols),
+        'actual_columns': actual_cols,
+        'target_var': target_var,
+        'input_dim': len(columns),
+        'output_dim': len(target_idx),
+        'latent_size': 128,
+        'hidden_size': 128,
+        'dropout': 0.1,
+        'learning_rate': learning_rate,
+        'sequence_length': chunk_size,
+        'margin': 1.0,
+        'encoder_heads': 1,
+        'encoder_layers': 2,
+        'decoder_heads': 1,
+        'decoder_layers': 2,
+    }
+    with open(meta_path, 'w') as fp:
+        json.dump(meta, fp, indent=4)
+
+    # file_map['train'] = file_map['train'][:1000]
+    # file_map['val'] = file_map['val'][:500]
 
     train_dataset = WeatherDataset(file_paths=file_map['train'],
-                                   expected_width=len(columns),
-                                   col_indices=len(idx),
+                                   expected_width=len(actual_cols),
+                                   col_indices=len(selected_indices),
                                    chunk_size=chunk_size,
-                                   target_indices=difference_idx,
-                                   features_path=train_features,
-                                   similarity_file=train_similarity)
+                                   target_indices=target_idx,
+                                   expected_columns=actual_cols,
+                                   selected_indices=selected_indices,
+                                   num_workers=12)
 
     if logging_csv:
         train_dataset.save_scaler(os.path.join(dirpath, 'scaler.json'))
@@ -272,33 +101,34 @@ def train_model(dirpath, parquet, target_var, columns, chunk_size,
                                   batch_size=batch_size,
                                   shuffle=True,
                                   num_workers=n_workers,
+                                  persistent_workers=True, pin_memory=True, prefetch_factor=2,
                                   collate_fn=lambda batch: [x for x in batch if x is not None])
 
-    val_features = os.path.join(feature_dir, 'val_edge_attr.json')
-    val_similarity = os.path.join(feature_dir, 'val_similarity.np')
-
     val_dataset = WeatherDataset(file_paths=file_map['val'],
-                                 expected_width=len(columns),
-                                 col_indices=len(idx),
+                                 expected_width=len(actual_cols),
+                                 col_indices=len(selected_indices),
                                  chunk_size=chunk_size,
-                                 target_indices=difference_idx,
-                                 features_path=val_features,
-                                 similarity_file=val_similarity)
+                                 target_indices=target_idx,
+                                 expected_columns=actual_cols,
+                                 selected_indices=selected_indices,
+                                 num_workers=12)
 
     val_dataloader = DataLoader(val_dataset,
                                 batch_size=batch_size,
                                 shuffle=False,
                                 num_workers=n_workers,
+                                persistent_workers=True, pin_memory=True, prefetch_factor=2,
                                 collate_fn=lambda batch: [x for x in batch if x is not None])
 
     model = WeatherAutoencoder(input_dim=len(columns),
-                               output_dim=len(difference_idx),
+                               output_dim=len(target_idx),
                                latent_size=128,
                                hidden_size=128,
                                dropout=0.1,
                                learning_rate=learning_rate,
                                log_csv=logging_csv,
-                               scaler=val_dataset.scaler)
+                               scaler=val_dataset.scaler,
+                               sequence_length=chunk_size)
 
     print(f"Number of training samples: {len(train_dataset)}")
     print(f"Number of validation samples: {len(val_dataset)}")
@@ -331,45 +161,44 @@ if __name__ == '__main__':
     if not os.path.exists(d):
         d = '/home/dgketchum/data/IrrigationGIS/dads'
 
-    target_var_ = 'mean_temp'
+    variable_ = 'tmax'
+    target_var_ = f'{variable_}_obs'
 
     if device_name == 'NVIDIA GeForce RTX 2080':
-        workers = 6
+        workers = 4
     elif device_name == 'NVIDIA RTX A6000':
-        workers = 12
+        workers = 8
     else:
         raise NotImplementedError('Specify the machine this is running on')
 
     zoran = '/data/ssd2/dads/training'
     nvm = '/media/nvm/training'
     if os.path.exists(zoran):
-        print('modeling with data from zoran')
+        print('Modeling with data from Zoran')
         training = zoran
     elif os.path.exists(nvm):
-        print('modeling with data from NVM drive')
+        print('Modeling with data from NVM drive')
         training = nvm
     else:
         raise NotImplementedError
 
     param_dir = os.path.join(training, 'autoencoder')
-    parq_ = os.path.join(training, 'parquet')
-    metadata_ = os.path.join(param_dir, 'training_metadata.json')
+    parq_ = os.path.join(training, 'parquet', target_var_)
 
     # graph
-    edges = os.path.join(training, 'graph')
-
     now = datetime.now().strftime('%m%d%H%M')
     chk = os.path.join(param_dir, 'checkpoints', now)
+    metadata_ = os.path.join(chk, 'training_metadata.json')
+
     os.mkdir(chk)
+    print(f'mkdir: {chk}')
     logger_csv = os.path.join(chk, 'training_{}.csv'.format(now))
     # logger_csv = None
-    workers = 12
     device_ = 'gpu'
 
-    with open(os.path.join(training, 'pth_columns.json'), 'r') as fp:
-        cols = json.load(fp)['columns']
+    cols = [target_var_] + GEO_FEATURES
 
     train_model(chk, parq_, target_var=target_var_, columns=cols, chunk_size=365,
-                feature_dir=edges, batch_size=128, learning_rate=0.001,
-                n_workers=workers, logging_csv=logger_csv, device=device_, bias_target=True)
+                batch_size=128, learning_rate=0.001, meta_path=metadata_,
+                n_workers=workers, logging_csv=logger_csv, device=device_)
 # ========================= EOF ====================================================================

@@ -247,13 +247,13 @@ if __name__ == '__main__':
     zoran = '/home/dgketchum/training'
     nvm = '/media/nvm/training'
     if os.path.exists(zoran):
-        print('modeling with data from zoran')
+        print('Modeling with data from Zoran')
         training = zoran
     elif os.path.exists(nvm):
-        print('modeling with data from NVM drive')
+        print('Modeling with data from NVM drive')
         training = nvm
     else:
-        print('modeling with data from UM drive')
+        print('Modeling with data from UM drive')
         training = os.path.join(d, 'training')
 
     print('========================== modeling {} =========================='.format(target_var))

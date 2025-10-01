@@ -1,6 +1,5 @@
 import csv
 
-import numpy as np
 import pytorch_lightning as pl
 import torch
 from sklearn.metrics import r2_score, root_mean_squared_error
@@ -10,17 +9,47 @@ from torch.nn import functional as F
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 
 
+class PositionalEncoding(nn.Module):
+    def __init__(self, d_model, max_len=1024):
+        super().__init__()
+        pe = torch.zeros(max_len, d_model)
+        position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
+        div_term = torch.exp(torch.arange(0, d_model, 2).float() * (-torch.log(torch.tensor(10000.0)) / d_model))
+        pe[:, 0::2] = torch.sin(position * div_term)
+        pe[:, 1::2] = torch.cos(position * div_term)
+        self.register_buffer('pe', pe)
+
+    def forward(self, x):
+        seq_len = x.size(1)
+        x = x + self.pe[:seq_len, :].unsqueeze(0)
+        return x
+
+
+class AttentionPooling(nn.Module):
+    def __init__(self, d_model):
+        super().__init__()
+        self.score = nn.Linear(d_model, 1)
+
+    def forward(self, x):
+        w = self.score(x).squeeze(-1)
+        a = torch.softmax(w, dim=1)
+        z = torch.einsum('btd,bt->bd', x, a)
+        return z
+
+
 class TransformerEncoder(nn.Module):
-    def __init__(self, input_dim, hidden_size, num_heads, num_layers, latent_size, dropout=0.1):
+    def __init__(self, input_dim, hidden_size, num_heads, num_layers, latent_size, dropout=0.1, max_len=1024):
         super(TransformerEncoder, self).__init__()
         self.embedding = nn.Linear(input_dim, hidden_size)
         encoder_layer = nn.TransformerEncoderLayer(d_model=hidden_size, nhead=num_heads, dropout=dropout)
         self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
         self.fc_latent = nn.Linear(hidden_size, latent_size)
+        self.pos_enc = PositionalEncoding(hidden_size, max_len=max_len)
 
     def forward(self, x):
         batch_size, seq_length, _ = x.size()
         x = self.embedding(x)
+        x = self.pos_enc(x)
         x = x.permute(1, 0, 2)
         enc_output = self.transformer_encoder(x)
         enc_output = enc_output.permute(1, 0, 2)
@@ -36,11 +65,12 @@ class TransformerDecoder(nn.Module):
         self.transformer_decoder = nn.TransformerDecoder(decoder_layer, num_layers=num_layers)
         self.fc_out = nn.Linear(hidden_size, output_dim)
         self.seq_length = seq_length
+        self.pos_queries = nn.Parameter(torch.randn(seq_length, 1, hidden_size))
 
     def forward(self, z):
-        z = self.latent_to_hidden(z).unsqueeze(0)
-        z = z.repeat(self.seq_length, 1, 1)
-        dec_output = self.transformer_decoder(z, z)
+        mem = self.latent_to_hidden(z).unsqueeze(0)
+        tgt = self.pos_queries.expand(self.seq_length, mem.size(1), -1)
+        dec_output = self.transformer_decoder(tgt, mem)
         x_hat = self.fc_out(dec_output)
         x_hat = x_hat.permute(1, 0, 2)
         return x_hat
@@ -54,8 +84,9 @@ class WeatherAutoencoder(pl.LightningModule):
         self.latent_size = latent_size
         self.hidden_size = hidden_size
 
-        self.encoder = TransformerEncoder(input_dim, hidden_size, 1, 2, latent_size, dropout)
+        self.encoder = TransformerEncoder(input_dim, hidden_size, 1, 2, latent_size, dropout, max_len=sequence_length)
         self.decoder = TransformerDecoder(latent_size, hidden_size, output_dim, 1, 2, sequence_length, dropout)
+        self.attn_pool = AttentionPooling(latent_size)
 
         self.input_dim = input_dim
         self.output_dim = output_dim
@@ -82,10 +113,10 @@ class WeatherAutoencoder(pl.LightningModule):
         self.margin = margin
 
     def forward(self, x):
-        latent = self.encoder(x)
-        latent = torch.max(latent, dim=1).values
-        x_hat = self.decoder(latent)
-        return x_hat, latent
+        latent_seq = self.encoder(x)
+        z = self.attn_pool(latent_seq)
+        x_hat = self.decoder(z)
+        return x_hat, z
 
     def triplet_loss(self, anchor, positive, negative):
         distance_positive = F.pairwise_distance(anchor, positive)
@@ -94,46 +125,51 @@ class WeatherAutoencoder(pl.LightningModule):
         return losses.mean()
 
     def init_bias(self):
-        for module in [self.input_projection, self.output_projection, self.embedding_layer]:
+        for module in [self.input_projection, self.output_projection, self.embedding_layer]:  # likely dead code
             if module.bias is not None:
                 nn.init.uniform_(module.bias, -0.1, 0.1)
 
     def training_step(self, batch, batch_idx):
         x, y, mask, x_pos, x_neg = stack_batch(batch)
+        bsz = x.size(0)
 
         x = torch.nan_to_num(x)
         y = torch.nan_to_num(y)
         y = y.view(-1, self.output_dim)
-
-        x_mean = x[mask].mean(dim=0)
-        x[mask] = x_mean
+        # fill NaNs only where missing; previous mask assignment likely inverted
 
         y_hat, z = self(x)
 
         y_hat = y_hat.reshape(-1, self.output_dim)
         mask = mask[:, :, :self.output_dim].view(-1, self.output_dim)
 
-        y, y_hat = y_hat[mask], y[mask]
+        # apply mask without swapping tensors
+        y = y[mask]
+        y_hat = y_hat[mask]
         nan_mask = ~torch.isnan(y_hat)
 
         loss = self.criterion(y[nan_mask], y_hat[nan_mask])
 
         if x_pos is not None and x_neg is not None:
-            x_pos = torch.nan_to_num(x_pos)
-            x_neg = torch.nan_to_num(x_neg)
-            _, z_pos = self(x_pos)
-            _, z_neg = self(x_neg)
-            triplet_loss = self.triplet_loss(z, z_pos, z_neg)
-            loss += triplet_loss * 2.0
-            self.log('triplet_loss', triplet_loss)
+            valid_pos = (~torch.isnan(x_pos)).float().mean()
+            valid_neg = (~torch.isnan(x_neg)).float().mean()
+            if valid_pos > 0.3 and valid_neg > 0.3:
+                x_pos = torch.nan_to_num(x_pos)
+                x_neg = torch.nan_to_num(x_neg)
+                _, z_pos = self(x_pos)
+                _, z_neg = self(x_neg)
+                triplet_loss = self.triplet_loss(z, z_pos, z_neg)
+                loss += triplet_loss * 2.0
+                self.log('triplet_loss', triplet_loss, batch_size=bsz)
 
-        self.log('reconstruction_loss', loss)
-        self.log('train_loss', loss, on_step=True)
+        self.log('reconstruction_loss', loss, batch_size=bsz)
+        self.log('train_loss', loss, on_step=True, batch_size=bsz)
 
         return loss
 
     def validation_step(self, batch, batch_idx):
         x, y, mask, x_pos, x_neg = stack_batch(batch)
+        bsz = x.size(0)
 
         x = torch.nan_to_num(x)
         y = y.view(-1, self.output_dim)
@@ -156,14 +192,17 @@ class WeatherAutoencoder(pl.LightningModule):
         # TODO: this should not be necessary
         nan_mask = ~torch.isnan(y)
 
-        loss_obs = self.criterion(y[nan_mask], y_hat[nan_mask])
+        if y[nan_mask].numel() == 0:
+            loss_obs = torch.zeros((), device=y_hat.device)
+        else:
+            loss_obs = self.criterion(y[nan_mask], y_hat[nan_mask])
 
-        self.log('val_loss', loss_obs, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
+        self.log('val_loss', loss_obs, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True, batch_size=bsz)
 
         current_lr = self.trainer.optimizers[0].param_groups[0]['lr']
-        self.log('lr', current_lr, on_step=False, on_epoch=True, prog_bar=True)
+        self.log('lr', current_lr, on_step=False, on_epoch=True, prog_bar=True, batch_size=bsz)
         lr_ratio = current_lr / self.learning_rate
-        self.log('lr_ratio', lr_ratio, on_step=False, on_epoch=True, prog_bar=True)
+        self.log('lr_ratio', lr_ratio, on_step=False, on_epoch=True, prog_bar=True, batch_size=bsz)
 
         return loss_obs
 
