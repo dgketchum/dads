@@ -43,6 +43,9 @@ def join_daily_timeseries(stations, sta_dir, gridded_met_dir, dst_dir, source,
 
     for i, (f, row) in enumerate(stations.iterrows(), start=1):
 
+        if f != 'US1WAWM0006':
+            continue
+
         out = os.path.join(dst_dir, f'{f}.parquet')
 
         if os.path.exists(out) and not overwrite:
@@ -198,7 +201,7 @@ if __name__ == '__main__':
     missing_list = os.path.join(data, 'dads', 'met', f'join_missing_{now_str}.csv')
 
     clip_to_obs_ = True
-    overwrite = False
+    overwrite = True
 
     era5_land = os.path.join(data, 'dads', 'era5_land', 'processed_parquet')
     daily = os.path.join(era5_land, 'daily')
