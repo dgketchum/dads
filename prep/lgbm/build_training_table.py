@@ -129,7 +129,7 @@ if __name__ == '__main__':
     graph_dir = os.path.join(training, 'graph')
 
     # set to a specific run directory containing embeddings.json
-    ae_dir = os.path.join(training, 'autoencoder', 'checkpoints', '10010908')
+    ae_dir = os.path.join(training, 'autoencoder', 'checkpoints', '10011529')
     embeddings_ = os.path.join(ae_dir, 'embeddings.json')
 
     emb = _load_json(embeddings_)

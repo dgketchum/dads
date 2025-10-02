@@ -48,6 +48,76 @@ def get_stations(stations, csv_dir, out_csv, source='madis', bounds=None):
     print(out_csv)
 
 
+def merge_shapefiles(shapefiles):
+    frames = []
+    for shp in shapefiles:
+        shp_lower = os.path.basename(shp).lower()
+        if 'ghcn' in shp_lower:
+            stype = 'ghcn'
+        elif 'madis' in shp_lower:
+            stype = 'madis'
+        else:
+            stype = 'dads'
+
+        mp = station_par_map(stype)
+        gdf = gpd.read_file(shp)
+        df = gdf.copy()
+
+        if 'fid' not in df.columns and mp.get('index') in df.columns:
+            df['fid'] = df[mp['index']].astype(str)
+        if 'latitude' not in df.columns and mp.get('lat') in df.columns:
+            df['latitude'] = df[mp['lat']]
+        if 'longitude' not in df.columns and mp.get('lon') in df.columns:
+            df['longitude'] = df[mp['lon']]
+        if 'elevation' not in df.columns and mp.get('elev') in df.columns:
+            df['elevation'] = df[mp['elev']]
+
+        if 'lat' not in df.columns and 'latitude' in df.columns:
+            df['lat'] = df['latitude']
+        if 'lon' not in df.columns and 'longitude' in df.columns:
+            df['lon'] = df['longitude']
+
+        frames.append(df)
+
+    merged = gpd.GeoDataFrame(pd.concat(frames, ignore_index=True), crs=frames[0].crs if frames else None)
+    return merged
+
+
+def get_station_observation_metadata(parquet_root, obs_vars, stations_gdf, out_shp, top_percent=0.8):
+    counts = {}
+    for var in obs_vars:
+        var_dir = os.path.join(parquet_root, var)
+        if not os.path.isdir(var_dir):
+            continue
+        for f in os.listdir(var_dir):
+            if not f.endswith('.parquet'):
+                continue
+            stn = os.path.splitext(f)[0]
+            p = os.path.join(var_dir, f)
+            try:
+                n = pd.read_parquet(p).shape[0]
+            except Exception:
+                n = 0
+            d = counts.get(stn, {})
+            d[var + '_count'] = d.get(var + '_count', 0) + n
+            counts[stn] = d
+
+    idx = [str(i) for i in stations_gdf.get('fid', stations_gdf.index).astype(str)]
+    df_counts = pd.DataFrame.from_dict(counts, orient='index')
+    df_counts.index = df_counts.index.astype(str)
+    df_counts = df_counts.reindex(idx)
+    df_counts = df_counts.fillna(0).astype(int)
+    df_counts['obs_count_total'] = df_counts.sum(axis=1)
+
+    gdf = stations_gdf.copy()
+    gdf['fid'] = gdf['fid'].astype(str)
+    gdf = gdf.merge(df_counts, how='left', left_on='fid', right_index=True)
+    gdf['obs_count_total'] = gdf['obs_count_total'].fillna(0).astype(int)
+
+    gdf.to_file(out_shp, crs='EPSG:4326', engine='fiona')
+    return gdf
+
+
 if __name__ == '__main__':
 
     d = '/media/research/IrrigationGIS'

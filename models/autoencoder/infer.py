@@ -137,14 +137,14 @@ def infer_embeddings(model_dir, data_dir, metadata_path, embedding_path, plot=Fa
 
         # Average embeddings if there are multiple samples per station
         mean_embedding = torch.cat(station_embeddings, dim=0).mean(dim=0)
-        std_embedding = torch.cat(station_embeddings, dim=0).std(dim=0)
+        # std_embedding = torch.cat(station_embeddings, dim=0).std(dim=0)
         embeddings[station_name] = mean_embedding.tolist()
         all_embeddings.append(mean_embedding)
         station_names.append(station_name)
-        print('{:.3f}'.format(mean_embedding.mean().item()), station_name)
-        print('{:.3f}'.format(std_embedding.mean().item()), station_name)
-        print(f'...of {len(station_embeddings)}')
-        print('')
+        # print('{:.3f}'.format(mean_embedding.mean().item()), station_name)
+        # print('{:.3f}'.format(std_embedding.mean().item()), station_name)
+        # print(f'...of {len(station_embeddings)}')
+        # print('')
 
     all_embeddings = torch.cat(all_embeddings, dim=1).T.numpy()
 
@@ -194,7 +194,7 @@ if __name__ == '__main__':
     param_dir = os.path.join(training, 'autoencoder')
     parq_ = os.path.join(training, 'parquet', target_var_)
 
-    model_run = os.path.join(param_dir, 'checkpoints', '10010908')
+    model_run = os.path.join(param_dir, 'checkpoints', '10011529')
     model_ = os.path.join(model_run, 'best_model.ckpt')
     scaler_ = os.path.join(model_run, 'scaler.json')
     metadata_ = os.path.join(model_run, 'training_metadata.json')

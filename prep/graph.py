@@ -9,19 +9,52 @@ from shapely.geometry import LineString, Point
 
 from prep.columns_desc import GEO_FEATURES
 from sklearn.preprocessing import MinMaxScaler
+from utils.station_parameters import station_par_map
+from prep.stations import merge_shapefiles, get_station_observation_metadata
 
 
 class Graph:
-    def __init__(self, stations, output_dir, k_nearest=2, bounds=None, index_col='fid'):
+    def __init__(self, stations, output_dir, k_nearest=2, bounds=None, index_col='fid',
+                 split_mode='observations', split_percent=0.8, random_state=None):
         self.fields = stations
         self.output_dir = output_dir
         self.k_nearest = k_nearest
         self.pth_stations = []
         self.bounds = bounds
         self.index_col = index_col
+        self.split_mode = split_mode
+        self.split_percent = split_percent
+        self.random_state = random_state
+
+        # assign train/val split immediately
+        if isinstance(self.fields, gpd.GeoDataFrame):
+            self.fields = self._assign_train_split(self.fields)
+        else:
+            gdf_ = gpd.read_file(self.fields)
+            self.fields = self._assign_train_split(gdf_)
+
+    def _assign_train_split(self, stations):
+        gdf = stations.copy()
+        n = gdf.shape[0]
+        if self.split_mode == 'observations' and 'obs_count_total' in gdf.columns:
+            k = int(max(1, round(n * self.split_percent)))
+            order = gdf['obs_count_total'].rank(method='first', ascending=False)
+            gdf['train'] = (order <= k).astype(int)
+        else:
+            if self.random_state is not None:
+                np.random.seed(self.random_state)
+            k = int(max(1, round(n * self.split_percent)))
+            idx = np.arange(n)
+            np.random.shuffle(idx)
+            train_idx = set(idx[:k])
+            gdf['train'] = [1 if i in train_idx else 0 for i in range(n)]
+        return gdf
 
     def generate_edge_index(self):
-        stations = gpd.read_file(self.fields)
+        if isinstance(self.fields, gpd.GeoDataFrame):
+            stations = self.fields.copy()
+        else:
+            stations = gpd.read_file(self.fields)
         stations.index = list(range(stations.shape[0]))
 
         if self.bounds:
@@ -29,7 +62,7 @@ class Graph:
             stations = stations[(stations['latitude'] < n) & (stations['latitude'] >= s)]
             stations = stations[(stations['longitude'] < e) & (stations['longitude'] >= w)]
 
-        attrs_select = list(GEO_FEATURES) + ['train', self.index_col]
+        attrs_select = [c for c in list(GEO_FEATURES) + ['train', self.index_col] if c in stations.columns]  # allow partial
         attributes = stations[attrs_select].copy()
         attributes.index = attributes[self.index_col]
 
@@ -144,7 +177,6 @@ class Graph:
 
         return spatial_edges, gdf, index_to_staid
 
-
 def haversine_distance(lat1, lon1, lat2, lon2):
     R = 6371
     dlat = np.radians(lat2 - lat1)
@@ -163,28 +195,27 @@ if __name__ == '__main__':
     if not os.path.exists(d):
         d = '/home/dgketchum/data/IrrigationGIS'
 
-    target_var = 'tmax_obs'
-
-    _source = 'madis'
-
-    if _source == 'madis':
-        glob_ = 'madis_02JULY2025_mgrs'
-        fields = os.path.join(d, 'dads', 'met', 'stations', '{}.csv'.format(glob_))
-
-    elif _source == 'ghcn':
-        glob_ = 'ghcn_CANUSA_stations_mgrs'
-        fields = os.path.join(d, 'climate', 'ghcn', 'stations', '{}.csv'.format(glob_))
-
-    else:
-        raise ValueError()
-
     training = '/data/ssd2/dads/training'
 
-    csv_dir_ = os.path.join(training, 'parquet', target_var)
-    output_dir_ = os.path.join(training, 'graph')
-    stations_ = os.path.join(output_dir_, 'stations.shp')
+    parquet_root = os.path.join(training, 'parquet')
+    obs_vars = [v for v in os.listdir(parquet_root) if os.path.isdir(os.path.join(parquet_root, v))]
 
-    node_prep = Graph(stations_, output_dir_, k_nearest=10, index_col='index')
-    node_prep.generate_edge_index()
+    madis_glob = 'madis_02JULY2025_mgrs'
+    ghcn_glob = 'ghcn_CANUSA_stations_mgrs'
+    madis_shp = os.path.join(d, 'dads', 'met', 'stations', f'{madis_glob}.shp')
+    ghcn_shp = os.path.join(d, 'climate', 'ghcn', 'stations', f'{ghcn_glob}.shp')
+
+    merged = merge_shapefiles([ghcn_shp, madis_shp])
+
+    obs_meta_shp = os.path.join(training, 'graph', 'station_observations.shp')
+    top_pct = 0.8
+    stations_obs = get_station_observation_metadata(parquet_root, obs_vars, merged, obs_meta_shp, top_percent=top_pct)
+
+    for target_var in obs_vars:
+        output_dir_ = os.path.join(training, 'graph', target_var)
+        os.makedirs(output_dir_, exist_ok=True)
+        node_prep = Graph(stations_obs, output_dir_, k_nearest=10, index_col='fid',
+                          split_mode='observations', split_percent=0.8, random_state=42)
+        node_prep.generate_edge_index()
 
 # ========================= EOF ====================================================================
