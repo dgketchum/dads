@@ -26,6 +26,7 @@ def build_table(parquet_dir: str,
                 embeddings: Dict[str, List[float]],
                 out_dir: Optional[str] = None,
                 split: Optional[str] = None,
+                n_neighbors: int = 5,
                 rows_per_file: int = 5_000_000,
                 file_prefix: str = 'part',
                 obs_col: Optional[str] = None):
@@ -41,6 +42,8 @@ def build_table(parquet_dir: str,
     n_nbr_all = len(edge_index[k0])
     nbr0_all = [str(nb) for nb in edge_index[k0]]
     nbr0 = [nb for nb in nbr0_all if nb != k0]  # drop self neighbor
+    if n_neighbors is not None:
+        nbr0 = nbr0[:n_neighbors]
     n_nbr = len(nbr0)
 
     cols = []
@@ -118,6 +121,8 @@ def build_table(parquet_dir: str,
         if add_ok:
             out_i = 0
             for nb_raw in neigh:
+                if out_i >= n_nbr:
+                    break
                 nb = str(nb_raw)
                 if nb == staid:
                     continue  # drop self neighbor features
@@ -144,7 +149,9 @@ def build_table(parquet_dir: str,
                     else:
                         nb_vals = pd.Series(np.nan, index=df.index)  # fill mandatory neighbor obs with NaN
                     rec[f'nbr{out_i}_{obs_col}'].extend(nb_vals.tolist())
+
                 out_i += 1
+
             if out_i != n_nbr:
                 add_ok = False
         else:
@@ -201,9 +208,11 @@ if __name__ == '__main__':
     train_dir_ = os.path.join(out_dir, 'train')
     val_dir_ = os.path.join(out_dir, 'val')
 
-    build_table(parq_, tr_idx, tr_attr, emb, out_dir=train_dir_, split='train',
-                rows_per_file=1_000_000, file_prefix=f'{variable_}_train_part', obs_col=target_var_)
+    neighbors_ = 10
+
+    # build_table(parq_, tr_idx, tr_attr, emb, out_dir=train_dir_, split='train',
+    #             n_neighbors=neighbors_, rows_per_file=1_000_000, file_prefix=f'{variable_}_train_part', obs_col=target_var_)
     build_table(parq_, va_idx, va_attr, emb, out_dir=val_dir_, split='val',
-                rows_per_file=1_000_000, file_prefix=f'{variable_}_val_part', obs_col=target_var_)
+                n_neighbors=neighbors_, rows_per_file=1_000_000, file_prefix=f'{variable_}_val_part', obs_col=target_var_)
 
 # ========================= EOF ===============================================================================
