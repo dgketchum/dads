@@ -78,6 +78,10 @@ def train_model(dirpath, sequence_data, target_var, train_features, now_str, bat
     feature_names = pd.read_parquet(first_file).columns.tolist()
     num_features = len(feature_names)
 
+    meta_path = os.path.join(dirpath, 'training_metadata.json')
+    with open(meta_path, 'w') as f:
+        json.dump({'num_bands': num_features - 2, 'expansion_factor': 2}, f)
+
     if not scaler_path:
         scaler_path = os.path.join(dirpath, f'scaler_{now_str}.json')
 
@@ -104,7 +108,8 @@ def train_model(dirpath, sequence_data, target_var, train_features, now_str, bat
                                   batch_size=batch_size,
                                   shuffle=True,
                                   num_workers=int(n_workers / 2),
-                                  collate_fn=custom_collate)
+                                  collate_fn=custom_collate,
+                                  pin_memory=True)
     if strided:
         print(f'\nTrain dataset: {len(train_dataset)} {chunk_size} x {num_features} strided samples')
     else:
@@ -117,13 +122,17 @@ def train_model(dirpath, sequence_data, target_var, train_features, now_str, bat
                               sample_dimensions=(chunk_size, num_features),
                               scaler=scaler)
 
-    val_dataloader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=int(n_workers / 2),
-                                collate_fn=custom_collate)
+    val_dataloader = DataLoader(val_dataset,
+                                batch_size=batch_size,
+                                shuffle=False,
+                                num_workers=int(n_workers / 2),
+                                collate_fn=custom_collate,
+                                pin_memory=True)
 
     model = LSTMPredictor(num_bands=num_features - 2,
                           learning_rate=learning_rate,
                           dropout_rate=0.1,
-                          expansion_factor=4,
+                          expansion_factor=2,  # align with GNN loader
                           log_csv=logging_csv,
                           scaler=train_dataset.scaler)
 
@@ -147,28 +156,33 @@ def train_model(dirpath, sequence_data, target_var, train_features, now_str, bat
         check_finite=True,
     )
 
-    trainer = pl.Trainer(max_epochs=1000, callbacks=[checkpoint_callback, early_stop_callback],
-                         accelerator='gpu', devices=1)
+    trainer = pl.Trainer(max_epochs=1000,
+                         callbacks=[checkpoint_callback, early_stop_callback],
+                         accelerator='gpu', devices=1,
+                         precision='16-mixed',
+                         gradient_clip_val=1.0)
     trainer.fit(model, train_dataloader, val_dataloader)
 
 
 if __name__ == '__main__':
 
-    d = '/media/research/IrrigationGIS/dads'
-    if not os.path.exists(d):
-        d = '/home/dgketchum/data/IrrigationGIS/dads'
+    d = '/home/dgketchum/data/IrrigationGIS/dads'
 
-    target_var_ = 'tmin'
+    target_var_ = 'tmax'
+    write_scaler = True
 
     training_ = '/data/ssd2/dads/training'
     sequences_ = os.path.join(training_, 'parquet')
-
-    scaler_ = os.path.join(training_, 'lstm', 'checkpoints', 'tmin_20250813_1305', 'scaler_20250813_1305.json')
 
     now_ = datetime.now().strftime('%Y%m%d_%H%M')
     chk_ = os.path.join(training_, 'lstm', 'checkpoints', f'{target_var_}_{now_}')
     os.makedirs(chk_, exist_ok=True)
     logger_csv_ = os.path.join(chk_, 'training_{}.csv'.format(now_))
+
+    if write_scaler:
+        scaler_ = os.path.join(chk_, 'scaler.json')
+    else:
+        scaler_ = os.path.join(training_, 'lstm', 'checkpoints', 'tmax_20251004_1508', 'scaler.json')
 
     train_edges_ = os.path.join(training_, 'graph', 'train_edge_attr.json')
 

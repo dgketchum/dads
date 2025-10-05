@@ -37,8 +37,9 @@ def _read_and_chunk_worker(args):
     num_features = len(feature_names)
     chunks = [data_np[i: i + chunk_size, :num_features] for i in valid_start_ilocs]
     chunk_station_names = [station_name] * len(chunks)
+    end_days = [int(data_np[i + chunk_size - 1, -2]) for i in valid_start_ilocs]
 
-    return chunks, chunk_station_names
+    return chunks, chunk_station_names, end_days
 
 
 class LSTMDataset(Dataset):
@@ -60,6 +61,7 @@ class LSTMDataset(Dataset):
 
         all_chunks_ = []
         new_station_names_ = []
+        end_days_ = []
 
         if n_workers == 1:
             results = []
@@ -72,12 +74,14 @@ class LSTMDataset(Dataset):
                                  total=len(tasks_),
                                  desc="Processing files"))
 
-        for chunks_, names_ in results_:
+        for chunks_, names_, days_ in results_:
             all_chunks_.extend(chunks_)
             new_station_names_.extend(names_)
+            end_days_.extend(days_)
 
         self.preloaded_data = all_chunks_
         self.station_names = new_station_names_
+        self.day_ints = end_days_
         print(f"Successfully preloaded and chunked {len(self.preloaded_data)} samples into memory.")
 
     def __len__(self):
@@ -97,10 +101,17 @@ class LSTMDataset(Dataset):
 
         y = chunk[:, 0]
         gm = chunk[:, 1]
-        lf = chunk[:, 2:]
+        # Use only past observations as features; ignore reanalysis columns
+        obs_feat = y.unsqueeze(-1)
+        obs_shift = obs_feat.clone()
+        obs_shift[1:, 0] = obs_feat[:-1, 0]
+        obs_shift[0, 0] = obs_feat[0, 0]
+        input_width = chunk.shape[1] - 2
+        lf = obs_shift.repeat(1, input_width)
 
         if self.return_station_name:
-            return y, gm, lf, station_name
+            day_int = self.day_ints[idx]
+            return y, gm, lf, station_name, day_int
         else:
             return y, gm, lf
 
