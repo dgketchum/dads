@@ -248,14 +248,7 @@ def train_model(dirpath, lgbm_root, target_var, now_str, params=None, debug_file
 
 if __name__ == '__main__':
 
-    zoran = '/data/ssd2/dads/training'
-    nvm = '/media/nvm/training'
-    if os.path.exists(zoran):
-        training = zoran
-    elif os.path.exists(nvm):
-        training = nvm
-    else:
-        raise NotImplementedError
+    training = '/data/ssd2/dads/training'
 
     variable_ = 'tmax'
     target_var_ = f'{variable_}_obs'

@@ -6,6 +6,7 @@ from tqdm import tqdm
 import lightgbm as lgb
 import numpy as np
 import pandas as pd
+from sklearn.metrics import r2_score
 
 
 def _list_parquet(dir_path: str) -> List[str]:
@@ -21,7 +22,8 @@ def _station_list_from_val_dir(val_dataset_dir: str) -> List[str]:
 
 
 def build_lgbm_val_predictions(model_dir: str, lgbm_root: str, target_var: str, limit_files: int = 0,
-                               val_dataset_dir: Optional[str] = None) -> pd.DataFrame:
+                               val_dataset_dir: Optional[str] = None,
+                               preds_out_path: Optional[str] = None) -> pd.DataFrame:
     meta_path = os.path.join(model_dir, 'training_metadata.json')
     with open(meta_path, 'r') as fp:
         meta = json.load(fp)
@@ -64,15 +66,27 @@ def build_lgbm_val_predictions(model_dir: str, lgbm_root: str, target_var: str, 
         preds = pd.concat(frames, axis=0, ignore_index=True)
     else:
         preds = pd.DataFrame(columns=['station', 'dt', 'lgbm'])
+    if preds_out_path:
+        if preds_out_path.endswith('.parquet'):
+            preds.to_parquet(preds_out_path)
+        else:
+            preds.to_csv(preds_out_path, index=False)
     return preds
 
 
-def compare_validation(val_dataset_dir: str, preds: pd.DataFrame, out_csv: str) -> pd.DataFrame:
+def compare_validation(val_dataset_dir: str, preds_path: str, out_csv: str) -> pd.DataFrame:
     files = _list_parquet(val_dataset_dir)
     cols = None
     acc = {}
 
+    if preds_path.endswith('.parquet'):
+        preds = pd.read_parquet(preds_path)
+    else:
+        preds = pd.read_csv(preds_path)
+
     for p in files:
+        if 'COVM' not in p:
+            continue
         df = pd.read_parquet(p)
         if cols is None:
             cols = [c for c in df.columns if c not in ['station', 'dt', 'obs']]
@@ -122,16 +136,17 @@ def compare_validation(val_dataset_dir: str, preds: pd.DataFrame, out_csv: str) 
 if __name__ == '__main__':
 
     home = os.path.expanduser('~')
-    base = os.path.join('/data', 'ssd2', 'dads', 'training')
-    lgbm_root_ = os.path.join(base, 'lgbm')
+    base = os.path.join('/data', 'ssd2', 'dads')
+    lgbm_root_ = os.path.join(base, 'training', 'lgbm')
     var_ = 'tmax'
     target_var_ = f'{var_}_obs'
 
-    model_dir_ = os.path.join(base, 'lgbm', 'checkpoints', 'tmax_20251003_1109')
-    val_data_dir_ = os.path.join(base, 'validation_sets', var_)
+    model_dir_ = os.path.join(base, 'training', 'lgbm', 'checkpoints', 'tmax_20251003_1109')
+    val_data_dir_ = os.path.join(base, 'gridded_comparison_data', var_)
 
-    preds_df_ = build_lgbm_val_predictions(model_dir_, lgbm_root_, target_var_, limit_files=0,
-                                           val_dataset_dir=val_data_dir_)
+    preds_path_ = os.path.join(val_data_dir_, f'preds_{var_}.parquet')
+    # _ = build_lgbm_val_predictions(model_dir_, lgbm_root_, target_var_, limit_files=0,
+    #                                val_dataset_dir=val_data_dir_, preds_out_path=preds_path_)
     out_csv_ = os.path.join(val_data_dir_, f'metrics_{var_}.csv')
-    _ = compare_validation(val_data_dir_, preds_df_, out_csv_)
+    _ = compare_validation(val_data_dir_, preds_path_, out_csv_)
 # ========================= EOF ====================================================================
