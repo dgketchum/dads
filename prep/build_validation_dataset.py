@@ -1,9 +1,12 @@
 import os
-from typing import Dict, Optional, List
+import multiprocessing
+from typing import Dict, Optional, List, Tuple
 
 import numpy as np
 import pandas as pd
 import pyarrow.parquet as pq
+from pyarrow.lib import ArrowInvalid
+from tqdm import tqdm
 
 
 def _unique_val_stations(val_dir: str, limit_files: int = 0) -> List[str]:
@@ -36,7 +39,12 @@ def _load_obs_series(train_parquet_root: str, target_var: str, station: str) -> 
 
 def _get_series(gridded_root: str, station: str, var_name: str) -> Optional[pd.Series]:
     p = os.path.join(gridded_root, f'{station}.parquet')
-    df = pd.read_parquet(p)
+    if not os.path.exists(p):
+        return None
+    try:
+        df = pd.read_parquet(p)
+    except ArrowInvalid:
+        return None
     s = pd.Series(df[var_name].astype(np.float32).values, index=df.index)
     s = s.sort_index()
     if 'gridmet' in gridded_root and var_name in ['tmmx', 'tmmn']:
@@ -46,19 +54,63 @@ def _get_series(gridded_root: str, station: str, var_name: str) -> Optional[pd.S
     return s
 
 
+def _process_one_station(args: Tuple[str, str, str, Dict[str, str], Dict[str, str], str, Dict[str, str], bool]):
+    st, training_parquet_root, target_var, product_dirs, var_map, out_dir, agg_map, overwrite = args
+    out_path = os.path.join(out_dir, f'{st}.parquet')
+    if os.path.exists(out_path) and not overwrite:
+        return st
+    obs = _load_obs_series(training_parquet_root, target_var, st)
+    if obs is None or obs.empty:
+        return st
+    frames = {'obs': obs}
+    for product, pdir in product_dirs.items():
+        if product not in var_map:
+            continue
+        vn = var_map[product]
+        s = _get_series(pdir, st, vn)
+        if s is None:
+            continue
+        frames[product] = s
+    if len(frames) <= 1:
+        return st
+    base = frames['obs']
+    base = base.dropna()
+    if base.empty:
+        return st
+    join = pd.DataFrame({'obs': base})
+    for product, s in frames.items():
+        if product == 'obs':
+            continue
+        s = s.reindex(join.index)
+        join[product] = s
+    if join.empty:
+        return st
+    out = pd.DataFrame({'station': st, 'dt': join.index.strftime('%Y-%m-%d')})
+    out['obs'] = join['obs'].astype(np.float32).values
+    for product in var_map.keys():
+        if product in join.columns:
+            out[product] = join[product].astype(np.float32).values
+        else:
+            out[product] = np.nan
+    out.to_parquet(out_path)
+    # print(out.shape, out.columns.to_list())
+    return st
+
+
 def build_validation_dataset(lgbm_root: str,
                              training_parquet_root: str,
                              target_var: str,
                              product_dirs: Dict[str, str],
                              var_map: Dict[str, str],
                              out_dir: str,
-                             rows_per_file: int = 2_000_000,
                              limit_val_files: int = 0,
-                             agg_map: Optional[Dict[str, str]] = None):
+                             agg_map: Optional[Dict[str, str]] = None,
+                             num_workers: int = 1,
+                             overwrite: bool = False):
     val_dir = os.path.join(lgbm_root, target_var, 'val')
     stations = _unique_val_stations(val_dir, limit_files=limit_val_files)
     if not stations:
-        return None  # likely error: no validation stations found
+        return None
 
     if not os.path.exists(out_dir):
         os.makedirs(out_dir, exist_ok=True)
@@ -66,71 +118,17 @@ def build_validation_dataset(lgbm_root: str,
     if agg_map is None:
         agg_map = {}
 
-    cols = ['station', 'dt', 'obs'] + list(var_map.keys())
-    dct = {c: [] for c in cols}
-    idx = []
-    part = 0
-
-    def _flush():
-        nonlocal dct, idx, part
-        if not idx:
-            return None
-        df = pd.DataFrame({k: v for k, v in dct.items()})
-        df.index = pd.to_datetime(idx)
-        p = os.path.join(out_dir, f'val_{part:05d}.parquet')
-        df.to_parquet(p)
-        dct = {c: [] for c in cols}
-        idx = []
-        part += 1
-        return None
-
-    for st in stations:
-        obs = _load_obs_series(training_parquet_root, target_var, st)
-        if obs is None or obs.empty:
-            continue
-
-        frames = {'obs': obs}
-
-        for product, pdir in product_dirs.items():
-            if product not in var_map:
-                continue
-            vn = var_map[product]
-            s = _get_series(pdir, st, vn)
-            frames[product] = s
-
-        if len(frames) <= 1:
-            continue
-
-        base = frames['obs']
-        base = base.dropna()
-        if base.empty:
-            continue
-
-        join = pd.DataFrame({'obs': base})
-        for product, s in frames.items():
-            if product == 'obs':
-                continue
-            s = s.reindex(join.index)
-            join[product] = s
-
-        if join.empty:
-            continue
-
-        n = len(join)
-        dct['station'].extend([st] * n)
-        dct['dt'].extend(join.index.strftime('%Y-%m-%d'))
-        dct['obs'].extend(join['obs'].astype(np.float32).tolist())
-        for product in var_map.keys():
-            if product in join.columns:
-                dct[product].extend(join[product].astype(np.float32).tolist())
-            else:
-                dct[product].extend([np.nan] * n)
-        idx.extend(join.index.tolist())
-
-        if len(idx) >= rows_per_file:
-            _flush()
-
-    _flush()
+    if num_workers is None or num_workers <= 1:
+        for st in tqdm(stations, total=len(stations), desc=f'Build val {target_var}'):
+            _process_one_station((st, training_parquet_root, target_var, product_dirs, var_map, out_dir, agg_map or {}, overwrite))
+    else:
+        args = [(st, training_parquet_root, target_var, product_dirs, var_map, out_dir, agg_map or {}, overwrite)
+                for st in stations]
+        with multiprocessing.Pool(processes=int(num_workers)) as pool:
+            pbar = tqdm(total=len(stations), desc=f'Build val {target_var}')
+            for _ in pool.imap_unordered(_process_one_station, args):
+                pbar.update(1)
+            pbar.close()
     return None
 
 
@@ -167,7 +165,7 @@ if __name__ == '__main__':
         # 'conus404': 't2m',  # still don't have
     }
 
-    out_dir_ = os.path.join(d, 'validation_sets', var_)
+    out_dir_ = os.path.join(d, 'gridded_comparison_data', var_)
 
     agg_map_ = {
         'nldas2': 'mean',
@@ -176,5 +174,5 @@ if __name__ == '__main__':
     }
 
     build_validation_dataset(lgbm_root_, train_parquet_root_, target_var_, products_, var_map_, out_dir_,
-                             rows_per_file=2_000_000, limit_val_files=0, agg_map=agg_map_)
+                             limit_val_files=0, agg_map=agg_map_, num_workers=16, overwrite=False)
 # ========================= EOF ====================================================================
