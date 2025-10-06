@@ -14,7 +14,7 @@ from torch.utils.data._utils.collate import default_collate
 from models.lstm.lstm import LSTMPredictor
 from models.lstm.dataset import LSTMDataset
 from models.scalers import MinMaxScaler
-from prep.scaler import fit_and_save_scaler
+from prep.build_variable_scaler import build_variable_scaler, load_variable_scaler
 
 device_name = None
 if torch.cuda.is_available():
@@ -77,25 +77,24 @@ def train_model(dirpath, sequence_data, target_var, train_features, now_str, bat
     first_file = file_map['train_files'][0] if file_map['train_files'] else file_map['val_files'][0]
     feature_names = pd.read_parquet(first_file).columns.tolist()
     num_features = len(feature_names)
+    assert num_features >= 2, "expected [obs, gm, ...] feature layout"
+    assert feature_names[0].endswith('_obs'), "first column must be target _obs"
+    assert not feature_names[1].endswith('_obs'), "second column must be gridded match, not _obs"
 
     meta_path = os.path.join(dirpath, 'training_metadata.json')
     with open(meta_path, 'w') as f:
         json.dump({'num_bands': num_features - 2, 'expansion_factor': 2}, f)
 
     if not scaler_path:
-        scaler_path = os.path.join(dirpath, f'scaler_{now_str}.json')
-
-    if os.path.exists(scaler_path):
-        print(f"Re-using existing scaler from {scaler_path}")
+        scaler, scaler_path, _ = load_variable_scaler(sequence_data, target_var, feature_names)
+    else:
         with open(scaler_path, 'r') as f:
             scaler_params = json.load(f)
         scaler = MinMaxScaler()
         scaler.bias = np.array(scaler_params['bias']).reshape(1, -1)
         scaler.scale = np.array(scaler_params['scale']).reshape(1, -1)
-    else:
-        scaler = fit_and_save_scaler(file_map['train_files'], feature_names, scaler_path)
-        if scaler is None:
-            return
+        if 'feature_names' in scaler_params:
+            assert scaler_params['feature_names'] == feature_names, "scaler feature_names mismatch"
 
     train_dataset = LSTMDataset(file_paths=file_map['train_files'], station_names=file_map['train_names'],
                                 feature_names=feature_names,

@@ -108,6 +108,7 @@ class LSTMDataset(Dataset):
         obs_shift[0, 0] = obs_feat[0, 0]
         input_width = chunk.shape[1] - 2
         lf = obs_shift.repeat(1, input_width)
+        assert lf.shape[1] == input_width, "lf width != num_features - 2"
 
         if self.return_station_name:
             day_int = self.day_ints[idx]
