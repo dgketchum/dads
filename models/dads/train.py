@@ -18,7 +18,8 @@ from models.scalers import MinMaxScaler
 from prep.build_variable_scaler import load_variable_scaler, get_variable_scaler_path
 
 torch.set_float32_matmul_precision('medium')
-torch.cuda.get_device_name(torch.cuda.current_device())
+if torch.cuda.is_available():
+    torch.cuda.get_device_name(torch.cuda.current_device())
 
 rlimit = resource.getrlimit(resource.RLIMIT_NOFILE)
 resource.setrlimit(resource.RLIMIT_NOFILE, (4096, rlimit[1]))
@@ -43,10 +44,13 @@ class DadsDataset(Dataset):
         _emb_lens = {len(v) for v in embed_dict.values()}
         assert len(_emb_lens) == 1, "embedding vectors must be uniform length"
         embeddings = [(k, torch.tensor(v)) for k, v in embeddings.items()]
-        embedding_arr = torch.cat([v[1] for v in embeddings], dim=1).permute(-1, 0)
+        # Stack to [N_stations, emb_dim]
+        embedding_arr = torch.stack([v[1] for v in embeddings], dim=0)
         min_ = embedding_arr.min(dim=0).values
         max_ = embedding_arr.max(dim=0).values
-        embedding_arr = (embedding_arr - min_) / (max_ - min_)
+        denom = (max_ - min_)
+        denom[denom == 0] = 1.0
+        embedding_arr = (embedding_arr - min_) / denom
 
         self.embeddings = {k[0]: embedding_arr[i] for i, k in enumerate(embeddings)}
 
@@ -93,11 +97,11 @@ class DadsDataset(Dataset):
             keys = np.random.choice(keys, sample)
             attributes = {k: v for k, v in attributes.items() if k in keys}
 
-        filter_files = [f for f in lstm_input_files if os.path.basename(f).replace('.pth', '') in attributes.keys()]
+        filter_files = [f for f in lstm_input_files if os.path.splitext(os.path.basename(f))[0] in attributes.keys()]
 
         self.edge_map = attributes
 
-        data_frequency = lstm_meta['data_frequency']
+        data_frequency = lstm_meta.get('data_frequency', 'daily')
         self.model = 'lstm'
         # Determine feature names and tensor width from first file
         first_file = filter_files[0]
@@ -107,7 +111,7 @@ class DadsDataset(Dataset):
         # column indices: y=0, gm=1, lf start=2, no hf; set hf idx to tensor_width for downstream math
         self.tensor_width = num_features
         self.column_indices = (0, 1, 2, self.tensor_width)
-        chunk_size = lstm_meta['chunk_size']
+        chunk_size = lstm_meta.get('chunk_size', 12)
 
         # load scaler from json path
         with open(scaler, 'r') as f:
@@ -169,7 +173,7 @@ class DadsDataset(Dataset):
         return graph, y, seq
 
 
-def train_model(dirpath, lstm_data, lstm_model, embeddings, edge_info, nodes=5, batch_size=1, strided=False,
+def train_model(dirpath, parquet_dir, lstm_model, embeddings, edge_info, nodes=5, batch_size=1, strided=False,
                 dropout=0.2, learning_rate=0.01, n_workers=1, logging_csv=None, device='gpu', sample=None,
                 node_ctx_dir=None):
     """"""
@@ -177,23 +181,30 @@ def train_model(dirpath, lstm_data, lstm_model, embeddings, edge_info, nodes=5, 
     if sample is None:
         sample = None, None
 
-    metadata_ = os.path.join(lstm_data, 'training_metadata.json')
+    metadata_ = os.path.join(lstm_model, 'training_metadata.json')
     with open(metadata_, 'r') as f:
         meta = json.load(f)
 
     meta['model'] = 'lstm'
-    pth = os.path.join(lstm_data, 'pth')
-
     # Prefer variable-specific scaler under training/scalers/{var}.json
-    var_name = os.path.basename(lstm_data)
-    training_root = os.path.dirname(os.path.dirname(lstm_data))
-    parquet_root = os.path.join(training_root, 'parquet')
+    var_dir = os.path.basename(parquet_dir)
+    var_name = var_dir.replace('_obs', '')
+    parquet_root = os.path.dirname(parquet_dir)
     _scaler_obj, scaler, _ = load_variable_scaler(parquet_root, var_name)
 
-    tdir = os.path.join(pth, 'train')
-    t_files = [os.path.join(tdir, f) for f in os.listdir(tdir)]
+    # Station-based split from graph prep
+    all_files = {os.path.splitext(f)[0]: os.path.join(parquet_dir, f)
+                 for f in os.listdir(parquet_dir) if f.endswith('.parquet')}
     train_edges = os.path.join(edge_info, 'train_edge_index.json')
     train_attr = os.path.join(edge_info, 'train_edge_attr.json')
+    with open(train_attr, 'r') as f:
+        train_attr_map = json.load(f)
+    val_attr = os.path.join(edge_info, 'val_edge_attr.json')
+    with open(val_attr, 'r') as f:
+        val_attr_map = json.load(f)
+    train_stations = set(train_attr_map.keys())
+    val_stations = set(val_attr_map.keys()) - train_stations
+    t_files = [all_files[s] for s in train_stations if s in all_files]
 
     train_dataset = DadsDataset(nodes, t_files, meta, embeddings, train_edges, train_attr,
                                 scaler=scaler, sample=sample[0], node_ctx_dir=node_ctx_dir)
@@ -203,8 +214,7 @@ def train_model(dirpath, lstm_data, lstm_model, embeddings, edge_info, nodes=5, 
                                   shuffle=True,
                                   num_workers=n_workers)
 
-    vdir = os.path.join(pth, 'val')
-    v_files = [os.path.join(vdir, f) for f in os.listdir(vdir)]
+    v_files = [all_files[s] for s in val_stations if s in all_files]
     val_edges = os.path.join(edge_info, 'val_edge_index.json')
     val_attr = os.path.join(edge_info, 'val_edge_attr.json')
 
@@ -257,26 +267,27 @@ if __name__ == '__main__':
     print('========================== modeling {} =========================='.format(target_var))
 
     # lstm model
-    param_dir = os.path.join(training, 'lstm', target_var)
-    model_dir = os.path.join(param_dir, 'checkpoints', '10221508')
+    lstm_model_ = os.path.join(training, 'lstm', 'checkpoints', 'tmax_20251004_1650')
 
-    # graph
-    dads = os.path.join(training, 'dads')
-    edges = os.path.join(dads, 'graph')
+    # data
+    parquet_dir = os.path.join(training, 'parquet', f'{target_var}_obs')
+
+    # graph (per target)
+    edges = os.path.join(training, 'graph', f'{target_var}_obs')
 
     # climate embedding
-    encoder_dir = os.path.join(training,  'autoencoder', 'checkpoints', '10011529')
+    encoder_dir = os.path.join(training, 'autoencoder', 'checkpoints', '10011529')
 
     now = datetime.now().strftime('%m%d%H%M')
-    chk = os.path.join(dads, 'checkpoints', now)
-    os.mkdir(chk)
+    chk = os.path.join(training, 'gnn', 'checkpoints', now)
+    os.makedirs(chk, exist_ok=True)
     logger_csv = os.path.join(chk, 'training_{}.csv'.format(now))
 
     workers = 12
     device_ = 'gpu'
 
     node_ctx_dir = os.path.join(training, 'node_ctx')
-    train_model(chk, param_dir, model_dir, encoder_dir, edges, batch_size=256, nodes=5, dropout=0.5, strided=True,
+    train_model(chk, parquet_dir, lstm_model_, encoder_dir, edges, batch_size=256, nodes=5, dropout=0.5, strided=True,
                 learning_rate=0.001, n_workers=workers, logging_csv=logger_csv, device=device_, sample=None,
                 node_ctx_dir=node_ctx_dir)
 # ========================= EOF ====================================================================
