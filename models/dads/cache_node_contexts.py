@@ -15,9 +15,8 @@ from prep.build_variable_scaler import load_variable_scaler
 device_name = None
 if torch.cuda.is_available():
     device_name = torch.cuda.get_device_name(0)
-    print(f'Using GPU: {device_name}')
 else:
-    print('CUDA is not available. PyTorch will use the CPU.')
+    raise ValueError('No GPU available')
 
 torch.set_float32_matmul_precision('medium')
 torch.cuda.get_device_name(torch.cuda.current_device())
@@ -34,6 +33,36 @@ def _build_features(df, bias, scale):
     input_width = df.shape[1] - 2
     lf = np.repeat(obs_shift, input_width, axis=1)
     return lf
+
+
+def _producer(file_q, task_q, bias, scale, chunk):
+    while True:
+        fp = file_q.get()
+        if fp is None:
+            file_q.task_done()
+            break
+        try:
+            stn = os.path.splitext(os.path.basename(fp))[0]
+            df = pd.read_parquet(fp)
+            df = df.dropna()
+            if len(df) >= chunk:
+                df['day_int'] = df.index.to_julian_date().astype(np.int32)
+                df['day_diff'] = df['day_int'].diff()
+                arr = df.to_numpy(dtype=np.float32)
+                is_consec = arr[1:, -1] == 1.0
+                win = chunk - 1
+                if len(is_consec) >= win:
+                    conv = np.convolve(is_consec, np.ones(win, dtype=int), mode='valid')
+                    starts = np.where(conv == win)[0]
+                    if starts.size > 0:
+                        for i in starts:
+                            end_idx = i + chunk
+                            sub = df.iloc[i:end_idx, :]
+                            day_int = int(sub['day_int'].iloc[-1])
+                            x_np = _build_features(sub.iloc[:, :len(df.columns) - 2], bias, scale)
+                            task_q.put((stn, day_int, x_np), block=True)
+        finally:
+            file_q.task_done()
 
 
 def cache_node_contexts(lstm_model_dir, parquet_dir, scaler_json, out_dir, chunk_size,
@@ -98,40 +127,6 @@ def cache_node_contexts(lstm_model_dir, parquet_dir, scaler_json, out_dir, chunk
                 np.save(os.path.join(out_dir, stn, f"{day_int}.npy"), ctx.squeeze())
     else:
         ctx_mp = mp.get_context('spawn')
-
-        def _transform_minmax_local(x: np.ndarray, bias: np.ndarray, scale: np.ndarray) -> np.ndarray:
-            return (x - bias) / (scale + 5e-8) + 5e-8
-
-        def _producer(file_q, task_q, bias, scale, chunk):
-            while True:
-                fp = file_q.get()
-                if fp is None:
-                    file_q.task_done()
-                    break
-                try:
-                    stn = os.path.splitext(os.path.basename(fp))[0]
-                    df = pd.read_parquet(fp)
-                    df = df.dropna()
-                    if len(df) >= chunk:
-                        df['day_int'] = df.index.to_julian_date().astype(np.int32)
-                        df['day_diff'] = df['day_int'].diff()
-                        arr = df.to_numpy(dtype=np.float32)
-                        is_consec = arr[1:, -1] == 1.0
-                        win = chunk - 1
-                        if len(is_consec) >= win:
-                            conv = np.convolve(is_consec, np.ones(win, dtype=int), mode='valid')
-                            starts = np.where(conv == win)[0]
-                            if starts.size > 0:
-                                for i in starts:
-                                    end_idx = i + chunk
-                                    sub = df.iloc[i:end_idx, :]
-                                    day_int = int(sub['day_int'].iloc[-1])
-                                    x_np = _build_features(sub.iloc[:, :len(df.columns) - 2], bias, scale)  # drop day_int/day_diff for input width alignment
-                                    task_q.put((stn, day_int, x_np), block=True)
-                except Exception:
-                    pass
-                finally:
-                    file_q.task_done()
 
         file_q = ctx_mp.JoinableQueue()
         task_q = ctx_mp.Queue(maxsize=queue_size)
@@ -224,9 +219,9 @@ if __name__ == '__main__':
 
     lstm_model_dir = os.path.join(training, 'lstm', 'checkpoints', f'{variable_}_20251004_1650')
     parquet_dir = os.path.join(training, 'parquet', target_var_)
-    scaler_json =  os.path.join(lstm_model_dir, 'scaler.json')
-    out_dir = os.path.join(training, 'dads', 'node_ctx')  # likely error fixed: adjacent string literals concatenated
+    scaler_json = os.path.join(training, 'scalers', f'{variable_}.json')
+    out_dir = os.path.join(training, 'node_ctx')
 
     chunk_size = 12
-    cache_node_contexts(lstm_model_dir, parquet_dir, scaler_json, out_dir, chunk_size, num_workers=1)
+    cache_node_contexts(lstm_model_dir, parquet_dir, scaler_json, out_dir, chunk_size, num_workers=6)
 # ========================= EOF ====================================================================
