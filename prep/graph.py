@@ -1,5 +1,6 @@
 import json
 import os
+from datetime import datetime
 
 import pandas as pd
 import geopandas as gpd
@@ -9,8 +10,8 @@ from shapely.geometry import LineString, Point
 
 from prep.columns_desc import GEO_FEATURES
 from sklearn.preprocessing import MinMaxScaler
-from utils.station_parameters import station_par_map
 from prep.stations import merge_shapefiles, get_station_observation_metadata
+from sklearn.neighbors import BallTree
 
 
 class Graph:
@@ -62,66 +63,99 @@ class Graph:
             stations = stations[(stations['latitude'] < n) & (stations['latitude'] >= s)]
             stations = stations[(stations['longitude'] < e) & (stations['longitude'] >= w)]
 
-        attrs_select = [c for c in list(GEO_FEATURES) + ['train', self.index_col] if c in stations.columns]  # allow partial
-        attributes = stations[attrs_select].copy()
-        attributes.index = attributes[self.index_col]
-
-        df_copy = attributes.copy()
-        for col in df_copy.columns:
-            df_copy[col] = pd.to_numeric(df_copy[col], errors='coerce')
-        attributes = df_copy.copy()
+        # Build feature matrix from numeric GEO features only; keep 'train' and id out of scaling
+        feat_cols = [c for c in list(GEO_FEATURES) if c in stations.columns]
+        feats = stations[feat_cols].copy()
+        feats.index = stations[self.index_col]
+        # Coerce non-numeric to NaN, handle inf, and impute with column medians
+        for col in feats.columns:
+            feats[col] = pd.to_numeric(feats[col], errors='coerce')
+        # Debug: summarize anomalies before imputation/scaling
+        arr = feats.to_numpy()
+        nonfinite_mask = ~np.isfinite(arr)
+        if nonfinite_mask.any():
+            counts = nonfinite_mask.sum(axis=0)
+            problem_cols = {c: int(n) for c, n in zip(feats.columns, counts) if n > 0}
+            print('Graph prep: non-finite values detected before scaling (per column counts):', problem_cols)
+        large_mask = np.abs(arr) > 1e9
+        if large_mask.any():
+            counts = large_mask.sum(axis=0)
+            large_cols = {c: int(n) for c, n in zip(feats.columns, counts) if n > 0}
+            # show maxima for those columns
+            max_abs = {c: float(np.nanmax(np.abs(arr[:, i]))) for i, c in enumerate(feats.columns) if large_cols.get(c, 0) > 0}
+            print('Graph prep: unusually large magnitudes before scaling (>|1e9|):', large_cols)
+            print('Graph prep: column max |value| before scaling:', max_abs)
+        feats.replace([np.inf, -np.inf], np.nan, inplace=True)
+        if not feats.empty:
+            medians = feats.median(axis=0, numeric_only=True)
+            feats = feats.fillna(medians)
+            # Debug: confirm issues resolved
+            arr2 = feats.to_numpy()
+            if ~np.isfinite(arr2).any():
+                pass
+            else:
+                counts2 = (~np.isfinite(arr2)).sum(axis=0)
+                remaining = {c: int(n) for c, n in zip(feats.columns, counts2) if n > 0}
+                print('Graph prep: remaining non-finite after imputation:', remaining)
 
         scaler = MinMaxScaler()
-        attributes = pd.DataFrame(scaler.fit_transform(attributes),
-                                  columns=attributes.columns,
-                                  index=attributes.index)
-        val_dct, train_dct = {}, {}
-        for i, r in attributes.iterrows():
-            t = r['train']
-            if t:
-                train_dct[i] = r.to_list()[:-1]
+        feats_scaled = pd.DataFrame(scaler.fit_transform(feats),
+                                    columns=feats.columns,
+                                    index=feats.index)
 
-            # put all in val dict, since training stations' nodes are sent to validation nodes for now
-            val_dct[i] = r.to_list()[:-1]
+        train_flags = stations.set_index(self.index_col)['train'] if 'train' in stations.columns else pd.Series(0, index=feats_scaled.index)
+        val_dct, train_dct = {}, {}
+        for i, r in feats_scaled.iterrows():
+            t = int(train_flags.loc[i]) if i in train_flags.index else 0
+            if t:
+                train_dct[i] = r.to_list()
+            # Include all in validation attributes (train nodes also available to validation graph)
+            val_dct[i] = r.to_list()
 
         gdf = stations[[self.index_col, 'train', 'geometry']].copy()
         train_gdf = gdf[gdf['train'] == 1]
         val_gdf = gdf[gdf['train'] == 0]
 
-        train_coords = np.array([[point.y, point.x] for point in train_gdf.geometry])
-        val_coords = np.array([[point.y, point.x] for point in val_gdf.geometry])
+        # Build BallTree on training nodes (lat, lon in radians)
+        spatial_edges_parts = []
+        k = int(self.k_nearest) if self.k_nearest and self.k_nearest > 0 else 1
 
-        # bipartite validation edge set (i.e., from training to validation nodes)
-        distance_val = []
-        for i in range(len(train_coords)):
-            distance_val.append([
-                haversine_distance(train_coords[i][0], train_coords[i][1],
-                                   val_coords[j][0], val_coords[j][1]) for j in range(len(val_coords))])
-        distance_val = np.array(distance_val)
-        k_ind_v = np.argsort(distance_val, axis=0)[:self.k_nearest, :]
+        train_coords = np.array([[pt.y, pt.x] for pt in train_gdf.geometry], dtype=np.float64)
+        train_rad = np.radians(train_coords)
+        tree = BallTree(train_rad, metric='haversine')
+
+        # Validation nodes receive edges from k nearest training nodes
+        val_coords = np.array([[pt.y, pt.x] for pt in val_gdf.geometry], dtype=np.float64)
+        val_rad = np.radians(val_coords)
+        k_v = min(k, len(train_gdf))
+        _, ind_v = tree.query(val_rad, k=k_v)
+
+        # Map local indices to global gdf positions
         train_index_map = {i: j for i, j in enumerate(train_gdf.index)}
-        k_ind_v = np.vectorize(train_index_map.get)(k_ind_v.ravel()).reshape(k_ind_v.shape)
-        row_indices_v = np.repeat(np.arange(len(val_gdf)), self.k_nearest)
-        spatial_edges_v = np.column_stack([row_indices_v, k_ind_v.T.ravel()])
+        mapped_neighbors = np.vectorize(train_index_map.get)(ind_v)
+        row_indices_v = np.repeat(np.arange(len(val_gdf)), k_v)
+        spatial_edges_v = np.column_stack([row_indices_v, mapped_neighbors.ravel()])
+
+        # Map val local rows to global
         val_index_map = {i: j for i, j in enumerate(val_gdf.index)}
         spatial_edges_v[:, 0] = np.vectorize(val_index_map.get)(spatial_edges_v[:, 0])
+        spatial_edges_parts.append(spatial_edges_v)
 
-        # undirected train-to-train edge set
-        distance = []
-        for i in range(len(train_coords)):
-            distance.append([
-                haversine_distance(train_coords[i][0], train_coords[i][1],
-                                   train_coords[j][0], train_coords[j][1]) for j in range(len(train_coords))])
-        distance = np.array(distance)
-        k_indices = np.argsort(distance, axis=0)[:self.k_nearest, :]
+        # Training nodes receive edges from k nearest training nodes (excluding self)
+        k_t = min(k + 1, len(train_gdf))
+        _, ind_t = tree.query(train_rad, k=k_t)
+        # drop self (first neighbor is itself)
+        ind_t = ind_t[:, 1:]
+        k_eff = ind_t.shape[1]
         train_index_map = {i: j for i, j in enumerate(train_gdf.index)}
-        k_indices = np.vectorize(train_index_map.get)(k_indices.ravel()).reshape(k_indices.shape)
-        row_indices = np.repeat(np.arange(len(train_gdf)), self.k_nearest)
-        spatial_edges_t = np.column_stack([row_indices, k_indices.T.ravel()])
-        train_index_map = {i: j for i, j in enumerate(train_gdf.index)}
+        mapped_neighbors_t = np.vectorize(train_index_map.get)(ind_t)
+        row_indices_t = np.repeat(np.arange(len(train_gdf)), k_eff)
+        spatial_edges_t = np.column_stack([row_indices_t, mapped_neighbors_t.ravel()])
+        # Map train local rows to global
         spatial_edges_t[:, 0] = np.vectorize(train_index_map.get)(spatial_edges_t[:, 0])
+        spatial_edges_parts.append(spatial_edges_t)
 
-        spatial_edges = np.concatenate([spatial_edges_v, spatial_edges_t])
+        spatial_edges = np.concatenate(spatial_edges_parts) if spatial_edges_parts else np.empty((0, 2), dtype=int)
 
         to_from = [1, 0]
         spatial_edges = spatial_edges[:, to_from]
@@ -191,25 +225,40 @@ def haversine_distance(lat1, lon1, lat2, lon2):
 
 if __name__ == '__main__':
 
-    d = '/media/research/IrrigationGIS'
-    if not os.path.exists(d):
-        d = '/home/dgketchum/data/IrrigationGIS'
+    d = '/home/dgketchum/data/IrrigationGIS'
 
     training = '/data/ssd2/dads/training'
 
     parquet_root = os.path.join(training, 'parquet')
-    obs_vars = [v for v in os.listdir(parquet_root) if os.path.isdir(os.path.join(parquet_root, v))]
+    obs_vars = ['tmax_obs']
+    # obs_vars = [v for v in os.listdir(parquet_root) if os.path.isdir(os.path.join(parquet_root, v))]
 
     madis_glob = 'madis_02JULY2025_mgrs'
     ghcn_glob = 'ghcn_CANUSA_stations_mgrs'
     madis_shp = os.path.join(d, 'dads', 'met', 'stations', f'{madis_glob}.shp')
     ghcn_shp = os.path.join(d, 'climate', 'ghcn', 'stations', f'{ghcn_glob}.shp')
 
-    merged = merge_shapefiles([ghcn_shp, madis_shp])
+    # Build or load merged stations shapefile; timestamp to day
+    merged_dir = os.path.join(d, 'dads', 'met', 'stations', 'merged')
+
+    ts = datetime.now().strftime('%Y%m%d')
+    merged_name = f'merged_{ts}.shp'
+    merged_path = os.path.join(merged_dir, merged_name)
+    overwrite_merged = True
+    if (not overwrite_merged) and os.path.exists(merged_path):
+        print(f'Loading existing merged stations: {merged_path}')
+        merged = gpd.read_file(merged_path)
+    else:
+        print(f'Building merged stations: {merged_path}')
+        merged = merge_shapefiles([ghcn_shp, madis_shp], save=True, out_dir=merged_dir, filename=merged_name)
 
     obs_meta_shp = os.path.join(training, 'graph', 'station_observations.shp')
-    top_pct = 0.8
-    stations_obs = get_station_observation_metadata(parquet_root, obs_vars, merged, obs_meta_shp, top_percent=top_pct)
+    overwrite_obs_meta = True
+    if (not overwrite_obs_meta) and os.path.exists(obs_meta_shp):
+        print(f'Skipping observation metadata build; loading existing: {obs_meta_shp}')
+        stations_obs = gpd.read_file(obs_meta_shp)
+    else:
+        stations_obs = get_station_observation_metadata(parquet_root, obs_vars, merged, obs_meta_shp)
 
     for target_var in obs_vars:
         output_dir_ = os.path.join(training, 'graph', target_var)
