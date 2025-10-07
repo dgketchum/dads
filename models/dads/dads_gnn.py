@@ -215,7 +215,8 @@ class DadsMetGNN(pl.LightningModule):
         }
 
     def inverse_transform(self, a, idx):
-        a = a * (self.scaler.scale[0, -1, idx] + 5e-8) + self.scaler.bias[0, -1, idx]
+        # Variable-specific MinMaxScaler stored as [1, width]
+        a = a * (self.scaler.scale[0, idx] + 5e-8) + self.scaler.bias[0, idx]
         return a
 
 

@@ -24,8 +24,18 @@ def process_station(fid, row, ts_dir, landsat_dir, cdr_dir, dem_dir, terrain_dir
     # Observed Meteorology ==============================================================================
     sta_file = os.path.join(ts_dir, '{}.parquet'.format(fid))
     ts = pd.read_parquet(sta_file)
+    # Ensure DatetimeIndex with no NaT before downstream date ops
+    if not isinstance(ts.index, pd.DatetimeIndex):
+        ts.index = pd.to_datetime(ts.index, errors='coerce')
     if not hourly_sample:
-        ts.index = ts.index.tz_localize(None)
+        try:
+            ts.index = ts.index.tz_localize(None)
+        except (TypeError, AttributeError):
+            # Index already naive or non-timezone; proceed
+            pass
+    # Drop NaT index rows preemptively to avoid strftime errors
+    ts = ts[ts.index.notna()]
+    ts.sort_index(inplace=True)
 
     non_obs_cols = np.array([c.split('_')[-1] for c in ts.columns if 'obs' not in c])
     cols_cts = np.unique(non_obs_cols, return_counts=True)
@@ -79,7 +89,8 @@ def process_station(fid, row, ts_dir, landsat_dir, cdr_dir, dem_dir, terrain_dir
         missing['terrain_fid'] += 1
         return fid, None, missing
 
-    ts['dt_obs'] = [dt.strftime('%Y%m%d') for dt in ts.index]
+    # Vectorized, safe dt string
+    ts['dt_obs'] = ts.index.strftime('%Y%m%d')
 
     ts['time_diff'] = ts.index.to_series().diff().dt.total_seconds() / 3600
 

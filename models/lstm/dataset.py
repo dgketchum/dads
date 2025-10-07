@@ -13,9 +13,9 @@ def _read_and_chunk_worker(args):
         df = pd.read_parquet(file_path)[feature_names]
         df.dropna(inplace=True)
         if len(df) < chunk_size:
-            return [], []
+            return [], [], []
     except Exception:
-        return [], []
+        return [], [], []
 
     df['day_int'] = df.index.to_julian_date().astype(np.int32)
     df['day_diff'] = df['day_int'].diff()
@@ -26,13 +26,13 @@ def _read_and_chunk_worker(args):
 
     window_size = chunk_size - 1
     if len(is_consecutive) < window_size:
-        return [], []
+        return [], [], []
 
     convolved = np.convolve(is_consecutive, np.ones(window_size, dtype=int), mode='valid')
     valid_start_ilocs = np.where(convolved == window_size)[0]
 
     if valid_start_ilocs.size == 0:
-        return [], []
+        return [], [], []
 
     num_features = len(feature_names)
     chunks = [data_np[i: i + chunk_size, :num_features] for i in valid_start_ilocs]
@@ -64,15 +64,15 @@ class LSTMDataset(Dataset):
         end_days_ = []
 
         if n_workers == 1:
-            results = []
+            results_ = []
             for task in tasks_:
                 r = _read_and_chunk_worker(task)
-                results.append(r)
-
-        with ProcessPoolExecutor(max_workers=n_workers) as executor:
-            results_ = list(tqdm(executor.map(_read_and_chunk_worker, tasks_),
-                                 total=len(tasks_),
-                                 desc="Processing files"))
+                results_.append(r)
+        else:
+            with ProcessPoolExecutor(max_workers=n_workers) as executor:
+                results_ = list(tqdm(executor.map(_read_and_chunk_worker, tasks_),
+                                     total=len(tasks_),
+                                     desc="Processing files"))
 
         for chunks_, names_, days_ in results_:
             all_chunks_.extend(chunks_)

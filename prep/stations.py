@@ -1,4 +1,5 @@
 import os
+from datetime import datetime
 from tqdm import tqdm
 
 import numpy as np
@@ -48,7 +49,7 @@ def get_stations(stations, csv_dir, out_csv, source='madis', bounds=None):
     print(out_csv)
 
 
-def merge_shapefiles(shapefiles):
+def merge_shapefiles(shapefiles, save=False, out_dir=None, filename=None):
     frames = []
     for shp in shapefiles:
         shp_lower = os.path.basename(shp).lower()
@@ -80,18 +81,34 @@ def merge_shapefiles(shapefiles):
         frames.append(df)
 
     merged = gpd.GeoDataFrame(pd.concat(frames, ignore_index=True), crs=frames[0].crs if frames else None)
+    # standard for DADS shapefile columns
+    out_cols =  ['fid', 'latitude', 'longitude', 'elevation', 'MGRS_TILE', 'geometry']
+    merged = merged[out_cols]
+
+    if save:
+        if out_dir is None:
+            raise ValueError('out_dir must be provided when save=True')
+        os.makedirs(out_dir, exist_ok=True)
+        if not filename:
+            ts = datetime.now().strftime('%Y%m%d')
+            filename = f'merged_{ts}.shp'
+        out_path = os.path.join(out_dir, filename)
+        merged.to_file(out_path, crs='EPSG:4326', engine='fiona')
+        print(f'Wrote merged stations shapefile: {out_path}')
+
     return merged
 
 
-def get_station_observation_metadata(parquet_root, obs_vars, stations_gdf, out_shp, top_percent=0.8):
+def get_station_observation_metadata(parquet_root, obs_vars, stations_gdf, out_shp):
     counts = {}
-    for var in obs_vars:
+    # outer progress over variables
+    for var in tqdm(obs_vars, desc='Variables', leave=True):
         var_dir = os.path.join(parquet_root, var)
         if not os.path.isdir(var_dir):
             continue
-        for f in os.listdir(var_dir):
-            if not f.endswith('.parquet'):
-                continue
+        files = [f for f in os.listdir(var_dir) if f.endswith('.parquet')]
+        # inner progress over files for each variable
+        for f in tqdm(files, total=len(files), desc=f'{var} files', leave=False):
             stn = os.path.splitext(f)[0]
             p = os.path.join(var_dir, f)
             try:

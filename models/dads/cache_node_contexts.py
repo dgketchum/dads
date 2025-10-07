@@ -19,7 +19,8 @@ else:
     raise ValueError('No GPU available')
 
 torch.set_float32_matmul_precision('medium')
-torch.cuda.get_device_name(torch.cuda.current_device())
+if torch.cuda.is_available():
+    torch.cuda.get_device_name(torch.cuda.current_device())
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
@@ -117,7 +118,7 @@ def cache_node_contexts(lstm_model_dir, parquet_dir, scaler_json, out_dir, chunk
                 end_idx = i + chunk_size
                 sub = df.iloc[i:end_idx, :]
                 day_int = int(sub['day_int'].iloc[-1])
-                feats = _build_features(sub.iloc[:, :len(df.columns) - 2], scaler.bias, scaler.scale)  # drop day_int/day_diff for input width alignment
+                feats = _build_features(sub.iloc[:, :len(df.columns) - 2], scaler.bias, scaler.scale)
                 assert feats.shape[1] == num_bands_, "feature width must match LSTM num_bands"
                 x = torch.tensor(feats, dtype=torch.float32)
                 x = x.to(device)

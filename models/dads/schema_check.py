@@ -80,4 +80,82 @@ def validate_training_schema(sample_file, scaler_json, lstm_model_dir, edge_attr
     }
     return report
 
+
+if __name__ == '__main__':
+    import json
+    import sys
+
+    # Default preflight for tmax_obs using conventional training layout.
+    target_var = 'tmax_obs'
+    var = target_var.replace('_obs', '')
+
+    # Locate training root
+    training = '/data/ssd2/dads/training'
+    lstm_ckpt = 'tmax_20251004_1650'
+
+    parquet_dir = os.path.join(training, 'parquet', target_var)
+    graph_dir = os.path.join(training, 'graph', target_var)
+    node_ctx_dir = os.path.join(training, 'node_ctx')
+
+    # Pick latest autoencoder checkpoint with embeddings.json
+    ae_root = os.path.join(training, 'autoencoder', 'checkpoints')
+    if not os.path.isdir(ae_root):
+        raise FileNotFoundError(f'Missing autoencoder checkpoints dir: {ae_root}')
+    ae_runs = [os.path.join(ae_root, d) for d in os.listdir(ae_root)
+               if os.path.isdir(os.path.join(ae_root, d))]
+    ae_runs.sort(key=lambda p: os.path.getmtime(p))
+    embedding_dir = None
+    for run in reversed(ae_runs):
+        if os.path.exists(os.path.join(run, 'embeddings.json')):
+            embedding_dir = run
+            break
+    if embedding_dir is None:
+        raise FileNotFoundError('No autoencoder run with embeddings.json found.')
+
+    lstm_model_dir = os.path.join(training, 'lstm','checkpoints', lstm_ckpt)
+    if not os.path.isdir(lstm_model_dir):
+        raise FileNotFoundError(f'Missing LSTM checkpoints dir: {lstm_model_dir}')
+
+    # Graph files
+    train_edge_attr = os.path.join(graph_dir, 'train_edge_attr.json')
+    train_edge_index = os.path.join(graph_dir, 'train_edge_index.json')
+    val_edge_attr = os.path.join(graph_dir, 'val_edge_attr.json')
+    val_edge_index = os.path.join(graph_dir, 'val_edge_index.json')
+    if not os.path.exists(train_edge_attr) or not os.path.exists(train_edge_index):
+        raise FileNotFoundError(f'Missing graph files in {graph_dir}')
+
+    # Scaler
+    scaler_json = os.path.join(training, 'scalers', f'{var}.json')
+    if not os.path.exists(scaler_json):
+        raise FileNotFoundError(f'Missing scaler json: {scaler_json}')
+
+    # Choose a sample station from training edge_attr that has a parquet file
+    with open(train_edge_attr, 'r') as f:
+        train_attr = json.load(f)
+    station = None
+    for st in train_attr.keys():
+        p = os.path.join(parquet_dir, f'{st}.parquet')
+        if os.path.exists(p):
+            station = st
+            sample_file = p
+            break
+    if station is None:
+        # fallback: any parquet file
+        files = [f for f in os.listdir(parquet_dir) if f.endswith('.parquet')]
+        if not files:
+            raise FileNotFoundError(f'No parquet files in {parquet_dir}')
+        sample_file = os.path.join(parquet_dir, files[0])
+
+    report = validate_training_schema(sample_file,
+                                      scaler_json,
+                                      lstm_model_dir,
+                                      train_edge_attr,
+                                      embedding_dir,
+                                      edge_map_file=train_edge_index,
+                                      node_ctx_dir=node_ctx_dir)
+    print('Schema check report:')
+    for k, v in report.items():
+        print(f'- {k}: {v}')
+    print('\nOK: schema looks consistent for', target_var)
+
 # ========================= EOF ====================================================================
