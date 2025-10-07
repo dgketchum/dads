@@ -76,9 +76,12 @@ def load_variable_scaler(parquet_root, variable, feature_names=None):
 
 
 if __name__ == '__main__':
-    parquet_root_ = '/data/ssd2/dads/training/parquet'
+    """"""
     variable_ = 'tmax'
-    scaler_dir_ = None
+
+    parquet_root_ = '/data/ssd2/dads/training/parquet'
+    scaler_dir_ = '/data/ssd2/dads/training/scalers'
+
     path_ = build_variable_scaler(parquet_root_, variable_, scaler_dir_)
-    _ = path_
+
 # ========================= EOF ====================================================================

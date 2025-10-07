@@ -13,6 +13,7 @@ from models.autoencoder.weather_encoder import WeatherAutoencoder
 
 from prep.columns_desc import GEO_FEATURES
 import pandas as pd
+from prep.build_variable_scaler import load_variable_scaler
 
 device_name = None
 if torch.cuda.is_available():
@@ -85,6 +86,10 @@ def train_model(dirpath, parquet, target_var, columns, chunk_size, meta_path,
     # file_map['train'] = file_map['train'][:1000]
     # file_map['val'] = file_map['val'][:500]
 
+    parquet_root = os.path.dirname(parquet)
+    var_name = target_var.replace('_obs', '')
+    scaler_obj, _, _ = load_variable_scaler(parquet_root, var_name, feature_names=actual_cols)
+
     train_dataset = WeatherDataset(file_paths=file_map['train'],
                                    expected_width=len(actual_cols),
                                    col_indices=len(selected_indices),
@@ -92,10 +97,8 @@ def train_model(dirpath, parquet, target_var, columns, chunk_size, meta_path,
                                    target_indices=target_idx,
                                    expected_columns=actual_cols,
                                    selected_indices=selected_indices,
-                                   num_workers=12)
-
-    if logging_csv:
-        train_dataset.save_scaler(os.path.join(dirpath, 'scaler.json'))
+                                   num_workers=12,
+                                   scaler=scaler_obj)
 
     train_dataloader = DataLoader(train_dataset,
                                   batch_size=batch_size,
@@ -111,7 +114,8 @@ def train_model(dirpath, parquet, target_var, columns, chunk_size, meta_path,
                                  target_indices=target_idx,
                                  expected_columns=actual_cols,
                                  selected_indices=selected_indices,
-                                 num_workers=12)
+                                 num_workers=12,
+                                 scaler=scaler_obj)
 
     val_dataloader = DataLoader(val_dataset,
                                 batch_size=batch_size,

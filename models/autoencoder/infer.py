@@ -7,6 +7,7 @@ import pandas as pd
 from torch.utils.data import Dataset, DataLoader
 from models.autoencoder.weather_encoder import WeatherAutoencoder
 from models.scalers import MinMaxScaler
+from prep.build_variable_scaler import load_variable_scaler
 import matplotlib.pyplot as plt
 from sklearn.manifold import TSNE
 
@@ -70,8 +71,8 @@ class InferenceDataset(Dataset):
 
     def __getitem__(self, idx):
         chunk = self.data[idx]
-        x = chunk[:, self.selected_indices]
-        x[:, :] = self.scale_chunk(x)
+        full = self.scale_chunk(chunk)
+        x = full[:, self.selected_indices]
         return x
 
 
@@ -102,13 +103,9 @@ def infer_embeddings(model_dir, data_dir, metadata_path, embedding_path, plot=Fa
     model.to(device)
     model.eval()
 
-    scaler_path = os.path.join(model_dir, 'scaler.json')
-    with open(scaler_path, 'r') as f:
-        dct = json.load(f)
-
-    scaler = MinMaxScaler(out_range=(0, 1.0), axis=0)
-    scaler.bias = np.array(dct['bias']).reshape(1, -1)
-    scaler.scale = np.array(dct['scale']).reshape(1, -1)
+    var_name = meta['target_var'].replace('_obs', '')
+    parquet_root = os.path.dirname(data_dir)
+    scaler, _, _ = load_variable_scaler(parquet_root, var_name, feature_names=expected_columns)
 
     embeddings = {}
     all_embeddings = []

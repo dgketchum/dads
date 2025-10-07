@@ -168,7 +168,6 @@ if __name__ == '__main__':
     d = '/home/dgketchum/data/IrrigationGIS/dads'
 
     target_var_ = 'tmax'
-    write_scaler = True
 
     training_ = '/data/ssd2/dads/training'
     sequences_ = os.path.join(training_, 'parquet')
@@ -178,10 +177,7 @@ if __name__ == '__main__':
     os.makedirs(chk_, exist_ok=True)
     logger_csv_ = os.path.join(chk_, 'training_{}.csv'.format(now_))
 
-    if write_scaler:
-        scaler_ = os.path.join(chk_, 'scaler.json')
-    else:
-        scaler_ = os.path.join(training_, 'lstm', 'checkpoints', 'tmax_20251004_1508', 'scaler.json')
+    scaler_ = os.path.join(training_, 'scalers', f'{target_var_}.json')
 
     train_edges_ = os.path.join(training_, 'graph', 'train_edge_attr.json')
 

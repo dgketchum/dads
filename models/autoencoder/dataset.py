@@ -15,6 +15,7 @@ from models.scalers import MinMaxScaler
 
 class WeatherDataset(Dataset):
     def __init__(self, file_paths, expected_width, col_indices, chunk_size,
+                 scaler,
                  target_indices=None, transform=None, expected_columns=None, selected_indices=None,
                  num_workers=12):
 
@@ -100,8 +101,7 @@ class WeatherDataset(Dataset):
             raise ValueError('No valid chunks to train on.')
         self.data = torch.cat(all_data, dim=0)
 
-        self.scaler = MinMaxScaler()
-        self.scaler.fit(self.get_valid_data_for_scaling())
+        self.scaler = scaler
 
         # map from station id to sample indices to enable in-station positive sampling
         self.station_to_indices = {}
@@ -163,15 +163,12 @@ class WeatherDataset(Dataset):
 
     def __getitem__(self, idx):
 
-        chunk = self.data[idx].clone()
-
-        # select requested columns in order
+        full = self.data[idx].clone()
+        full[:, :] = self.scale_chunk(full)
         if self.selected_indices is not None:
-            chunk = chunk[:, self.selected_indices]
-            chunk[:, :] = self.scale_chunk(chunk)
+            chunk = full[:, self.selected_indices]
         else:
-            chunk = chunk[:, :self.col_indices]
-            chunk[:, :self.col_indices] = self.scale_chunk(chunk[:, :self.col_indices])
+            chunk = full[:, :self.col_indices]
 
         if isinstance(self.target_indices[0], tuple):
             target = diff_pairs(chunk, self.target_indices)
@@ -193,22 +190,20 @@ class WeatherDataset(Dataset):
         negative_chunk = self.get_negative_pair(idx)
 
         if positive_chunk is not None:
-            positive_chunk = positive_chunk.clone()
+            pos_full = positive_chunk.clone()
+            pos_full[:, :] = self.scale_chunk(pos_full)
             if self.selected_indices is not None:
-                positive_chunk = positive_chunk[:, self.selected_indices]
-                positive_chunk[:, :] = self.scale_chunk(positive_chunk)
+                positive_chunk = pos_full[:, self.selected_indices]
             else:
-                positive_chunk = positive_chunk[:, :self.col_indices]
-                positive_chunk[:, :self.col_indices] = self.scale_chunk(positive_chunk[:, :self.col_indices])
+                positive_chunk = pos_full[:, :self.col_indices]
 
         if negative_chunk is not None:
-            negative_chunk = negative_chunk.clone()
+            neg_full = negative_chunk.clone()
+            neg_full[:, :] = self.scale_chunk(neg_full)
             if self.selected_indices is not None:
-                negative_chunk = negative_chunk[:, self.selected_indices]
-                negative_chunk[:, :] = self.scale_chunk(negative_chunk)
+                negative_chunk = neg_full[:, self.selected_indices]
             else:
-                negative_chunk = negative_chunk[:, :self.col_indices]
-                negative_chunk[:, :self.col_indices] = self.scale_chunk(negative_chunk[:, :self.col_indices])
+                negative_chunk = neg_full[:, :self.col_indices]
 
         return chunk, target, mask, positive_chunk, negative_chunk
 

@@ -252,7 +252,7 @@ if __name__ == '__main__':
     target_var = 'tmax'
 
     d = '/home/dgketchum/data/IrrigationGIS/dads'
-    training = '/home/dgketchum/training'
+    training = '/data/ssd2/dads/training'
 
     print('========================== modeling {} =========================='.format(target_var))
 
@@ -275,7 +275,7 @@ if __name__ == '__main__':
     workers = 12
     device_ = 'gpu'
 
-    node_ctx_dir = os.path.join(dads, 'node_ctx')
+    node_ctx_dir = os.path.join(training, 'node_ctx')
     train_model(chk, param_dir, model_dir, encoder_dir, edges, batch_size=256, nodes=5, dropout=0.5, strided=True,
                 learning_rate=0.001, n_workers=workers, logging_csv=logger_csv, device=device_, sample=None,
                 node_ctx_dir=node_ctx_dir)
