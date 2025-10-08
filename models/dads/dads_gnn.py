@@ -28,7 +28,6 @@ class DadsMetGNN(pl.LightningModule):
         self.log_csv = log_csv
         self.two_hop = two_hop
 
-        data_frequency = lstm_meta['data_frequency']
         self.column_indices = lstm_meta['column_indices']
         self.tensor_width = lstm_meta['tensor_width']
         self.scaler = lstm_meta['scaler']

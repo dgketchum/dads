@@ -72,7 +72,7 @@ class LSTMDataset(Dataset):
             with ProcessPoolExecutor(max_workers=n_workers) as executor:
                 results_ = list(tqdm(executor.map(_read_and_chunk_worker, tasks_),
                                      total=len(tasks_),
-                                     desc="Processing files"))
+                                     desc="Chunking LSTM Inputs"))
 
         for chunks_, names_, days_ in results_:
             all_chunks_.extend(chunks_)

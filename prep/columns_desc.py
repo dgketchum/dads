@@ -1,20 +1,3 @@
-MET_FEATURES = [
-    'CAPE_nl_hr',
-    'CRainf_frac_nl_hr',
-    'LWdown_nl_hr',
-    'PSurf_nl_hr',
-    'PotEvap_nl_hr',
-    'Qair_nl_hr',
-    'Rainf_nl_hr',
-    'SWdown_nl_hr',
-    'Tair_nl_hr',
-    'Wind_E_nl_hr',
-    'Wind_N_nl_hr',
-    'dt_nl_hr',
-    'lat_nl_hr',
-    'lon_nl_hr',
-]
-
 CDR_FEATURES = ['SR1', 'SR2', 'SR3', 'BT1', 'BT2', 'BT3']
 LANDSAT_FEATURES = ['B10', 'B2', 'B3', 'B4', 'B5', 'B6', 'B7']
 TERRAIN_FEATURES = ['aspect', 'elevation', 'slope', 'tpi_10000', 'tpi_22500', 'tpi_2500', 'tpi_500']
@@ -42,8 +25,6 @@ ADDED_FEATURES = [
     'hour_cos',
     'time_diff'
 ]
-
-PTH_COLUMNS = TARGETS + COMPARISON_FEATURES + MET_FEATURES + GEO_FEATURES + ADDED_FEATURES
 
 if __name__ == '__main__':
     pass
