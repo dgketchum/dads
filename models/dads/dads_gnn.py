@@ -11,8 +11,6 @@ from torch import optim as optim
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from torch_geometric.nn import LayerNorm, TransformerConv
 
-from models.lstm.lstm import LSTMPredictor
-
 
 class DadsMetGNN(pl.LightningModule):
     def __init__(self, pretrained_lstm_path, output_dim, n_nodes=5, hidden_dim=64, edge_attr_dim=20,
@@ -32,41 +30,21 @@ class DadsMetGNN(pl.LightningModule):
         self.tensor_width = lstm_meta['tensor_width']
         self.scaler = lstm_meta['scaler']
 
-        # Use daily-only LSTM from models.lstm.lstm
-        hf_start = self.column_indices[3] if len(self.column_indices) > 3 else self.tensor_width
-        lf_bands = hf_start - 2
-        model_path = os.path.join(pretrained_lstm_path, 'best_model.ckpt')
-        self.lstm = LSTMPredictor.load_from_checkpoint(model_path,
-                                                       num_bands=lf_bands,
-                                                       learning_rate=learning_rate,
-                                                       expansion_factor=2,
-                                                       log_csv=None)
-        for param in self.lstm.parameters():
-            param.requires_grad = False
-
         self.node_proj = nn.LazyLinear(hidden_dim)
         self.node_lstm_proj = nn.LazyLinear(hidden_dim)
+        self.fuse = nn.Linear(hidden_dim * 2, hidden_dim)
         self.gnn_layer = TransformerConv(hidden_dim, hidden_dim, heads=1, edge_dim=edge_attr_dim, dropout=dropout)
         self.norm = LayerNorm(hidden_dim)
         if self.two_hop:
             self.gnn_layer2 = TransformerConv(hidden_dim, hidden_dim, heads=1, edge_dim=edge_attr_dim, dropout=dropout)
             self.norm2 = LayerNorm(hidden_dim)
-
-        self.lstm_transform = nn.Linear(output_dim, hidden_dim)
         self.dropout = nn.Dropout(dropout)
-        self.fc = nn.Linear(hidden_dim * 2, output_dim)
+        self.fc = nn.Linear(hidden_dim, output_dim)
 
-    def forward(self, graph, sequence):
-
-        lstm_output = self.lstm(sequence)
-        if lstm_output.ndim == 0:
-            lstm_output = lstm_output.unsqueeze(0)
-        if lstm_output.ndim == 1:
-            lstm_output = lstm_output.unsqueeze(-1)
-        lstm_feat = self.lstm_transform(lstm_output)
+    def forward(self, graph):
 
         x = self.node_proj(graph.x)
-        # If provided, include per-node LSTM outputs (neighbors carry signal; target can be zeros)
+        # If provided, concatenate per-node LSTM outputs with node features, then fuse
         if hasattr(graph, 'node_lstm'):
             node_lstm = graph.node_lstm
             if node_lstm.dim() == 1:
@@ -74,7 +52,8 @@ class DadsMetGNN(pl.LightningModule):
             node_lstm = node_lstm.float()
             assert node_lstm.shape[0] == graph.x.shape[0], "node_lstm rows must match nodes"
             node_lstm_feat = self.node_lstm_proj(node_lstm)
-            x = x + node_lstm_feat
+            x = torch.cat([x, node_lstm_feat], dim=-1)
+            x = self.fuse(x)
         if hasattr(graph, 'edge_attr'):
             assert graph.edge_attr.dim() == 2 and graph.edge_attr.shape[1] == self.edge_attr_dim, "edge_attr dim mismatch"
         x = self.gnn_layer(x, graph.edge_index, graph.edge_attr)
@@ -98,14 +77,13 @@ class DadsMetGNN(pl.LightningModule):
             target_idx = starts
 
         x_t = x[target_idx]
-        combined = torch.cat([x_t, lstm_feat], dim=-1)
-        out = self.fc(combined)
+        out = self.fc(x_t)
         out = out.squeeze(-1)
-        return out, lstm_output.squeeze(-1)
+        return out
 
     def training_step(self, batch, batch_idx):
-        graph, y_obs, sequence = batch
-        y_hat, lstm = self(graph, sequence)
+        graph, y_obs = batch
+        y_hat = self(graph)
 
         y_obs = y_obs[:, -1:]
 
@@ -114,11 +92,10 @@ class DadsMetGNN(pl.LightningModule):
         return loss
 
     def validation_step(self, batch, batch_idx):
-        graph, y_obs, sequence = batch
-        y_hat, lstm = self(graph, sequence)
+        graph, y_obs = batch
+        y_hat = self(graph)
 
         y_hat = y_hat.squeeze()
-        y_lstm = lstm.squeeze()
         y_obs = y_obs[:, -1]
         loss_obs = self.criterion(y_hat, y_obs)
         self.log('val_loss', loss_obs, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True,
@@ -127,30 +104,21 @@ class DadsMetGNN(pl.LightningModule):
         if len(y_hat.shape) < 1:
             y_obs = y_obs.unsqueeze(0)
             y_hat = y_hat.unsqueeze(0)
-            y_lstm = y_lstm.unsqueeze(0)
 
         y_obs = self.inverse_transform(y_obs, idx=self.column_indices[0])
         y_hat = self.inverse_transform(y_hat, idx=self.column_indices[0])
-        y_lstm = self.inverse_transform(y_lstm, idx=self.column_indices[0])
 
         y_obs = y_obs.detach().cpu().numpy()
         y_hat = y_hat.detach().cpu().numpy()
-        y_lstm = y_lstm.detach().cpu().numpy()
 
         rmse_dads = root_mean_squared_error(y_obs, y_hat)
-        rmse_lstm = root_mean_squared_error(y_obs, y_lstm)
 
         r2_dads = r2_score(y_obs, y_hat)
-        r2_lstm = r2_score(y_obs, y_lstm)
 
         self.log('r2_dads', r2_dads, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True,
                  batch_size=graph.batch_size)
-        self.log('r2_lstm', r2_lstm, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True,
-                 batch_size=graph.batch_size)
 
         self.log('rmse_dads', rmse_dads, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True,
-                  batch_size=graph.batch_size)
-        self.log('rmse_lstm', rmse_lstm, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True,
                   batch_size=graph.batch_size)
 
         current_lr = self.trainer.optimizers[0].param_groups[0]['lr']
@@ -170,9 +138,7 @@ class DadsMetGNN(pl.LightningModule):
                 train_loss = torch.nan
             val_loss = self.trainer.callback_metrics['val_loss'].item()
             r2_dads = self.trainer.callback_metrics['r2_dads'].item()
-            r2_lstm = self.trainer.callback_metrics['r2_lstm'].item()
             rmse_dads = self.trainer.callback_metrics['rmse_dads'].item()
-            rmse_lstm = self.trainer.callback_metrics['rmse_lstm'].item()
             current_lr = self.trainer.optimizers[0].param_groups[0]['lr']
             lr_ratio = current_lr / self.learning_rate
 
@@ -180,9 +146,7 @@ class DadsMetGNN(pl.LightningModule):
                         round(train_loss, 4),
                         round(val_loss, 4),
                         round(r2_dads, 4),
-                        round(r2_lstm, 4),
                         round(rmse_dads, 4),
-                        round(rmse_lstm, 4),
                         round(current_lr, 4),
                         round(lr_ratio, 4)]
 
@@ -196,9 +160,8 @@ class DadsMetGNN(pl.LightningModule):
                     header = next(reader)
                     f.seek(0)
                     writer = csv.writer(f)
-                    writer.writerow(['epoch', 'train_loss', 'val_loss', 'r2_dads', 'r2_lstm',
-                                     'rmse_dads', 'rmse_lstm',
-                                     'lr', 'lr_ratio'])
+                    writer.writerow(['epoch', 'train_loss', 'val_loss', 'r2_dads',
+                                     'rmse_dads', 'lr', 'lr_ratio'])
                     writer.writerow(header)
 
     def configure_optimizers(self):

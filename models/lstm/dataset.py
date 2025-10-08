@@ -101,19 +101,21 @@ class LSTMDataset(Dataset):
 
         y = chunk[:, 0]
         gm = chunk[:, 1]
-        # Use only past observations as features; ignore reanalysis columns
-        obs_feat = y.unsqueeze(-1)
-        obs_shift = obs_feat.clone()
-        obs_shift[1:, 0] = obs_feat[:-1, 0]
-        obs_shift[0, 0] = obs_feat[0, 0]
-        input_width = chunk.shape[1] - 2
-        lf = obs_shift.repeat(1, input_width)
-        assert lf.shape[1] == input_width, "lf width != num_features - 2"
-
         if self.return_station_name:
+            # Dads path: omit target-node sequence to drop dependency on target meteorology
+            seq = torch.empty(0)
             day_int = self.day_ints[idx]
-            return y, gm, lf, station_name, day_int
+            return y, gm, seq, station_name, day_int  # Dads: no target sequence
         else:
+            # LSTM training path: build sequence from past observations only (ignore reanalysis columns)
+            obs_feat = y.unsqueeze(-1)
+            obs_shift = obs_feat.clone()
+            if obs_shift.shape[0] > 1:
+                obs_shift[1:, 0] = obs_feat[:-1, 0]
+            obs_shift[0, 0] = obs_feat[0, 0]
+            input_width = chunk.shape[1] - 2
+            lf = obs_shift.repeat(1, input_width)
+            assert lf.shape[1] == input_width, "lf width != num_features - 2"
             return y, gm, lf
 
 

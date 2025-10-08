@@ -30,6 +30,9 @@ def train_model(dirpath, parquet_dir, lstm_model, embeddings, edge_info, nodes=5
     parquet_root = os.path.dirname(parquet_dir)
     _scaler_obj, scaler, _ = load_variable_scaler(parquet_root, var_name)
 
+    # Require node contexts
+    assert node_ctx_dir is not None and os.path.isdir(node_ctx_dir), "node_ctx_dir required and must exist"
+
     # Station-based split from graph prep
     all_files = {os.path.splitext(f)[0]: os.path.join(parquet_dir, f)
                  for f in os.listdir(parquet_dir) if f.endswith('.parquet')}
@@ -42,7 +45,9 @@ def train_model(dirpath, parquet_dir, lstm_model, embeddings, edge_info, nodes=5
         val_attr_map = json.load(f)
     train_stations = set(train_attr_map.keys())
     val_stations = set(val_attr_map.keys()) - train_stations
-    t_files = [all_files[s] for s in train_stations if s in all_files]
+
+    t_files = [all_files[s] for s in train_stations if s in all_files][:100]
+    v_files = [all_files[s] for s in val_stations if s in all_files][:100]
 
     train_dataset = DadsDataset(nodes, t_files, meta, embeddings, train_edges, train_attr,
                                 scaler=scaler, sample=sample[0], node_ctx_dir=node_ctx_dir,
@@ -55,7 +60,6 @@ def train_model(dirpath, parquet_dir, lstm_model, embeddings, edge_info, nodes=5
                                   persistent_workers=bool(n_workers > 0),
                                   pin_memory=(device == 'gpu'))
 
-    v_files = [all_files[s] for s in val_stations if s in all_files]
     val_edges = os.path.join(edge_info, 'val_edge_index.json')
     val_attr = os.path.join(edge_info, 'val_edge_attr.json')
 
