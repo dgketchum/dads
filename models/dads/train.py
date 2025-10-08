@@ -11,7 +11,7 @@ from models.dads.dataset import DadsDataset
 from prep.build_variable_scaler import load_variable_scaler
 
 
-def train_model(dirpath, parquet_dir, lstm_model, embeddings, edge_info, nodes=5, batch_size=1, strided=False,
+def train_model(dirpath, parquet_dir, lstm_model, embeddings, edge_info, nodes=5, batch_size=1,
                 dropout=0.2, learning_rate=0.01, n_workers=1, logging_csv=None, device='gpu', sample=None,
                 node_ctx_dir=None):
     """"""
@@ -45,24 +45,30 @@ def train_model(dirpath, parquet_dir, lstm_model, embeddings, edge_info, nodes=5
     t_files = [all_files[s] for s in train_stations if s in all_files]
 
     train_dataset = DadsDataset(nodes, t_files, meta, embeddings, train_edges, train_attr,
-                                scaler=scaler, sample=sample[0], node_ctx_dir=node_ctx_dir)
+                                scaler=scaler, sample=sample[0], node_ctx_dir=node_ctx_dir,
+                                lstm_workers=n_workers)
 
     train_dataloader = DataLoader(train_dataset,
                                   batch_size=batch_size,
                                   shuffle=True,
-                                  num_workers=n_workers)
+                                  num_workers=n_workers,
+                                  persistent_workers=bool(n_workers > 0),
+                                  pin_memory=(device == 'gpu'))
 
     v_files = [all_files[s] for s in val_stations if s in all_files]
     val_edges = os.path.join(edge_info, 'val_edge_index.json')
     val_attr = os.path.join(edge_info, 'val_edge_attr.json')
 
     val_dataset = DadsDataset(nodes, v_files, meta, embeddings, val_edges, val_attr,
-                              scaler=scaler, sample=sample[1], node_ctx_dir=node_ctx_dir)
+                              scaler=scaler, sample=sample[1], node_ctx_dir=node_ctx_dir,
+                              lstm_workers=n_workers)
 
     val_dataloader = DataLoader(val_dataset,
                                 batch_size=batch_size,
                                 shuffle=False,
-                                num_workers=n_workers)
+                                num_workers=n_workers,
+                                persistent_workers=bool(n_workers > 0),
+                                pin_memory=(device == 'gpu'))
 
     meta['column_indices'] = train_dataset.column_indices
     meta['tensor_width'] = train_dataset.tensor_width
@@ -108,7 +114,7 @@ if __name__ == '__main__':
     lstm_model_ = os.path.join(training, 'lstm', 'checkpoints', 'tmax_20251004_1650')
 
     # data
-    parquet_dir = os.path.join(training, 'parquet', f'{target_var}_obs')
+    parquet_dir_ = os.path.join(training, 'parquet', f'{target_var}_obs')
 
     # graph (per target)
     edges = os.path.join(training, 'graph', f'{target_var}_obs')
@@ -125,7 +131,7 @@ if __name__ == '__main__':
     device_ = 'gpu'
 
     node_ctx_dir = os.path.join(training, 'node_ctx')
-    train_model(chk, parquet_dir, lstm_model_, encoder_dir, edges, batch_size=256, nodes=5, dropout=0.5, strided=True,
+    train_model(chk, parquet_dir_, lstm_model_, encoder_dir, edges, batch_size=256, nodes=5, dropout=0.5,
                 learning_rate=0.001, n_workers=workers, logging_csv=logger_csv, device=device_, sample=None,
                 node_ctx_dir=node_ctx_dir)
 # ========================= EOF ====================================================================
