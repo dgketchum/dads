@@ -9,11 +9,12 @@ from torch_geometric.data import Data
 
 from models.lstm.dataset import LSTMDataset
 from models.scalers import MinMaxScaler
+from tqdm import tqdm
 
 
 class DadsDataset(Dataset):
     def __init__(self, n_nodes, lstm_input_files, lstm_meta, embedding_dir, edge_map_file, edge_attr_file,
-                 scaler, sample=None, node_ctx_dir=None):
+                 scaler, sample=None, node_ctx_dir=None, lstm_workers=1):
         """"""
 
         embedding_dict_file = os.path.join(embedding_dir, 'embeddings.json')
@@ -42,33 +43,24 @@ class DadsDataset(Dataset):
         with open(edge_map_file, 'r') as f:
             edge_map = json.load(f)
 
-        node_keys = list(self.embeddings.keys())
-        attr_keys = list(self.edge_attr.keys())
-        edge_keys = list(edge_map.keys())
+        node_keys = set(self.embeddings.keys())
+        attr_keys = set(self.edge_attr.keys())
+        valid_nodes = node_keys & attr_keys
 
         attributes = {}
-        for k in edge_keys:
-            final_edges = []
-
+        for k in tqdm(edge_map.keys(), desc='Building Graph Edge Attributes'):
+            if k not in valid_nodes:
+                continue
             try:
                 possible_edges = edge_map[k]
             except KeyError:
                 continue
+            # Preserve order from possible_edges; keep only valid neighbors and exclude self
+            filtered = [e for e in possible_edges if e != k and e in valid_nodes]
+            if len(filtered) >= n_nodes:
+                attributes[k] = filtered[:n_nodes]
 
-            for e in possible_edges:
-
-                if k == e:
-                    continue
-
-                if e in node_keys and e in attr_keys:
-                    final_edges.append(e)
-
-                if len(final_edges) == n_nodes:
-                    if k in node_keys and k in attr_keys:
-                        attributes[k] = final_edges
-                    break
-
-        file_keys = [os.path.splitext(os.path.basename(f))[0] for f in lstm_input_files]
+        file_keys = {os.path.splitext(os.path.basename(f))[0] for f in lstm_input_files}
         attributes = {k: v for k, v in attributes.items() if k in file_keys}
 
         if sample:
@@ -76,11 +68,11 @@ class DadsDataset(Dataset):
             keys = np.random.choice(keys, sample)
             attributes = {k: v for k, v in attributes.items() if k in keys}
 
-        filter_files = [f for f in lstm_input_files if os.path.splitext(os.path.basename(f))[0] in attributes.keys()]
+        attr_set = set(attributes.keys())
+        filter_files = [f for f in lstm_input_files if os.path.splitext(os.path.basename(f))[0] in attr_set]
 
         self.edge_map = attributes
 
-        data_frequency = lstm_meta.get('data_frequency', 'daily')
         self.model = 'lstm'
         # Determine feature names and tensor width from first file
         first_file = filter_files[0]
@@ -108,7 +100,7 @@ class DadsDataset(Dataset):
                                         sample_dimensions=(chunk_size, num_features),
                                         scaler=scaler_obj,
                                         return_station_name=True,
-                                        n_workers=1)
+                                        n_workers=lstm_workers)
         self.node_ctx_dir = node_ctx_dir
 
     def __len__(self):
@@ -139,15 +131,30 @@ class DadsDataset(Dataset):
 
         if self.node_ctx_dir is not None:
             ctx = []
+            missing = []
             for stn in source_stations:
                 p = os.path.join(self.node_ctx_dir, stn, f"{day_int}.npy")
-                v = np.load(p)
-                ctx.append(torch.from_numpy(v))
-            ctx_t = torch.stack(ctx, dim=0).float()
-            zero_row = torch.zeros_like(ctx_t[0])
-            node_ctx = torch.cat([zero_row.unsqueeze(0), ctx_t], dim=0)
-            assert node_ctx.shape[0] == x.shape[0], "node_lstm rows must match nodes"
-            graph.node_lstm = node_ctx
+                if os.path.exists(p):
+                    v = np.load(p)
+                    ctx.append(torch.from_numpy(v))
+                    missing.append(False)
+                else:
+                    ctx.append(None)
+                    missing.append(True)
+            if any(missing):
+                # Infer shape from first available context; zeros for missing. If none, skip contexts.
+                tmpl = next((t for t in ctx if t is not None), None)
+                if tmpl is not None:
+                    zero_vec = torch.zeros_like(tmpl)
+                    ctx = [zero_vec if t is None else t for t in ctx]
+                else:
+                    ctx = None
+            if ctx is not None:
+                ctx_t = torch.stack(ctx, dim=0).float()
+                zero_row = torch.zeros_like(ctx_t[0])
+                node_ctx = torch.cat([zero_row.unsqueeze(0), ctx_t], dim=0)
+                assert node_ctx.shape[0] == x.shape[0], "node_lstm rows must match nodes"
+                graph.node_lstm = node_ctx
 
         return graph, y, seq
 
