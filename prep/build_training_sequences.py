@@ -48,7 +48,11 @@ def process_station(fid, row, ts_dir, landsat_dir, cdr_dir, dem_dir, terrain_dir
 
     # Landsat Surface Reflectance/Radiance ==============================================================
     landsat_file = os.path.join(landsat_dir, '{}.csv'.format(fid))
-    landsat = pd.read_csv(landsat_file, index_col='Unnamed: 0', parse_dates=True)
+    try:
+        landsat = pd.read_csv(landsat_file, index_col='Unnamed: 0', parse_dates=True)
+    except pd.errors.EmptyDataError:
+        return fid, None, missing
+
     if hourly_sample:
         landsat = landsat.resample('h').ffill()
     idx = [i for i in landsat.index if i in ts.index]
@@ -221,12 +225,12 @@ def join_training(stations, ts_dir, landsat_dir, cdr, sol_dir, terrain_dir, out_
     args = [(f, row, ts_dir, landsat_dir, cdr, sol_dir, terrain_dir, out_dir, overwrite, hourly)
             for f, row in zip(fids, rows)]
 
-    if debug:
+    if debug or workers <= 1:
         results = []
         for arg_tuple in args:
             fid = arg_tuple[0]
-            # if fid != 'COVM':
-            #     continue
+            if fid != 'CA006158350':
+                continue
             f, stat, missing = process_station(*arg_tuple)
             results.append((f, stat, missing))
 
@@ -261,7 +265,7 @@ if __name__ == '__main__':
     if not os.path.exists(d):
         d = '/home/dgketchum/data/IrrigationGIS'
 
-    _source = 'ghcn'
+    _source = 'madis'
 
     if _source == 'madis':
         glob_ = 'madis_02JULY2025_mgrs'
@@ -288,7 +292,7 @@ if __name__ == '__main__':
                   out_dir=training,
                   source=_source,
                   overwrite=overwrite_,
-                  workers=14,
+                  workers=12,
                   debug=False,
                   )
 
