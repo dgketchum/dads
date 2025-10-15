@@ -4,6 +4,7 @@ from concurrent.futures import ProcessPoolExecutor
 import geopandas as gpd
 import pandas as pd
 from tqdm import tqdm
+from utils.station_parameters import station_par_map
 
 OBS_TARGETS = ['rsds', 'tmax', 'tmin', 'ea', 'prcp', 'wind']
 
@@ -56,7 +57,8 @@ def _assess_madis_file(path):
 
 def assess_downloaded_madis(records_dir, out_csv, joined_dir, training_dir,
                             landsat_dir, cdr_dir, solrad_dir, terrain_dir,
-                            out_shp=None, num_workers=12, debug_limit=None):
+                            out_shp=None, num_workers=12, debug_limit=None,
+                            stations_csv=None):
     # Required directories must exist
     req = [records_dir, joined_dir, training_dir, landsat_dir, cdr_dir, solrad_dir, terrain_dir]
     for r in req:
@@ -66,6 +68,27 @@ def assess_downloaded_madis(records_dir, out_csv, joined_dir, training_dir,
     files = [os.path.join(records_dir, f) for f in os.listdir(records_dir) if f.endswith('.parquet')]
     if debug_limit:
         files = files[:int(debug_limit)]
+
+    # Optional stations CSV to reuse externally curated start/end dates
+    start_end_map = {}
+    if stations_csv and os.path.exists(stations_csv):
+        try:
+            kw = station_par_map('madis')
+            st_df = pd.read_csv(stations_csv)
+            idx_col = kw.get('index')
+            if idx_col in st_df.columns:
+                st_df.set_index(idx_col, inplace=True)
+            start_col = kw.get('start')  # likely absent for MADIS
+            end_col = kw.get('end')      # likely absent for MADIS
+            if start_col and end_col and start_col in st_df.columns and end_col in st_df.columns:
+                for sid, r in st_df[[start_col, end_col]].iterrows():
+                    s = r[start_col]
+                    e = r[end_col]
+                    s_out = s if isinstance(s, str) and s else 'NULL'
+                    e_out = e if isinstance(e, str) and e else 'NULL'
+                    start_end_map[str(sid)] = (s_out, e_out)
+        except Exception:
+            start_end_map = {}
 
     summaries = []
     if num_workers is None or num_workers <= 1:
@@ -143,6 +166,14 @@ def assess_downloaded_madis(records_dir, out_csv, joined_dir, training_dir,
         df['end_date'] = emax.dt.strftime('%Y-%m-%d')
         df.loc[emax.isna(), 'end_date'] = 'NULL'
 
+    # Override with stations CSV dates if provided
+    if start_end_map:
+        for stn, (s, e) in start_end_map.items():
+            m = df['station'].astype(str) == stn
+            if m.any():
+                df.loc[m, 'start_date'] = s
+                df.loc[m, 'end_date'] = e
+
     try:
         df.to_csv(out_csv, index=False)
     except Exception as e:
@@ -189,6 +220,14 @@ def assess_downloaded_madis(records_dir, out_csv, joined_dir, training_dir,
         except Exception as e:
             print(f'Failed writing shapefile {out_shp}: {e}')
 
+    # Totals by variable across all stations
+    var_cols = [v for v in OBS_TARGETS if v in df.columns]
+    if var_cols:
+        print('Total observations by variable:')
+        for c in var_cols:
+            tot = pd.to_numeric(df[c], errors='coerce').fillna(0).astype(int).sum()
+            print(f'  {c}: {int(tot):,}')
+
     return df
 
 
@@ -199,13 +238,14 @@ if __name__ == '__main__':
 
     madis_daily = '/data/ssd2/madis/daily'
 
-    out_csv_ = os.path.join('/data/ssd2/madis', 'madis_station_counts.csv')
-    out_shp_ = os.path.join('/data/ssd2/madis', 'madis_station_counts.shp')
-
     landsat_ = os.path.join(d, 'dads', 'rs', 'landsat', 'station_data')
     cdr_ = os.path.join(d, 'dads', 'rs', 'cdr', 'joined')
     solrad = os.path.join(d, 'dads', 'dem', 'rsun_stations')
     terrain = os.path.join(d, 'dads', 'dem', 'terrain', 'station_data')
+
+    out_csv_ = os.path.join(d, 'dads', 'met', 'stations', 'madis_station_counts.csv')
+    out_shp_ = os.path.join(d, 'dads', 'met', 'stations', 'madis_station_counts.shp')
+
     training = '/data/ssd2/dads/training/parquet'
     joined = '/data/ssd2/dads/met/joined'
 

@@ -187,6 +187,14 @@ def assess_downloaded_data(records_dir, out_csv=None, inventory=None, out_shp=No
     print('- Missing ancillary among training-step failures:')
     print(f'  rsun={miss_rsun}, landsat={miss_landsat}, cdr={miss_cdr}, terrain={miss_terrain}')
 
+    # Totals by variable across all stations
+    var_cols = [c for c in ['PRCP', 'TMIN', 'TMAX'] if c in summary_df.columns]
+    if var_cols:
+        print('Total observations by variable:')
+        for c in var_cols:
+            tot = pd.to_numeric(summary_df[c], errors='coerce').fillna(0).astype(int).sum()
+            print(f'  {c}: {int(tot):,}')
+
     # Optionally write shapefile if requested and inventory available
     if out_shp:
         if not inventory or not os.path.exists(inventory):
