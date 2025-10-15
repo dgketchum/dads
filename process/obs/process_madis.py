@@ -64,7 +64,7 @@ def process_daily_data(raw_df, rsun_data, lat_, elev_, zw_=2.0, qaqc=False):
         doy=('doy', 'first')
     ).copy()
 
-    daily_prcp = hourly_df.groupby('date').apply(calculate_daily_precipitation).to_frame('prcp')
+    daily_prcp = hourly_df.groupby('date').apply(calculate_daily_precipitation, include_groups=False).to_frame('prcp')
     daily_df = daily_df.join(daily_prcp)
 
     daily_df['obs_ct'] = valid_obs_count
@@ -314,10 +314,10 @@ def read_hourly_data(madis_src, madis_dst, rsun_tables, overwrite=False,
     total_stations_to_process = len(station_fids)
     print(f"Found {total_stations_to_process} stations to process.")
 
-    if debug:
+    if debug or n_workers <= 1:
         for fid in station_fids:
-            if fid != 'COVM':
-                continue
+            # if fid != 'E8003':
+            #     continue
             process_single_station(fid, madis_src, madis_dst, rsun_tables, overwrite, qaqc, plot, alt_src)
     else:
         if n_workers is None:
@@ -419,7 +419,7 @@ if __name__ == '__main__':
                      madis_daily_,
                      solrad,
                      overwrite=True,
-                     qaqc=True,
+                     qaqc=False,
                      plot=None,
                      alt_src=None,
                      n_workers=25,
