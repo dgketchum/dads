@@ -8,7 +8,6 @@ import geopandas as gpd
 
 sys.path.insert(0, os.path.abspath('../..'))
 
-from extract.rs.earth_engine.cdl import get_cdl
 from extract.rs.earth_engine.ee_utils import is_authorized, landsat_composites
 
 sys.setrecursionlimit(2000)
@@ -34,21 +33,12 @@ def request_band_extract(file_prefix, points_layer, years, buffer, tiles, check_
         tasks = [os.path.join(check_dir, '{}.csv'.format(t)) for t in tasks]
 
     mgrs = ee.FeatureCollection('users/dgketchum/boundaries/MGRS_TILE')
-    gdf = gpd.read_file(points_layer)
-    if gdf.crs and gdf.crs.to_epsg() != 4326:
-        gdf = gdf.to_crs(epsg=4326)
-    records = gdf.drop(columns='geometry').to_dict('records')
-    geoms = gdf.geometry
-    feats = [ee.Feature(ee.Geometry.Point([g.x, g.y]), rec) for rec, g in zip(records, geoms)]
-    points = ee.FeatureCollection(feats)
+    points = ee.FeatureCollection(points_layer)
     points = points.map(lambda x: x.buffer(buffer))
 
     failed, to_export = {}, []
 
     for tile in tiles:
-
-        # if tile != '10TER':
-        #     continue
 
         clip = mgrs.filterMetadata('MGRS_TILE', 'equals', tile)
 
@@ -114,7 +104,7 @@ def request_band_extract(file_prefix, points_layer, years, buffer, tiles, check_
 
                 try:
                     task.start()
-                    print(desc, yr)
+                    print(desc, yr, flush=True)
 
                 except ee.ee_exception.EEException as e:
                     print('{}, waiting on '.format(e), desc, '......')
@@ -134,25 +124,40 @@ def request_band_extract(file_prefix, points_layer, years, buffer, tiles, check_
 
 
 def request_updates_from_shapefile(stations_shp, index_col, station_out_dir, file_prefix, points_layer,
-                                   years, buffer, update_root, tiles=None):
+                                   years, buffer, update_root, tiles=None, run_partial_tiles=False,
+                                   run_empty_tiles=True):
     stations = gpd.read_file(stations_shp)
     if tiles is None:
         tiles = [m for m in stations['MGRS_TILE'].unique().tolist() if isinstance(m, str)]
         tiles = sorted(list(set(tiles)))
+
     missing_tiles = []
+    complete_tiles = []
+    partial_tiles = []
+
     for t in tiles:
         sub = stations[stations['MGRS_TILE'] == t]
         fids = sub[index_col].astype(str).tolist()
         files = [os.path.join(station_out_dir, f'{fid}.csv') for fid in fids]
-        if not all(os.path.exists(p) for p in files):
+        if not any(os.path.exists(p) for p in files):
             missing_tiles.append(t)
+        elif not all(os.path.exists(p) for p in files):
+            partial_tiles.append(t)
+        else:
+            complete_tiles.append(t)
     if not missing_tiles:
         print('No tiles need updates based on station files.')
         return
-    date_tag = pd.Timestamp.now().strftime('%Y%m%d')
-    update_dir = os.path.join(update_root, date_tag)
-    os.makedirs(update_dir, exist_ok=True)
-    request_band_extract(file_prefix, points_layer, years, buffer, missing_tiles, check_dir=update_dir,
+
+    if run_partial_tiles:
+        run_tiles = partial_tiles
+    elif run_empty_tiles:
+        run_tiles = missing_tiles
+    else:
+        raise ValueError('Choose to run either missing tiles or partial tiles')
+
+    print(f'Running Earth Engine extract on {len(run_tiles)} tiles')
+    request_band_extract(file_prefix, points_layer, years, buffer, run_tiles, check_dir=update_root,
                          export_tif=False, dry_run=False)
 
 
@@ -229,14 +234,16 @@ if __name__ == '__main__':
 
     if station_set == 'madis':
         index_ = 'fid'
-        stations = 'madis_17MAY2025_gap_mgrs'
+        stations = 'madis_02JULY2025_mgrs'
         sites_shp = os.path.join(d, 'dads', 'met', 'stations', f'{stations}.shp')
+        ee_points = 'projects/ee-dgketchum/assets/dads/madis_02JULY2025_mgrs'
         updates_root = os.path.join(d, 'dads', 'rs', 'landsat', 'updates', 'ghcn')
 
     elif station_set == 'ghcn':
         index_ = 'STAID'
         stations = 'ghcn_CANUSA_stations_mgrs'
         sites_shp = os.path.join(d, 'climate', 'ghcn', 'stations', f'{stations}.shp')
+        ee_points = 'projects/ee-dgketchum/assets/dads/ghcn_CANUSA_stations_mgrs'
         updates_root = os.path.join(d, 'dads', 'rs', 'landsat', 'updates', 'madis')
 
     else:
@@ -254,15 +261,17 @@ if __name__ == '__main__':
 
     failed = []
     missing_csv = os.path.join(d, 'dads', 'rs', 'landsat', 'missing_station_years.csv')
+    run_missing = False
+
     for buffer_ in [500]:
         file_ = '{}_{}'.format(stations, buffer_)
-        if os.path.exists(missing_csv):
+        if os.path.exists(missing_csv) and run_missing:
             request_updates_from_missing_list(sites_shp, index_col=index_, missing_csv=missing_csv,
-                                              file_prefix=file_, points_layer=sites_shp, buffer=buffer_,
+                                              file_prefix=file_, points_layer=ee_points, buffer=buffer_,
                                               update_root=updates_root)
         else:
             request_updates_from_shapefile(sites_shp, index_col=index_, station_out_dir=station_files,
-                                           file_prefix=file_, points_layer=sites_shp, years=years_, buffer=buffer_,
-                                           update_root=updates_root, tiles=mgrs_tiles)
+                                           file_prefix=file_, points_layer=ee_points, years=years_, buffer=buffer_,
+                                           update_root=updates_root, tiles=mgrs_tiles, run_empty_tiles=True)
 
 # ========================= EOF ====================================================================
