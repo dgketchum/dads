@@ -1,13 +1,56 @@
 import os
 import pandas as pd
+import geopandas as gpd
 from tqdm import tqdm
+from concurrent.futures import ProcessPoolExecutor
+
+
+def _process_tile(args):
+    tile, i, total, rs_dir, out_dir, glob, overwrite, extrapolate, index_col = args
+    test_file = os.path.join(rs_dir, f'{glob}_500_2023_{tile}.csv')
+    if not os.path.exists(test_file):
+        print('{} not processed'.format(os.path.basename(test_file)))
+        return tile
+    complete = check_exists(rs_file=test_file, out_directory=out_dir, index_col=index_col)
+    if complete == 'all' and not overwrite:
+        print('\n{} complete, {} of {}\n'.format(tile, i, total))
+        return tile
+    elif complete == 'partial' and extrapolate:
+        print('\n{} partially complete, processing {} of {}\n'.format(tile, i, total))
+        rs_dict = build_landsat_tables(rs_directory=rs_dir, _tile=tile, glob=glob,
+                                       extrapolate=extrapolate, index_col=index_col)
+    else:
+        print('\n{} not yet processed, {} of {}\n'.format(tile, i, total))
+        rs_dict = build_landsat_tables(rs_directory=rs_dir, _tile=tile, glob=glob,
+                                       extrapolate=extrapolate, index_col=index_col)
+    if rs_dict is None:
+        return tile
+    for k, v in rs_dict.items():
+        out_file = os.path.join(out_dir, f'{k}.csv')
+        if os.path.exists(out_file):
+            ex = pd.read_csv(out_file, index_col=0, parse_dates=True)
+            df_ = ex.copy()
+            for c in v.columns:
+                df_.loc[v.index, c] = v[c]
+            if 'repeated' in df_.columns:
+                df_.loc[v.index, 'repeated'] = 0
+            to_write = df_
+        else:
+            to_write = v
+        to_write.to_csv(out_file)
+        print('wrote', os.path.basename(out_file))
+    return tile
 
 
 def process_landsat(stations, rs_dir, out_dir, glob=None, shuffle=False, overwrite=False, extrapolate=False,
-                    index_col='fid'):
+                    index_col='fid', num_workers=1):
     """"""
 
-    stations = pd.read_csv(stations)
+    if stations.endswith('.csv'):
+        stations = pd.read_csv(stations)
+    else:
+        stations = gpd.read_file(stations)
+
     stations.index = stations[index_col]
     stations.sort_index(inplace=True)
 
@@ -20,39 +63,57 @@ def process_landsat(stations, rs_dir, out_dir, glob=None, shuffle=False, overwri
 
     tiles = stations['MGRS_TILE'].unique()
 
-    for i, tile in enumerate(tiles, start=1):
+    if num_workers == 1:
+        for i, tile in enumerate(tiles, start=1):
 
-        # if tile != '20TQS':
-        #     continue
+            # if tile != '20TQS':
+            #     continue
 
-        test_file = os.path.join(rs_dir, f'{glob}_500_2023_{tile}.csv')
-        if not os.path.exists(test_file):
-            print('{} not processed'.format(os.path.basename(test_file)))
-            continue
+            test_file = os.path.join(rs_dir, f'{glob}_500_2023_{tile}.csv')
+            if not os.path.exists(test_file):
+                print('{} not processed'.format(os.path.basename(test_file)))
+                continue
 
-        complete = check_exists(rs_file=test_file, out_directory=out_dir, index_col=index_col)
+            complete = check_exists(rs_file=test_file, out_directory=out_dir, index_col=index_col)
 
-        if complete == 'all' and not overwrite:
-            print('\n{} complete, {} of {}\n'.format(tile, i, len(tiles)))
-            continue
+            if complete == 'all' and not overwrite:
+                print('\n{} complete, {} of {}\n'.format(tile, i, len(tiles)))
+                continue
 
-        elif complete == 'partial' and extrapolate:
-            print('\n{} partially complete, processing {} of {}\n'.format(tile, i, len(tiles)))
-            rs_dict = build_landsat_tables(rs_directory=rs_dir, _tile=tile, glob=glob,
-                                           extrapolate=extrapolate, index_col=index_col)
+            elif complete == 'partial' and extrapolate:
+                print('\n{} partially complete, processing {} of {}\n'.format(tile, i, len(tiles)))
+                rs_dict = build_landsat_tables(rs_directory=rs_dir, _tile=tile, glob=glob,
+                                               extrapolate=extrapolate, index_col=index_col)
 
-        else:
-            print('\n{} not yet processed, {} of {}\n'.format(tile, i, len(tiles)))
-            rs_dict = build_landsat_tables(rs_directory=rs_dir, _tile=tile, glob=glob,
-                                           extrapolate=extrapolate, index_col=index_col)
+            else:
+                print('\n{} not yet processed, {} of {}\n'.format(tile, i, len(tiles)))
+                rs_dict = build_landsat_tables(rs_directory=rs_dir, _tile=tile, glob=glob,
+                                               extrapolate=extrapolate, index_col=index_col)
 
-        if rs_dict is None:
-            continue
+            if rs_dict is None:
+                continue
 
-        for k, v in rs_dict.items():
-            out_file = os.path.join(out_dir, f'{k}.csv')
-            v.to_csv(out_file)
-            print('wrote', os.path.basename(out_file))
+            for k, v in rs_dict.items():
+                out_file = os.path.join(out_dir, f'{k}.csv')
+                if os.path.exists(out_file):
+                    ex = pd.read_csv(out_file, index_col=0, parse_dates=True)
+                    df_ = ex.copy()
+                    for c in v.columns:
+                        df_.loc[v.index, c] = v[c]
+                    if 'repeated' in df_.columns:
+                        df_.loc[v.index, 'repeated'] = 0
+                    to_write = df_
+                else:
+                    to_write = v
+                to_write.to_csv(out_file)
+                print('wrote', os.path.basename(out_file))
+    else:
+        total = len(tiles)
+        args = [(tile, i, total, rs_dir, out_dir, glob, overwrite, extrapolate, index_col)
+                for i, tile in enumerate(tiles, start=1)]
+        with ProcessPoolExecutor(max_workers=num_workers) as ex:
+            for _ in ex.map(_process_tile, args):
+                pass
 
 
 def check_exists(rs_file, out_directory, index_col):
@@ -158,24 +219,29 @@ def build_landsat_tables(rs_directory, _tile, glob, index_col, extrapolate=False
 
 if __name__ == '__main__':
 
-    d = '/media/research/IrrigationGIS/dads'
+    d = '/media/research/IrrigationGIS'
     if not os.path.exists(d):
-        d = '/home/dgketchum/data/IrrigationGIS/dads'
+        d = '/home/dgketchum/data/IrrigationGIS'
 
-    out = os.path.join(d, 'rs', 'landsat', 'station_data')
+    out = os.path.join(d, 'dads', 'rs', 'landsat', 'station_data')
 
-    glob_ = 'ghcn_CANUSA_stations_mgrs'
-    fields = os.path.join(d, 'met', 'stations', 'ghcn_CANUSA_stations_mgrs.csv')
-    rs = os.path.join(d, 'rs', 'ghcn_stations', 'landsat', 'tiles')
+    # glob_ = 'ghcn_CANUSA_stations_mgrs'
+    # index_ = 'STAID'
+    # fields = os.path.join(d, 'climate', 'ghcn', 'stations', f'{glob_}.csv')
+    # rs = os.path.join(d, 'dads', 'rs', 'ghcn_stations', 'landsat', 'tiles_updates' ,'20251012')
 
     # glob_ = 'madis_mgrs_28OCT2024'
-    # fields = os.path.join(d, 'met', 'stations', 'madis_mgrs_28OCT2024.csv')
-    # rs = os.path.join(d, 'rs', 'madis_28OCT2024')
+    # index_ = 'fid'
+    # fields = os.path.join(d, 'dads', 'met', 'stations', 'madis_mgrs_28OCT2024.csv')
+    # rs = os.path.join(d, 'dads', 'rs', 'madis_28OCT2024')
 
-    # glob_ = 'missing_madis'
-    # fields = os.path.join(d, 'met', 'stations', 'madis_mgrs_28OCT2024.csv')
-    # rs = os.path.join(d, 'rs', 'madis_missing', 'landsat', 'tiles')
+    glob_ = 'madis_17MAY2025_gap_mgrs'
+    index_ = 'fid'
+    fields = os.path.join(d, 'dads', 'met', 'stations', 'madis_17MAY2025_gap_mgrs.csv')
+    rs = os.path.join(d, 'dads', 'rs', 'madis_missing', 'landsat', 'tiles')
 
-    process_landsat(fields, rs, out, glob=glob_, shuffle=True, overwrite=False, extrapolate=True, index_col='STAID')
+    num_workers = 12
+    process_landsat(fields, rs, out, glob=glob_, shuffle=True, overwrite=False,
+                    extrapolate=True, index_col=index_, num_workers=num_workers)
 
 # ========================= EOF ====================================================================

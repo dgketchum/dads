@@ -4,8 +4,10 @@ import time
 
 import ee
 import pandas as pd
+import geopandas as gpd
 
 sys.path.insert(0, os.path.abspath('../..'))
+
 from extract.rs.earth_engine.cdl import get_cdl
 from extract.rs.earth_engine.ee_utils import is_authorized, landsat_composites
 
@@ -32,7 +34,13 @@ def request_band_extract(file_prefix, points_layer, years, buffer, tiles, check_
         tasks = [os.path.join(check_dir, '{}.csv'.format(t)) for t in tasks]
 
     mgrs = ee.FeatureCollection('users/dgketchum/boundaries/MGRS_TILE')
-    points = ee.FeatureCollection(points_layer)
+    gdf = gpd.read_file(points_layer)
+    if gdf.crs and gdf.crs.to_epsg() != 4326:
+        gdf = gdf.to_crs(epsg=4326)
+    records = gdf.drop(columns='geometry').to_dict('records')
+    geoms = gdf.geometry
+    feats = [ee.Feature(ee.Geometry.Point([g.x, g.y]), rec) for rec, g in zip(records, geoms)]
+    points = ee.FeatureCollection(feats)
     points = points.map(lambda x: x.buffer(buffer))
 
     failed, to_export = {}, []
@@ -125,6 +133,49 @@ def request_band_extract(file_prefix, points_layer, years, buffer, tiles, check_
         print(f'{len(to_export)} exports to be run')
 
 
+def request_updates_from_shapefile(stations_shp, index_col, station_out_dir, file_prefix, points_layer,
+                                   years, buffer, update_root, tiles=None):
+    stations = gpd.read_file(stations_shp)
+    if tiles is None:
+        tiles = [m for m in stations['MGRS_TILE'].unique().tolist() if isinstance(m, str)]
+        tiles = sorted(list(set(tiles)))
+    missing_tiles = []
+    for t in tiles:
+        sub = stations[stations['MGRS_TILE'] == t]
+        fids = sub[index_col].astype(str).tolist()
+        files = [os.path.join(station_out_dir, f'{fid}.csv') for fid in fids]
+        if not all(os.path.exists(p) for p in files):
+            missing_tiles.append(t)
+    if not missing_tiles:
+        print('No tiles need updates based on station files.')
+        return
+    date_tag = pd.Timestamp.now().strftime('%Y%m%d')
+    update_dir = os.path.join(update_root, date_tag)
+    os.makedirs(update_dir, exist_ok=True)
+    request_band_extract(file_prefix, points_layer, years, buffer, missing_tiles, check_dir=update_dir,
+                         export_tif=False, dry_run=False)
+
+
+def request_updates_from_missing_list(sites_path, index_col, missing_csv, file_prefix, points_layer,
+                                      buffer, update_root):
+
+    stations = gpd.read_file(sites_path)
+    stations[index_col] = stations[index_col].astype(str)
+    missing = pd.read_csv(missing_csv)
+    missing['station'] = missing['station'].astype(str)
+    m = missing.merge(stations[[index_col, 'MGRS_TILE']], left_on='station', right_on=index_col, how='left')
+    m = m.dropna(subset=['MGRS_TILE'])
+    if m.empty:
+        return
+    groups = m.groupby('MGRS_TILE')['year'].apply(lambda s: sorted(list(set(s)))).to_dict()
+    date_tag = pd.Timestamp.now().strftime('%Y%m%d')
+    update_dir = os.path.join(update_root, date_tag)
+    os.makedirs(update_dir, exist_ok=True)
+    for tile, yrs in groups.items():
+        request_band_extract(file_prefix, points_layer, yrs, buffer, [tile], check_dir=update_dir,
+                             export_tif=False, dry_run=False)
+
+
 def stack_bands(yr, scale=False):
     """
     Create a stack of bands for the year and region of interest specified.
@@ -161,51 +212,6 @@ def stack_bands(yr, scale=False):
     return input_bands
 
 
-def extract_modis(glb, points_layer, years, check_dir=None):
-    """
-    """
-    points = ee.FeatureCollection(points_layer)
-
-    for yr in years:
-        dt = pd.date_range(f'{yr}-01-01', f'{yr}-12-31', freq='D')
-
-        for d in dt:
-
-            d_str = d.strftime('%Y_%m_%d')
-            desc = '{}_{}'.format(glb, d_str)
-
-            if check_dir:
-                outfile = os.path.join(check_dir, '{}.csv'.format(desc))
-                if os.path.exists(outfile):
-                    print('{} exists'.format(outfile))
-                    continue
-
-            stack = ee.Image('MODIS/061/MCD18A1/{}'.format(d_str)).select('DSR').rename('DSR')
-            data = stack.sampleRegions(
-                collection=points,
-                scale=30,
-                tileScale=16)
-
-            task = ee.batch.Export.table.toCloudStorage(
-                collection=data,
-                description=desc,
-                selectors=['DSR', 'fid'],
-                bucket='wudr',
-                fileFormat='CSV')
-
-            try:
-                task.start()
-                print(desc)
-            except ee.ee_exception.EEException as e:
-                if 'Image.load' in e.args[0]:
-                    print(e, desc, 'Image load failure')
-                    continue
-                else:
-                    print('waiting on ', desc, '......')
-                    time.sleep(600)
-                    task.start()
-
-
 def shapely_to_ee_polygon(shapely_geom):
     geojson = shapely_geom.__geo_interface__
     return ee.Geometry.Polygon(geojson)
@@ -219,41 +225,44 @@ if __name__ == '__main__':
         d = '/home/dgketchum/data/IrrigationGIS'
 
     _bucket = 'gs://wudr'
-    station_set = 'madis'
+    station_set = 'ghcn'
 
     if station_set == 'madis':
+        index_ = 'fid'
         stations = 'madis_17MAY2025_gap_mgrs'
-        sites = os.path.join(d, 'dads', 'met', 'stations', f'{stations}.csv')
-        chk = os.path.join(d, 'dads', 'rs', 'landsat', stations)
-
+        sites_shp = os.path.join(d, 'dads', 'met', 'stations', f'{stations}.shp')
+        updates_root = os.path.join(d, 'dads', 'rs', 'landsat', 'updates', 'ghcn')
 
     elif station_set == 'ghcn':
+        index_ = 'STAID'
         stations = 'ghcn_CANUSA_stations_mgrs'
-        sites = os.path.join(d, 'climate', 'ghcn', 'stations', 'ghcn_CANUSA_stations_mgrs.csv')
-        chk = os.path.join(d, 'dads', 'rs', 'ghcn_stations', 'landsat', 'tiles')
+        sites_shp = os.path.join(d, 'climate', 'ghcn', 'stations', f'{stations}.shp')
+        updates_root = os.path.join(d, 'dads', 'rs', 'landsat', 'updates', 'madis')
 
     else:
         raise NotImplementedError
 
-    tiles = pd.read_csv(sites)['MGRS_TILE'].unique().tolist()
-    tiles = [m for m in tiles if isinstance(m, str)]
-    mgrs_tiles = list(set(tiles))
-    mgrs_tiles.sort()
+    # Use shapefile directly to determine tiles and missing stations
+    gdf = gpd.read_file(sites_shp)
+    tiles = [m for m in gdf['MGRS_TILE'].unique().tolist() if isinstance(m, str)]
+    mgrs_tiles = sorted(list(set(tiles)))
 
-    pts = 'projects/ee-dgketchum/assets/dads/{}'.format(stations)
+    station_files = os.path.join(d, 'dads', 'rs', 'landsat', 'station_data')
 
-    geo = 'users/dgketchum/boundaries/western_states_expanded_union'
-    years_ = list(range(2000, 2023)) + [2024]
+    years_ = list(range(1987, 2025))
     years_.reverse()
 
     failed = []
-
+    missing_csv = os.path.join(d, 'dads', 'rs', 'landsat', 'missing_station_years.csv')
     for buffer_ in [500]:
         file_ = '{}_{}'.format(stations, buffer_)
-        request_band_extract(file_, pts, years=years_, buffer=buffer_, tiles=mgrs_tiles, check_dir=chk,
-                             export_tif=False, dry_run=False)
-
-    # chk = os.path.join(d, 'dads', 'rs', 'dads_stations', 'modis')
-    # extract_modis(stations, pts, years=years_, check_dir=chk)
+        if os.path.exists(missing_csv):
+            request_updates_from_missing_list(sites_shp, index_col=index_, missing_csv=missing_csv,
+                                              file_prefix=file_, points_layer=sites_shp, buffer=buffer_,
+                                              update_root=updates_root)
+        else:
+            request_updates_from_shapefile(sites_shp, index_col=index_, station_out_dir=station_files,
+                                           file_prefix=file_, points_layer=sites_shp, years=years_, buffer=buffer_,
+                                           update_root=updates_root, tiles=mgrs_tiles)
 
 # ========================= EOF ====================================================================
