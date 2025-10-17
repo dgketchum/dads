@@ -1,4 +1,5 @@
 import csv
+import numpy as np
 
 import torch
 import pytorch_lightning as pl
@@ -52,12 +53,14 @@ class LSTMPredictor(pl.LightningModule):
 
     def forward(self, x):
         x = x.float()
-        x = x.squeeze()
+        # ensure shape (batch, seq, features)
+        if x.dim() == 2:
+            x = x.unsqueeze(0)
         x = self.input_expansion(x)
         out, _ = self.lstm(x)
 
-        if len(x.shape) == 2:
-            out = out.unsqueeze(0)
+        if out.dim() == 2:
+            out = out.unsqueeze(0)  # likely error if features were squeezed elsewhere
 
         out = out[:, -1, :]
 
@@ -66,8 +69,8 @@ class LSTMPredictor(pl.LightningModule):
         return out
 
     def training_step(self, batch, batch_idx):
-        # y_obs, gm, lf = stack_batch(batch)
-        y_obs, gm, features = batch
+        # y_obs, comparator, features = stack_batch(batch)
+        y_obs, comparator, features = batch
         y_hat = self(features)
         y_obs = y_obs[:, -1]
 
@@ -120,41 +123,38 @@ class LSTMPredictor(pl.LightningModule):
         y_hat = self(features)
         y_obs = y_obs[:, -1]
         y_comp = y_comp[:, -1]
-        # y_nl = lf[:, -1, 0]
 
         loss_obs = self.criterion(y_hat, y_obs)
         self.log('val_loss', loss_obs, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
 
-        y_obs = self.inverse_transform(y_obs, idx=0)
-        y_hat = self.inverse_transform(y_hat, idx=0)
-        y_comp = self.inverse_transform(y_comp, idx=1)
-        # y_nl = self.inverse_transform(y_nl, idx=2)
+        y_obs_inv = self.inverse_transform(y_obs, idx=0)
+        y_hat_inv = self.inverse_transform(y_hat, idx=0)
 
-        y_hat = y_hat.detach().cpu().numpy()
-        y_obs = y_obs.detach().cpu().numpy()
-        y_comp = y_comp.detach().cpu().numpy()
-        # y_nl = y_nl.detach().cpu().numpy()
+        y_hat_np = y_hat_inv.detach().cpu().numpy()
+        y_obs_np = y_obs_inv.detach().cpu().numpy()
 
-        rmse_obs = root_mean_squared_error(y_obs, y_hat)
-        rmse_comp = root_mean_squared_error(y_obs, y_comp)
-        # rmse_nl = root_mean_squared_error(y_obs, y_nl)
+        rmse_obs = root_mean_squared_error(y_obs_np, y_hat_np)
+        r2_obs = r2_score(y_obs_np, y_hat_np)
 
-        r2_obs = r2_score(y_obs, y_hat)
-        r2_comp = r2_score(y_obs, y_comp)
-        # r2_nl = r2_score(y_obs, y_nl)
+        # Comparator metrics only if comparator present (finite)
+        y_comp_inv = self.inverse_transform(y_comp, idx=1)
+        y_comp_np = y_comp_inv.detach().cpu().numpy()
+        valid = np.isfinite(y_comp_np) & np.isfinite(y_obs_np)
+        if valid.any():
+            rmse_comp = root_mean_squared_error(y_obs_np[valid], y_comp_np[valid])
+            r2_comp = r2_score(y_obs_np[valid], y_comp_np[valid])
+        else:
+            rmse_comp = float('nan')
+            r2_comp = float('nan')
 
         self.log('r2_lstm', r2_obs, on_step=False, on_epoch=True, prog_bar=False, sync_dist=True)
         self.log('r2_comp', r2_comp, on_step=False, on_epoch=True, prog_bar=False, sync_dist=True)
-        # self.log('r2_nl', r2_nl, on_step=False, on_epoch=True, prog_bar=False, sync_dist=True)
 
         self.log('rmse_lstm', rmse_obs, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
         self.log('rmse_comp', rmse_comp, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
-        # self.log('rmse_nl', rmse_nl, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
 
         current_lr = self.trainer.optimizers[0].param_groups[0]['lr']
         self.log('lr', current_lr, on_step=False, on_epoch=True, prog_bar=True)
-        # lr_ratio = current_lr / self.learning_rate
-        # self.log('lr_ratio', lr_ratio, on_step=False, on_epoch=True, prog_bar=True)
 
         return loss_obs
 
@@ -176,9 +176,9 @@ class LSTMPredictor(pl.LightningModule):
 
 def stack_batch(batch):
     y = torch.stack([item[0] for item in batch])
-    gm = torch.stack([item[1] for item in batch])
-    lf = torch.stack([item[2] for item in batch])
-    return y, gm, lf
+    comparator = torch.stack([item[1] for item in batch])
+    features = torch.stack([item[2] for item in batch])
+    return y, comparator, features
 
 
 if __name__ == '__main__':

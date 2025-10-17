@@ -8,10 +8,17 @@ from tqdm import tqdm
 
 
 def _read_and_chunk_worker(args):
+    """Read one station file and produce consecutive daily chunks.
+
+    - Requires non-NaN target; comparator optional; RS/GEO may be NaN.
+    - Builds windows of length `chunk_size` where `day_diff == 1` for all steps.
+    - Returns lists of (chunk arrays, station names, end-of-window day_int).
+    """
     file_path, station_name, chunk_size, feature_names = args
     try:
         df = pd.read_parquet(file_path)[feature_names]
-        df.dropna(inplace=True)
+        # Require target present; comparator optional for training/contexts
+        df.dropna(subset=[feature_names[0]], inplace=True)
         if len(df) < chunk_size:
             return [], [], []
     except Exception:
@@ -43,6 +50,21 @@ def _read_and_chunk_worker(args):
 
 
 class LSTMDataset(Dataset):
+    """Unified dataset for LSTM pretraining and DADS graph assembly.
+
+    LSTM Training Path (return_station_name=False):
+    - __getitem__ returns (y, comparator, features)
+      * y: target sequence (T,)
+      * comparator: comparator sequence (T,) if available, otherwise NaN (optional)
+      * features: single-channel lagged target (T, 1); univariate input to LSTM.
+    - GEO/RS columns in Parquet are ignored as inputs.
+
+    Dads Path (return_station_name=True):
+    - __getitem__ returns (y, comparator, empty_seq, station_name, day_int)
+      * empty_seq is a placeholder; DADS does not consume a target-node sequence.
+      * station_name and day_int are used to fetch node contexts/edges.
+    - Comparator optional in this path as well (comparator may be NaN).
+    """
     def __init__(self, file_paths, station_names, feature_names, sample_dimensions, scaler, strided=False,
                  transform=None, return_station_name=False, n_workers=1):
 
@@ -52,6 +74,15 @@ class LSTMDataset(Dataset):
         self.return_station_name = return_station_name
         self.strided = strided
         self.scaler = scaler
+        # Identify comparator column by base name if present; else mark missing
+        base = self.feature_names[0].replace('_obs', '')
+        comp_idx = None
+        for i, name in enumerate(self.feature_names[1:], start=1):
+            if name.startswith(base + '_'):
+                comp_idx = i
+                break
+        self.comp_idx = comp_idx
+
         self._preload_data(file_paths, station_names, n_workers)
 
     def _preload_data(self, file_paths, station_names, n_workers):
@@ -88,6 +119,11 @@ class LSTMDataset(Dataset):
         return len(self.preloaded_data)
 
     def __getitem__(self, idx):
+        """Return a sample for the selected path.
+
+        - Training: (y, comparator, features) where features is (T, 1) lagged target.
+        - DADS: (y, comparator, empty_seq, station_name, day_int).
+        """
         while True:
             chunk_np = self.preloaded_data[idx]
             station_name = self.station_names[idx]
@@ -100,23 +136,24 @@ class LSTMDataset(Dataset):
             chunk = torch.tensor(self.scaler.transform(chunk.numpy()), dtype=torch.float32)
 
         y = chunk[:, 0]
-        gm = chunk[:, 1]
+        if self.comp_idx is not None:
+            comparator = chunk[:, self.comp_idx]
+        else:
+            comparator = torch.full_like(y, float('nan'))
         if self.return_station_name:
             # Dads path: omit target-node sequence to drop dependency on target meteorology
             seq = torch.empty(0)
             day_int = self.day_ints[idx]
-            return y, gm, seq, station_name, day_int  # Dads: no target sequence
+            return y, comparator, seq, station_name, day_int  # Dads: no target sequence
         else:
-            # LSTM training path: build sequence from past observations only (ignore reanalysis columns)
+            # LSTM training path: strictly univariate (observed target only)
             obs_feat = y.unsqueeze(-1)
             obs_shift = obs_feat.clone()
             if obs_shift.shape[0] > 1:
                 obs_shift[1:, 0] = obs_feat[:-1, 0]
             obs_shift[0, 0] = obs_feat[0, 0]
-            input_width = chunk.shape[1] - 2
-            lf = obs_shift.repeat(1, input_width)
-            assert lf.shape[1] == input_width, "lf width != num_features - 2"
-            return y, gm, lf
+            features = obs_shift  # single-channel lagged target
+            return y, comparator, features
 
 
 if __name__ == '__main__':

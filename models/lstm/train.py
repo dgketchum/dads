@@ -41,7 +41,12 @@ def custom_collate(batch):
 
 def train_model(dirpath, sequence_data, target_var, train_features, now_str, batch_size=1, learning_rate=0.01,
                 n_workers=1, chunk_size=16, strided=False, logging_csv=None, debug_size=0, scaler_path=None):
-    """"""
+    """Train a univariate LSTM on the observed target only.
+
+    Notes:
+    - Parquet files may include GEO/RS columns, but the model input is the 1-step 
+      lag of the target (single feature). Comparator is used for metrics only.
+    """
     target = f'{target_var}_obs'
     data_dir = os.path.join(sequence_data, target)
 
@@ -77,13 +82,12 @@ def train_model(dirpath, sequence_data, target_var, train_features, now_str, bat
     first_file = file_map['train_files'][0] if file_map['train_files'] else file_map['val_files'][0]
     feature_names = pd.read_parquet(first_file).columns.tolist()
     num_features = len(feature_names)
-    assert num_features >= 2, "expected [obs, gm, ...] feature layout"
+    assert num_features >= 1, "expected at least the target _obs column"
     assert feature_names[0].endswith('_obs'), "first column must be target _obs"
-    assert not feature_names[1].endswith('_obs'), "second column must be gridded match, not _obs"
 
     meta_path = os.path.join(dirpath, 'training_metadata.json')
     with open(meta_path, 'w') as f:
-        json.dump({'num_bands': num_features - 2, 'expansion_factor': 2}, f)
+        json.dump({'num_bands': 1, 'expansion_factor': 2}, f)
 
     if not scaler_path:
         scaler, scaler_path, _ = load_variable_scaler(sequence_data, target_var, feature_names)
@@ -128,7 +132,7 @@ def train_model(dirpath, sequence_data, target_var, train_features, now_str, bat
                                 collate_fn=custom_collate,
                                 pin_memory=True)
 
-    model = LSTMPredictor(num_bands=num_features - 2,
+    model = LSTMPredictor(num_bands=1,
                           learning_rate=learning_rate,
                           dropout_rate=0.1,
                           expansion_factor=2,  # align with GNN loader
