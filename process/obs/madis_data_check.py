@@ -17,7 +17,7 @@ def _assess_madis_file(path):
         return None
 
     if df.empty:
-        return {'station': stn}
+        return {'fid': stn}
 
     if not isinstance(df.index, pd.DatetimeIndex):
         try:
@@ -25,7 +25,7 @@ def _assess_madis_file(path):
         except Exception:
             pass
 
-    row = {'station': stn}
+    row = {'fid': stn}
     for var in OBS_TARGETS:
         if var in df.columns:
             mask = df[var].notna()
@@ -95,7 +95,7 @@ def assess_downloaded_madis(records_dir, out_csv, joined_dir, training_dir,
         for p in tqdm(files, total=len(files), desc='Assessing MADIS'):
             row = _assess_madis_file(p)
             if row:
-                stn = row['station']
+                stn = row['fid']
                 row['in_joined'] = int(os.path.exists(os.path.join(joined_dir, f'{stn}.parquet')))
                 # training_dir contains subfolders per target; consider present if any exists
                 in_training = 0
@@ -119,7 +119,7 @@ def assess_downloaded_madis(records_dir, out_csv, joined_dir, training_dir,
         with ProcessPoolExecutor(max_workers=int(num_workers)) as ex:
             for row in tqdm(ex.map(_assess_madis_file, files), total=len(files), desc='Assessing MADIS'):
                 if row:
-                    stn = row['station']
+                    stn = row['fid']
                     row['in_joined'] = int(os.path.exists(os.path.join(joined_dir, f'{stn}.parquet')))
                     in_training = 0
                     try:
@@ -140,9 +140,9 @@ def assess_downloaded_madis(records_dir, out_csv, joined_dir, training_dir,
                     summaries.append(row)
 
     if len(summaries) == 0:
-        return pd.DataFrame(columns=['station'])
+        return pd.DataFrame(columns=['fid'])
 
-    df = pd.DataFrame(summaries).sort_values('station').reset_index(drop=True)
+    df = pd.DataFrame(summaries).sort_values('fid').reset_index(drop=True)
 
     # derive overall start/end across available observed vars
     start_cols = [f'start_{v}' for v in OBS_TARGETS if f'start_{v}' in df.columns]
@@ -169,7 +169,7 @@ def assess_downloaded_madis(records_dir, out_csv, joined_dir, training_dir,
     # Override with stations CSV dates if provided
     if start_end_map:
         for stn, (s, e) in start_end_map.items():
-            m = df['station'].astype(str) == stn
+            m = df['fid'].astype(str) == stn
             if m.any():
                 df.loc[m, 'start_date'] = s
                 df.loc[m, 'end_date'] = e
