@@ -125,7 +125,7 @@ def request_band_extract(file_prefix, points_layer, years, buffer, tiles, check_
 
 def request_updates_from_shapefile(stations_shp, index_col, station_out_dir, file_prefix, points_layer,
                                    years, buffer, update_root, tiles=None, run_partial_tiles=False,
-                                   run_empty_tiles=True):
+                                   run_empty_tiles=True, dry_run=False):
     stations = gpd.read_file(stations_shp)
     if tiles is None:
         tiles = [m for m in stations['MGRS_TILE'].unique().tolist() if isinstance(m, str)]
@@ -139,13 +139,16 @@ def request_updates_from_shapefile(stations_shp, index_col, station_out_dir, fil
         sub = stations[stations['MGRS_TILE'] == t]
         fids = sub[index_col].astype(str).tolist()
         files = [os.path.join(station_out_dir, f'{fid}.csv') for fid in fids]
+
         if not any(os.path.exists(p) for p in files):
             missing_tiles.append(t)
         elif not all(os.path.exists(p) for p in files):
             partial_tiles.append(t)
         else:
             complete_tiles.append(t)
-    if not missing_tiles:
+
+    # proceed if either missing or partial tiles exist; only return when neither needs work
+    if not missing_tiles and not partial_tiles:
         print('No tiles need updates based on station files.')
         return
 
@@ -158,12 +161,11 @@ def request_updates_from_shapefile(stations_shp, index_col, station_out_dir, fil
 
     print(f'Running Earth Engine extract on {len(run_tiles)} tiles')
     request_band_extract(file_prefix, points_layer, years, buffer, run_tiles, check_dir=update_root,
-                         export_tif=False, dry_run=False)
+                         export_tif=False, dry_run=dry_run)
 
 
 def request_updates_from_missing_list(sites_path, index_col, missing_csv, file_prefix, points_layer,
                                       buffer, update_root):
-
     stations = gpd.read_file(sites_path)
     stations[index_col] = stations[index_col].astype(str)
     missing = pd.read_csv(missing_csv)
@@ -230,48 +232,42 @@ if __name__ == '__main__':
         d = '/home/dgketchum/data/IrrigationGIS'
 
     _bucket = 'gs://wudr'
-    station_set = 'ghcn'
+    station_set = 'madis'
 
     if station_set == 'madis':
         index_ = 'fid'
-        stations = 'madis_02JULY2025_mgrs'
-        sites_shp = os.path.join(d, 'dads', 'met', 'stations', f'{stations}.shp')
-        ee_points = 'projects/ee-dgketchum/assets/dads/madis_02JULY2025_mgrs'
-        updates_root = os.path.join(d, 'dads', 'rs', 'landsat', 'updates', 'ghcn')
+        stations_glob = 'madis_17MAY2025_mgrs'
+        sites_shp = os.path.join(d, 'dads', 'met', 'stations', f'{stations_glob}.shp')
+        ee_points = 'projects/ee-dgketchum/assets/dads/madis_17MAY2025_mgrs'
+        updates_root = os.path.join(d, 'dads', 'rs', 'landsat', 'updates', 'madis')
 
     elif station_set == 'ghcn':
         index_ = 'STAID'
-        stations = 'ghcn_CANUSA_stations_mgrs'
-        sites_shp = os.path.join(d, 'climate', 'ghcn', 'stations', f'{stations}.shp')
+        stations_glob = 'ghcn_CANUSA_stations_mgrs'
+        sites_shp = os.path.join(d, 'climate', 'ghcn', 'stations', f'{stations_glob}.shp')
         ee_points = 'projects/ee-dgketchum/assets/dads/ghcn_CANUSA_stations_mgrs'
-        updates_root = os.path.join(d, 'dads', 'rs', 'landsat', 'updates', 'madis')
+        updates_root = os.path.join(d, 'dads', 'rs', 'landsat', 'updates', 'ghcn')
 
     else:
         raise NotImplementedError
 
     # Use shapefile directly to determine tiles and missing stations
-    gdf = gpd.read_file(sites_shp)
-    tiles = [m for m in gdf['MGRS_TILE'].unique().tolist() if isinstance(m, str)]
+    stations = gpd.read_file(sites_shp)
+    bounds = (-178., 7., -53., 83.)
+    w, s, e, n = bounds
+    stations = stations[(stations['latitude'] < n) & (stations['latitude'] >= s)]
+    stations = stations[(stations['longitude'] < e) & (stations['longitude'] >= w)]
+    tiles = [m for m in stations['MGRS_TILE'].unique().tolist() if isinstance(m, str)]
     mgrs_tiles = sorted(list(set(tiles)))
 
     station_files = os.path.join(d, 'dads', 'rs', 'landsat', 'station_data')
 
-    years_ = list(range(1987, 2025))
-    years_.reverse()
-
     failed = []
     missing_csv = os.path.join(d, 'dads', 'rs', 'landsat', 'missing_station_years.csv')
     run_missing = False
+    years_ = [1987, 1988, 1989, 2023, 2024]
 
-    for buffer_ in [500]:
-        file_ = '{}_{}'.format(stations, buffer_)
-        if os.path.exists(missing_csv) and run_missing:
-            request_updates_from_missing_list(sites_shp, index_col=index_, missing_csv=missing_csv,
-                                              file_prefix=file_, points_layer=ee_points, buffer=buffer_,
-                                              update_root=updates_root)
-        else:
-            request_updates_from_shapefile(sites_shp, index_col=index_, station_out_dir=station_files,
-                                           file_prefix=file_, points_layer=ee_points, years=years_, buffer=buffer_,
-                                           update_root=updates_root, tiles=mgrs_tiles, run_empty_tiles=True)
+    request_band_extract(stations_glob, points_layer=ee_points, years=years_, buffer=500.0, tiles=mgrs_tiles,
+                         check_dir=updates_root, export_tif=False, dry_run=False)
 
 # ========================= EOF ====================================================================
