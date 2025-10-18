@@ -1,4 +1,7 @@
 import os
+import calendar
+import calendar
+from datetime import datetime
 import pandas as pd
 import geopandas as gpd
 from tqdm import tqdm
@@ -27,8 +30,14 @@ def _process_tile(args):
         return tile
     for k, v in rs_dict.items():
         out_file = os.path.join(out_dir, f'{k}.csv')
-        if os.path.exists(out_file):
-            ex = pd.read_csv(out_file, index_col=0, parse_dates=True)
+
+        if os.path.exists(out_file) and not overwrite:
+
+            try:
+                ex = pd.read_csv(out_file, index_col=0, parse_dates=True)
+            except pd.errors.EmptyDataError:
+                continue
+
             df_ = ex.copy()
             for c in v.columns:
                 df_.loc[v.index, c] = v[c]
@@ -37,6 +46,15 @@ def _process_tile(args):
             to_write = df_
         else:
             to_write = v
+        # Temporary safeguard: even if overwrite is True, skip overwriting files written today
+        if os.path.exists(out_file) and overwrite:
+            try:
+                mdate = datetime.fromtimestamp(os.path.getmtime(out_file)).date()
+                if mdate == datetime.today().date():
+                    # print('skip overwrite (written today):', os.path.basename(out_file))
+                    continue
+            except Exception:
+                pass
         to_write.to_csv(out_file)
         print('wrote', os.path.basename(out_file))
     return tile
@@ -95,7 +113,7 @@ def process_landsat(stations, rs_dir, out_dir, glob=None, shuffle=False, overwri
 
             for k, v in rs_dict.items():
                 out_file = os.path.join(out_dir, f'{k}.csv')
-                if os.path.exists(out_file):
+                if os.path.exists(out_file) and not overwrite:
                     ex = pd.read_csv(out_file, index_col=0, parse_dates=True)
                     df_ = ex.copy()
                     for c in v.columns:
@@ -105,6 +123,15 @@ def process_landsat(stations, rs_dir, out_dir, glob=None, shuffle=False, overwri
                     to_write = df_
                 else:
                     to_write = v
+                # Temporary safeguard: even if overwrite is True, skip overwriting files written today
+                if os.path.exists(out_file) and overwrite:
+                    try:
+                        mdate = datetime.fromtimestamp(os.path.getmtime(out_file)).date()
+                        if mdate == datetime.today().date():
+                            print('skip overwrite (written today):', os.path.basename(out_file))
+                            continue
+                    except Exception:
+                        pass
                 to_write.to_csv(out_file)
                 print('wrote', os.path.basename(out_file))
     else:
@@ -148,7 +175,7 @@ def landsat_periods(yr):
 def build_landsat_tables(rs_directory, _tile, glob, index_col, extrapolate=False):
     """"""
 
-    rs_files = [(y, os.path.join(rs_directory, f'{glob}_500_{y}_{_tile}.csv')) for y in range(1990, 2024)]
+    rs_files = [(y, os.path.join(rs_directory, f'{glob}_500_{y}_{_tile}.csv')) for y in range(1987, 2025)]
 
     exist = [os.path.exists(f) for y, f in rs_files]
 
@@ -201,14 +228,27 @@ def build_landsat_tables(rs_directory, _tile, glob, index_col, extrapolate=False
             df = df.ffill().bfill()
 
             if not all(exist) and extrapolate:
-                years = range(1990, 2023)
+                years = list(range(1987, 2025))
+                years.remove(2023)
+                def _safe_replace_year(ts, year):
+                    # Handle leap-day and month-end differences safely when changing the year
+                    month = ts.month
+                    day = ts.day
+                    max_day = calendar.monthrange(year, month)[1]
+                    return ts.replace(year=year, day=min(day, max_day))
 
                 def repeat_data_for_year(year):
                     new_df = df.copy()
-                    new_df.index = new_df.index.map(lambda d: d.replace(year=year))
+                    new_df.index = new_df.index.map(lambda d: _safe_replace_year(d, year))
                     return new_df
 
                 df = pd.concat([repeat_data_for_year(year) for year in years])
+                # Ensure unique, sorted DatetimeIndex before upsampling
+                if not df.index.is_monotonic_increasing:
+                    df = df.sort_index()
+                if df.index.has_duplicates:
+                    # Collapse duplicates conservatively by taking the last occurrence
+                    df = df[~df.index.duplicated(keep='last')]
                 df = df.resample('D').ffill()
             data[index].append(df)
 
@@ -225,23 +265,18 @@ if __name__ == '__main__':
 
     out = os.path.join(d, 'dads', 'rs', 'landsat', 'station_data')
 
-    # glob_ = 'ghcn_CANUSA_stations_mgrs'
-    # index_ = 'STAID'
-    # fields = os.path.join(d, 'climate', 'ghcn', 'stations', f'{glob_}.csv')
-    # rs = os.path.join(d, 'dads', 'rs', 'ghcn_stations', 'landsat', 'tiles_updates' ,'20251012')
+    glob_ = 'ghcn_CANUSA_stations_mgrs'
+    index_ = 'STAID'
+    fields = os.path.join(d, 'climate', 'ghcn', 'stations', f'{glob_}.csv')
+    rs =  os.path.join(d, 'dads', 'rs', 'landsat', 'updates', 'ghcn')
 
     # glob_ = 'madis_mgrs_28OCT2024'
     # index_ = 'fid'
     # fields = os.path.join(d, 'dads', 'met', 'stations', 'madis_mgrs_28OCT2024.csv')
     # rs = os.path.join(d, 'dads', 'rs', 'madis_28OCT2024')
 
-    glob_ = 'madis_17MAY2025_gap_mgrs'
-    index_ = 'fid'
-    fields = os.path.join(d, 'dads', 'met', 'stations', 'madis_17MAY2025_gap_mgrs.csv')
-    rs = os.path.join(d, 'dads', 'rs', 'madis_missing', 'landsat', 'tiles')
-
-    num_workers = 12
-    process_landsat(fields, rs, out, glob=glob_, shuffle=True, overwrite=False,
+    num_workers = 6
+    process_landsat(fields, rs, out, glob=glob_, shuffle=True, overwrite=True,
                     extrapolate=True, index_col=index_, num_workers=num_workers)
 
 # ========================= EOF ====================================================================
