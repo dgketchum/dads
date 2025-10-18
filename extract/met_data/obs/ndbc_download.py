@@ -13,6 +13,39 @@ import requests
 from shapely.geometry import Point
 from tqdm import tqdm
 
+_STD_INDEX_CACHE = None
+
+
+def _fetch_stdmet_index():
+    global _STD_INDEX_CACHE
+    if _STD_INDEX_CACHE is not None:
+        return _STD_INDEX_CACHE
+    url = "https://www.ndbc.noaa.gov/data/historical/stdmet/"
+    resp = requests.get(url, timeout=30)
+    resp.raise_for_status()
+    text = resp.text
+    # grab candidate filenames ending with .txt.gz from links or plain text
+    files = set(re.findall(r"([A-Za-z0-9_]+\.txt\.gz)", text))
+    _STD_INDEX_CACHE = sorted(files)
+    return _STD_INDEX_CACHE
+
+
+def _available_station_years(station_id):
+    idx = _fetch_stdmet_index()
+    sid = station_id.lower()
+    years = []
+    for fn in idx:
+        fl = fn.lower()
+        if fl.startswith(sid + 'h') and fl.endswith('.txt.gz'):
+            m = re.search(r"h(\d{4})\.txt\.gz$", fl)
+            if m:
+                try:
+                    years.append(int(m.group(1)))
+                except Exception:
+                    pass
+    years = sorted(list(set(years)))
+    return years
+
 
 def get_ndbc_stations(out_dir, overwrite=False):
     """
@@ -69,8 +102,12 @@ def get_ndbc_stations(out_dir, overwrite=False):
             return np.nan, np.nan
         d1, m1, s1, hemi1, d2, m2, s2, hemi2 = m.groups()
         try:
-            d1 = float(d1); m1 = float(m1); s1 = float(s1)
-            d2 = float(d2); m2 = float(m2); s2 = float(s2)
+            d1 = float(d1);
+            m1 = float(m1);
+            s1 = float(s1)
+            d2 = float(d2);
+            m2 = float(m2);
+            s2 = float(s2)
         except Exception:
             return np.nan, np.nan
         lat_dd = d1 + m1 / 60.0 + s1 / 3600.0
@@ -120,49 +157,51 @@ def download_ndbc_station_data(station_id, data_dst, start_year=1970, overwrite=
     latest_base = "https://www.ndbc.noaa.gov/data/l_stdmet/"
     current_year = datetime.now().year
     station_dfs = []
+    from_index = _available_station_years(station_id)
+    years = sorted(from_index, reverse=True) if from_index else list(range(start_year, current_year + 1))[::-1]
 
-    for year in range(start_year, current_year + 1):
+    years_404_streak = 0
+    for year in years:
         fname = f"{station_id.lower()}h{year}.txt.gz"
         url = base_url + fname
         try:
             resp = requests.get(url, timeout=30)
             # 'https://www.ndbc.noaa.gov/data/historical/stdmet/npsf1h2018.txt.gz'
             if resp.status_code == 404:
+                years_404_streak += 1
+                if years_404_streak >= 5:
+                    break
                 continue
             resp.raise_for_status()
+            years_404_streak = 0
             with gzip.open(io.BytesIO(resp.content), 'rt') as f:
                 raw = f.read()
             lines = raw.splitlines()
             hdr = next((ln for ln in lines if ln.startswith('#') and 'YY' in ln and 'MM' in ln), None)
             if hdr:
                 names_raw = hdr.lstrip('#').split()
-                tmp = pd.read_csv(io.StringIO(raw), delim_whitespace=True, comment='#', header=None,
+                tmp = pd.read_csv(io.StringIO(raw), sep=r'\s+', comment='#', header=None,
                                   names=names_raw,
                                   na_values=['99', '99.0', '999', '999.0', '9999.0'], engine='python')
             else:
-                tmp = pd.read_csv(io.StringIO(raw), delim_whitespace=True, comment='#', header=None,
+                tmp = pd.read_csv(io.StringIO(raw), sep=r'\s+', comment='#', header=None,
                                   na_values=['99', '99.0', '999', '999.0', '9999.0'], engine='python')
             if tmp.empty:
                 continue
             ncols = tmp.shape[1]
-            std = ['YYYY', 'MM', 'DD', 'hh', 'mm', 'WDIR', 'WSPD', 'GST', 'WVHT', 'DPD', 'APD', 'MWD',
+            std = ['YY', 'MM', 'DD', 'hh', 'mm', 'WDIR', 'WSPD', 'GST', 'WVHT', 'DPD', 'APD', 'MWD',
                    'PRES', 'ATMP', 'WTMP', 'DEWP', 'VIS', 'TIDE']
+
             if hdr is None:
                 names = std[:min(ncols, len(std))]
                 tmp = tmp.iloc[:, :len(names)]
                 tmp.columns = names
-            if 'YYYY' in tmp.columns:
-                y = pd.to_numeric(tmp['YYYY'], errors='coerce').astype('Int64')
-                needs_conv = y.dropna().lt(100).all()
-                if needs_conv:
-                    tmp['YYYY'] = y.astype(float).apply(lambda v: 1900 + v if v > 50 else 2000 + v)
-            else:
-                if 'YY' in tmp.columns:
-                    y = pd.to_numeric(tmp['YY'], errors='coerce').astype('Int64')
-                    tmp['YYYY'] = y.astype(float).apply(lambda v: 1900 + v if v > 50 else 2000 + v)
+
             if 'mm' not in tmp.columns:
                 tmp['mm'] = 0
-            d = tmp[['YYYY', 'MM', 'DD', 'hh', 'mm']].rename(columns={'YYYY': 'year', 'MM': 'month', 'DD': 'day', 'hh': 'hour', 'mm': 'minute'})
+
+            d = tmp[['YY', 'MM', 'DD', 'hh', 'mm']].rename(
+                columns={'YY': 'year', 'MM': 'month', 'DD': 'day', 'hh': 'hour', 'mm': 'minute'})
             tmp.index = pd.to_datetime(d, errors='coerce')
             tmp = tmp[~tmp.index.isna()]
             station_dfs.append(tmp)
@@ -172,41 +211,36 @@ def download_ndbc_station_data(station_id, data_dst, start_year=1970, overwrite=
             continue
 
     # append most recent (latest) file
-    latest_candidates = [f"{station_id.lower()}.txt", f"{station_id.upper()}.txt"]
-    for fname in latest_candidates:
-        url = latest_base + fname
-        try:
-            resp = requests.get(url, timeout=30)
-            if resp.status_code == 404:
-                continue
-            resp.raise_for_status()
-            text = resp.text
-            lines = text.splitlines()
-            hdr = next((ln for ln in lines if ln.startswith('#') and 'YY' in ln and 'MM' in ln), None)
-            if hdr:
-                names_raw = hdr.lstrip('#').split()
-                tmp = pd.read_csv(io.StringIO(text), delim_whitespace=True, comment='#', header=None,
-                                  names=names_raw,
-                                  na_values=['99', '99.0', '999', '999.0', '9999.0'], engine='python')
-            else:
-                tmp = pd.read_csv(io.StringIO(text), delim_whitespace=True, comment='#', header=None,
-                                  na_values=['99', '99.0', '999', '999.0', '9999.0'], engine='python')
-            if tmp.empty:
-                continue
-            if 'YYYY' not in tmp.columns and 'YY' in tmp.columns:
-                y = pd.to_numeric(tmp['YY'], errors='coerce').astype('Int64')
-                tmp['YYYY'] = y.astype(float).apply(lambda v: 1900 + v if v > 50 else 2000 + v)
-            if 'mm' not in tmp.columns:
-                tmp['mm'] = 0
-            d = tmp[['YYYY', 'MM', 'DD', 'hh', 'mm']].rename(columns={'YYYY': 'year', 'MM': 'month', 'DD': 'day', 'hh': 'hour', 'mm': 'minute'})
-            tmp.index = pd.to_datetime(d, errors='coerce')
-            tmp = tmp[~tmp.index.isna()]
+    fname = f"{station_id.lower()}.txt"
+    url = latest_base + fname
+    try:
+        resp = requests.get(url, timeout=30)
+        resp.raise_for_status()
+        text = resp.text
+        lines = text.splitlines()
+        hdr = next((ln for ln in lines if ln.startswith('#') and 'YY' in ln and 'MM' in ln), None)
+        if hdr:
+            names_raw = hdr.lstrip('#').split()
+            tmp = pd.read_csv(io.StringIO(text), sep=r'\s+', comment='#', header=None,
+                              names=names_raw,
+                              na_values=['99', '99.0', '999', '999.0', '9999.0'], engine='python')
+        else:
+            tmp = pd.read_csv(io.StringIO(text), sep=r'\s+', comment='#', header=None,
+                              na_values=['99', '99.0', '999', '999.0', '9999.0'], engine='python')
+        if 'mm' not in tmp.columns:
+            tmp['mm'] = 0
+
+        d = tmp[['YY', 'MM', 'DD', 'hh', 'mm']].rename(
+            columns={'YY': 'year', 'MM': 'month', 'DD': 'day', 'hh': 'hour', 'mm': 'minute'})
+        tmp.index = pd.to_datetime(d, errors='coerce')
+        tmp = tmp[~tmp.index.isna()]
+        if not tmp.empty:
             station_dfs.append(tmp)
-            break
-        except requests.exceptions.RequestException:
-            continue
-        except Exception:
-            continue
+
+    except requests.exceptions.RequestException:
+        pass
+    except Exception:
+        pass
 
     if not station_dfs:
         return station_id, 0
@@ -214,6 +248,10 @@ def download_ndbc_station_data(station_id, data_dst, start_year=1970, overwrite=
     station_df = pd.concat(station_dfs)
     station_df = station_df.sort_index()
     station_df = station_df[~station_df.index.duplicated(keep='first')]
+    # Drop original date part columns to avoid Arrow dtype issues
+    for c in ['YY', 'YYYY', 'MM', 'DD', 'hh', 'mm']:
+        if c in station_df.columns:
+            station_df.drop(columns=[c], inplace=True)
 
     rename_map = {
         'WDIR': 'wind_dir', 'WSPD': 'wind_speed', 'GST': 'wind_gust', 'WVHT': 'wave_height',
@@ -222,6 +260,14 @@ def download_ndbc_station_data(station_id, data_dst, start_year=1970, overwrite=
         'VIS': 'visibility', 'TIDE': 'tide'
     }
     station_df.rename(columns=rename_map, inplace=True)
+
+    # Coerce expected numeric columns to numeric (handles strings like 'VRB', 'MM')
+    numeric_cols = ['wind_dir', 'wind_speed', 'wind_gust', 'wave_height', 'dominant_wave_period',
+                    'average_wave_period', 'mean_wave_dir', 'pressure', 'air_temp', 'water_temp',
+                    'dewpoint', 'visibility', 'tide']
+    for c in numeric_cols:
+        if c in station_df.columns:
+            station_df[c] = pd.to_numeric(station_df[c], errors='coerce')
 
     station_df.to_parquet(out_file)
     return station_id, len(station_df)
@@ -236,12 +282,10 @@ def process_all_stations(station_ids, data_dst, start_year, workers, overwrite, 
 
     if debug or workers <= 1:
         for station in tqdm(station_ids, desc="Downloading NDBC Records (seq)"):
-            try:
-                sid, nrec = download_ndbc_station_data(*tasks[station])
-                if nrec > 0:
-                    tqdm.write(f"Successfully processed station {sid} with {nrec} records.")
-            except Exception as e:
-                tqdm.write(f"Station {station} failed with an exception: {e}")
+            sid, nrec = download_ndbc_station_data(*tasks[station])
+            if nrec > 0:
+                tqdm.write(f"Successfully processed station {sid} with {nrec} records.")
+
         return
 
     with ProcessPoolExecutor(max_workers=workers) as executor:
@@ -267,21 +311,21 @@ if __name__ == '__main__':
     ndbc_meta_dir = os.path.join(ndbc, 'ndbc_meta')
     ndbc_data_dir = os.path.join(ndbc, 'ndbc_records')
 
-    workers = 16
+    workers = 4
     debug_run = False
-    overwrite_station_list = True
+    overwrite_station_list = False
     overwrite_station_data = False
-    start_year_download = 2018
+    start_year_download = 1970
 
-    shp_path = os.path.join(ndbc_meta_dir, 'ndbc_stations.shp')
-    if not overwrite_station_list and os.path.exists(shp_path):
-        gdf = gpd.read_file(shp_path)
+    meta_pth = os.path.join(ndbc_meta_dir, 'ndbc_stations.csv')
+    if not overwrite_station_list and os.path.exists(meta_pth):
+        gdf = pd.read_csv(meta_pth)
         stations_df = gdf.set_index('station_id')
     else:
         stations_df = get_ndbc_stations(ndbc_meta_dir, overwrite=overwrite_station_list)
 
-    # station_ids = stations_df.index.tolist()
-    station_ids = ['npsf1']
+    station_ids = stations_df.index.tolist()
+    # station_ids = ['dpia1']
 
     process_all_stations(station_ids,
                          data_dst=ndbc_data_dir,
