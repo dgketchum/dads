@@ -14,6 +14,7 @@ from prep.stations import merge_shapefiles, get_station_observation_metadata
 from sklearn.neighbors import BallTree
 from concurrent.futures import ProcessPoolExecutor
 from tqdm import tqdm
+from prep.build_variable_scaler import load_variable_scaler
 
 
 def _read_geo_from_parquet(args):
@@ -77,6 +78,19 @@ class Graph:
             gdf_ = gpd.read_file(self.fields)
             self.fields = self._assign_train_split(gdf_)
 
+        # load variable-specific scaler used by models (if parquet_dir provided)
+        self.scaler = None
+        self.scaler_path = None
+        self.scaler_feature_names = None
+        if self.parquet_dir:
+            parquet_root = os.path.dirname(self.parquet_dir)
+            var_name = os.path.basename(self.parquet_dir).replace('_obs', '')
+            scaler_obj, scaler_path, feat_names = load_variable_scaler(parquet_root, var_name)
+            self.scaler = scaler_obj
+            self.scaler_path = scaler_path
+            self.scaler_feature_names = feat_names
+        self.attr_columns = None
+
     def _assign_train_split(self, stations):
         gdf = stations.copy()
         n = gdf.shape[0]
@@ -85,11 +99,9 @@ class Graph:
             order = gdf['obs_count_total'].rank(method='first', ascending=False)
             gdf['train'] = (order <= k).astype(int)
         else:
-            if self.random_state is not None:
-                np.random.seed(self.random_state)
+            rng = np.random.default_rng(self.random_state)  # deterministic split
             k = int(max(1, round(n * self.split_percent)))
-            idx = np.arange(n)
-            np.random.shuffle(idx)
+            idx = rng.permutation(n)
             train_idx = set(idx[:k])
             gdf['train'] = [1 if i in train_idx else 0 for i in range(n)]
         return gdf
@@ -103,6 +115,7 @@ class Graph:
 
         print('[Graph] Cleaning and scaling features')
         feats_scaled = self._clean_and_scale_features(feats)
+        self.attr_columns = list(feats_scaled.columns)
 
         print('[Graph] Building attribute dictionaries')
         train_flags = stations.set_index(self.index_col)['train'] if 'train' in stations.columns else pd.Series(0,
@@ -210,8 +223,19 @@ class Graph:
                 counts2 = (~np.isfinite(arr2)).sum(axis=0)
                 remaining = {c: int(n) for c, n in zip(feats.columns, counts2) if n > 0}
                 print('Graph prep: remaining non-finite after imputation:', remaining)
-        scaler = MinMaxScaler()
-        feats_scaled = pd.DataFrame(scaler.fit_transform(feats), columns=feats.columns, index=feats.index)
+        if self.scaler is not None and self.scaler_feature_names is not None:
+            cols = list(feats.columns)
+            # ensure selected columns exist in scaler feature set
+            assert all(c in self.scaler_feature_names for c in cols), "scaler feature_names mismatch"  # likely error if not subset
+            idxs = [self.scaler_feature_names.index(c) for c in cols]
+            bias = np.asarray(self.scaler.bias).reshape(-1)[idxs]
+            scale = np.asarray(self.scaler.scale).reshape(-1)[idxs]
+            x = feats.to_numpy(dtype=np.float32)
+            x = (x - bias) / scale + 5e-8
+            feats_scaled = pd.DataFrame(x, columns=cols, index=feats.index)
+        else:
+            scaler = MinMaxScaler()
+            feats_scaled = pd.DataFrame(scaler.fit_transform(feats), columns=feats.columns, index=feats.index)
         return feats_scaled
 
     def _build_attr_dicts(self, feats_scaled, train_flags):
@@ -468,6 +492,38 @@ class Graph:
         gdf_edges.crs = CRS.from_epsg(4326)
         gdf_edges.to_file(os.path.join(self.output_dir, 'edges.shp'), epsg='EPSG:4326', engine='fiona')
 
+        # persist node index and graph metadata for reproducibility/interoperability
+        if gdf is not None:
+            node_idx = [str(s) for s in gdf[self.index_col].tolist()]
+            with open(os.path.join(self.output_dir, 'node_index.json'), 'w') as f:
+                json.dump(node_idx, f)
+            # explicit split id lists
+            tr_ids = [str(s) for s in gdf[gdf['train'] == 1][self.index_col].tolist()]
+            va_ids = [str(s) for s in gdf[gdf['train'] == 0][self.index_col].tolist()]
+            with open(os.path.join(self.output_dir, 'train_ids.json'), 'w') as f:
+                json.dump(tr_ids, f)
+            with open(os.path.join(self.output_dir, 'val_ids.json'), 'w') as f:
+                json.dump(va_ids, f)
+        meta = {
+            'features_order': self.attr_columns if self.attr_columns is not None else None,
+            'scaler_path': self.scaler_path,
+            'scaler_feature_names': self.scaler_feature_names,
+            'neighbor_mode': self.neighbor_mode,
+            'k_nearest': self.k_nearest,
+            'spatial_weight': self.spatial_weight,
+            'neighbor_pool_factor': self.neighbor_pool_factor,
+            'record_holders': self.record_holders,
+            'diversify': self.diversify,
+            'split_mode': self.split_mode,
+            'split_percent': self.split_percent,
+            'random_state': self.random_state,
+            'index_col': self.index_col,
+            'parquet_dir': self.parquet_dir,
+            'use_parquet_features': self.use_parquet_features,
+        }
+        with open(os.path.join(self.output_dir, 'graph_meta.json'), 'w') as f:
+            json.dump(meta, f)
+
 
 if __name__ == '__main__':
 
@@ -529,7 +585,7 @@ if __name__ == '__main__':
         # choose neighbor_mode: 'spatial' or 'features'; when 'features', default to GEO_FEATURES
         node_prep = Graph(stations_obs, output_dir_, k_nearest=10, index_col='fid',
                           parquet_dir=sequence_parq, use_parquet_features=True,
-                          num_workers=16, neighbor_mode='features', spatial_weight=0.2,
+                          num_workers=16, neighbor_mode='features', spatial_weight=0.8,
                           split_percent=0.8, random_state=42, features=select_feats, diversify=True)
         node_prep.generate_edge_index()
 
