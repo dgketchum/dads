@@ -77,6 +77,19 @@ class TransformerDecoder(nn.Module):
 
 
 class WeatherAutoencoder(pl.LightningModule):
+    """Transformer autoencoder for station-year sequences with mask-aware inputs.
+
+    Intent
+    - Encoder consumes selected inputs (target + GEO + RS missingness flags) over a
+      fixed 365-day window and produces a per-sequence latent embedding.
+    - Decoder reconstructs the specified target columns; reconstruction is computed
+      only on valid elements via an external boolean mask from the dataset.
+    - Missing numeric inputs are set to zero inside the model (nan_to_num); the
+      RS missingness flags allow the network to distinguish truly missing RS from
+      valid near-zero values.
+    - Optional triplet loss encourages station-level embedding structure using
+      positive/negative samples (when available).
+    """
     def __init__(self, input_dim, output_dim, learning_rate, latent_size, hidden_size,
                  dropout=0.1, margin=1.0, sequence_length=365, log_csv=None, scaler=None, **kwargs):
 

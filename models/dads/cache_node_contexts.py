@@ -31,9 +31,9 @@ def _build_features(df, bias, scale):
     obs_shift = obs.copy()
     if len(obs_shift) > 1:
         obs_shift[1:, 0] = obs[:-1, 0]
-    input_width = df.shape[1] - 2
-    lf = np.repeat(obs_shift, input_width, axis=1)
-    return lf
+    # strictly univariate input to match retrained LSTM (num_bands=1)
+    features = obs_shift
+    return features
 
 
 def _producer(file_q, task_q, bias, scale, chunk):
@@ -45,7 +45,7 @@ def _producer(file_q, task_q, bias, scale, chunk):
         try:
             stn = os.path.splitext(os.path.basename(fp))[0]
             df = pd.read_parquet(fp)
-            df = df.dropna()
+            df.dropna(subset=[df.columns[0]], inplace=True)
             if len(df) >= chunk:
                 df['day_int'] = df.index.to_julian_date().astype(np.int32)
                 df['day_diff'] = df['day_int'].diff()
@@ -99,7 +99,7 @@ def cache_node_contexts(lstm_model_dir, parquet_dir, scaler_json, out_dir, chunk
         for fp in tqdm(files, desc="Caching node contexts", unit="file"):
             stn = os.path.splitext(os.path.basename(fp))[0]
             df = pd.read_parquet(fp)
-            df = df.dropna()
+            df.dropna(subset=[df.columns[0]], inplace=True)
             if len(df) < chunk_size:
                 continue
             df['day_int'] = df.index.to_julian_date().astype(np.int32)

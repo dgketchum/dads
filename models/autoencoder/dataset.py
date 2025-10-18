@@ -14,6 +14,23 @@ from models.scalers import MinMaxScaler
 
 
 class WeatherDataset(Dataset):
+    """Yearly-chunk dataset for autoencoder training.
+
+    Intent
+    - Enforce a unified column schema across all stations/years ("expected_columns").
+    - Build 365-day chunks per year (Feb 29 removed) to learn seasonal/annual structure.
+    - Inputs are a selected subset of the Parquet columns ("selected_indices").
+      These typically include the observed target, GEO features, and RS missingness flags
+      so the encoder is mask-aware of RS availability.
+    - Targets are one or more columns specified by "target_indices" (by position in the
+      selected input order); reconstruction is computed only where masks are valid.
+
+    Notes
+    - Scaling is fit/applied on the selected input columns.
+    - Chunks with <30% valid target coverage are dropped (other channels may be sparse).
+    - Positive/negative pairs are optional and sampled within/between stations for the
+      triplet loss used during training.
+    """
     def __init__(self, file_paths, expected_width, col_indices, chunk_size,
                  scaler,
                  target_indices=None, transform=None, expected_columns=None, selected_indices=None,
@@ -162,6 +179,14 @@ class WeatherDataset(Dataset):
         return len(self.data)
 
     def __getitem__(self, idx):
+        """Return scaled inputs, masked targets, and optional contrastive pairs.
+
+        Returns
+        - chunk: (T, C_in) inputs for the autoencoder (selected indices only)
+        - target: (T, C_tgt) columns to reconstruct (by target_indices)
+        - mask: (T, C_tgt) boolean mask for valid target elements
+        - positive_chunk / negative_chunk: same shape as chunk or None
+        """
 
         full = self.data[idx].clone()
         full[:, :] = self.scale_chunk(full)
@@ -209,6 +234,7 @@ class WeatherDataset(Dataset):
 
 
 def diff_pairs(tensor, pairs):
+    """Compute pairwise differences for tuple index pairs within a tensor."""
     diffs = []
     for i, j in pairs:
         diff = tensor[:, i] - tensor[:, j]
@@ -217,6 +243,7 @@ def diff_pairs(tensor, pairs):
 
 
 def custom_collate(batch):
+    """Drop Nones yielded by workers (e.g., invalid files) before collation."""
     batch = list(filter(lambda x: x is not None, batch))
     if not batch:
         return None

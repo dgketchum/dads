@@ -11,7 +11,7 @@ from torch.utils.data import DataLoader
 from models.autoencoder.dataset import WeatherDataset
 from models.autoencoder.weather_encoder import WeatherAutoencoder
 
-from prep.columns_desc import GEO_FEATURES
+from prep.columns_desc import GEO_FEATURES, RS_MISS_FEATURES
 import pandas as pd
 from prep.build_variable_scaler import load_variable_scaler
 
@@ -32,7 +32,19 @@ resource.setrlimit(resource.RLIMIT_NOFILE, (4096, rlimit[1]))
 def train_model(dirpath, parquet, target_var, columns, chunk_size, meta_path,
                 batch_size=64, learning_rate=0.001, n_workers=1, device='gpu',
                 logging_csv=None):
-    """"""
+    """Train the autoencoder on yearly 365-day chunks with a unified schema.
+
+    Intent
+    - Inputs: columns = [target_var] + GEO_FEATURES + RS_MISS_FEATURES.
+      RS_MISS_FEATURES are binary flags (1=missing) so the encoder is mask-aware
+      of RS availability over time and across stations.
+    - Strict schema: all station Parquets must have identical columns/order
+      (enforced via metadata.expected_columns). Missing RS values remain NaN in
+      Parquet but their flags indicate absence; the dataset scales and nan-to-num
+      is applied inside the model to stabilize training.
+    - Outputs: latent embeddings (per-station, averaged over available yearly chunks)
+      are later consumed by the DADS GNN.
+    """
 
     target_idx = [columns.index(target_var)]
 
@@ -200,7 +212,8 @@ if __name__ == '__main__':
     # logger_csv = None
     device_ = 'gpu'
 
-    cols = [target_var_] + GEO_FEATURES
+    # Include RS missingness flags to make embeddings mask-aware of RS availability
+    cols = [target_var_] + GEO_FEATURES + RS_MISS_FEATURES
 
     train_model(chk, parq_, target_var=target_var_, columns=cols, chunk_size=365,
                 batch_size=128, learning_rate=0.001, meta_path=metadata_,

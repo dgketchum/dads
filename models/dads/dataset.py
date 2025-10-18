@@ -83,7 +83,7 @@ class DadsDataset(Dataset):
         feature_names = pd.read_parquet(first_file).columns.tolist()
         num_features = len(feature_names)
         assert feature_names[0].endswith('_obs') and not feature_names[1].endswith('_obs'), "unexpected column order"
-        # column indices: y=0, gm=1, lf start=2, no hf; set hf idx to tensor_width for downstream math
+        # column indices: y=0, comparator=1, features start=2; no hf; set hf idx to tensor_width for downstream math
         self.tensor_width = num_features
         self.column_indices = (0, 1, 2, self.tensor_width)
         chunk_size = lstm_meta.get('chunk_size', 12)
@@ -129,7 +129,7 @@ class DadsDataset(Dataset):
     def __getitem__(self, idx):
 
         # in the reanalysis-independent model, seq should be unused
-        y, gm, _, target_station, day_int = self.lstm_dataset[idx]
+        y, comparator, _, target_station, day_int = self.lstm_dataset[idx]
 
         candidates = self.edge_map[target_station]
         # Split candidates into natural neighbors and trailing record_holders
@@ -139,27 +139,36 @@ class DadsDataset(Dataset):
 
         # choose up to n_nodes neighbors preferring those with available context for this day
         chosen, ctx_list, missing_flags = [], [], []
-        # 1) First pass: naturals that HAVE contexts for this day
+        # 1) First pass: naturals that HAVE contexts for this day (sample uniformly, deterministic per (station, day))
+        avail_pairs = []
+        di = int(day_int)
         for stn in naturals:
-            if len(chosen) >= self.n_nodes:
-                break
-            p = os.path.join(self.node_ctx_dir, stn, f"{day_int}.npy")
+            p = os.path.join(self.node_ctx_dir, stn, f"{di}.npy")
             if os.path.exists(p):
                 v = np.load(p)
-                v = np.asarray(v).squeeze()  # enforce 1D context vector
+                v = np.asarray(v).squeeze()
                 t = torch.from_numpy(v)
                 if t.dim() != 1:
                     t = t.view(-1)  # likely error if not 1D
                 assert t.shape[-1] == self.ctx_dim, "node context width mismatch"
+                avail_pairs.append((stn, t))
+        if avail_pairs:
+            seed_ = (sum(ord(ch) for ch in str(target_station)) + di) & 0xFFFFFFFF  # stable seed
+            rng = np.random.default_rng(seed_)
+            k = min(self.n_nodes, len(avail_pairs))
+            sel = rng.choice(len(avail_pairs), size=k, replace=False)
+            for i in sel:
+                stn, t = avail_pairs[int(i)]
                 chosen.append(stn)
                 ctx_list.append(t)
                 missing_flags.append(False)
         # 2) Second pass: remaining naturals WITHOUT contexts
         if len(chosen) < self.n_nodes:
+            selected = set(chosen)
             for stn in naturals:
                 if len(chosen) >= self.n_nodes:
                     break
-                if stn in chosen:
+                if stn in selected:
                     continue
                 chosen.append(stn)
                 ctx_list.append(None)

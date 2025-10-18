@@ -25,6 +25,12 @@ if torch.cuda.is_available():  # avoid CPU-only crash
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 class InferenceDataset(Dataset):
+    """Inference-time yearly chunking aligned with training metadata.
+
+    - Requires identical Parquet schema as recorded in training metadata.
+    - Selects the same input columns (including RS_MISS_FEATURES when present).
+    - Builds 365-day sequences (Feb 29 removed) and applies the saved scaler.
+    """
     def __init__(self, file_path, expected_width, selected_indices, chunk_size, scaler, expected_columns):
         self.chunk_size = chunk_size
         self.selected_indices = selected_indices
@@ -77,6 +83,12 @@ class InferenceDataset(Dataset):
 
 
 def infer_embeddings(model_dir, data_dir, metadata_path, embedding_path, plot=False):
+    """Infer per-station embeddings with the trained autoencoder.
+
+    Uses the training metadata to enforce column identity and scaling, then averages
+    latent vectors across yearly chunks per station. Writes a JSON mapping from
+    station id to embedding vector suitable for DADS.
+    """
     with open(metadata_path, 'r') as f:
         meta = json.load(f)
 
