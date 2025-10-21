@@ -26,6 +26,11 @@ def station_par_map(station_type):
                 'lat': 'latitude',
                 'lon': 'longitude',
                 'elev': 'elev'}
+    if station_type == 'ndbc':
+        return {'index': 'station_id',
+                'lat': 'latitude',
+                'lon': 'longitude',
+                'elev': 'elevation'}
 
     if station_type == 'ghcn':
         return {'index': 'STAID',
