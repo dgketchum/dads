@@ -1,11 +1,10 @@
+import calendar
 import os
-import calendar
-import calendar
-from datetime import datetime
-import pandas as pd
-import geopandas as gpd
-from tqdm import tqdm
 from concurrent.futures import ProcessPoolExecutor
+from datetime import datetime
+
+import geopandas as gpd
+import pandas as pd
 
 
 def _process_tile(args):
@@ -28,7 +27,9 @@ def _process_tile(args):
                                        extrapolate=extrapolate, index_col=index_col)
     if rs_dict is None:
         return tile
+
     for k, v in rs_dict.items():
+
         out_file = os.path.join(out_dir, f'{k}.csv')
 
         if os.path.exists(out_file) and not overwrite:
@@ -38,23 +39,19 @@ def _process_tile(args):
             except pd.errors.EmptyDataError:
                 continue
 
-            df_ = ex.copy()
-            for c in v.columns:
-                df_.loc[v.index, c] = v[c]
-            if 'repeated' in df_.columns:
-                df_.loc[v.index, 'repeated'] = 0
+            try:
+                df_ = ex.copy()
+                for c in v.columns:
+                    df_.loc[v.index, c] = v[c]
+                if 'repeated' in df_.columns:
+                    df_.loc[v.index, 'repeated'] = 0
+            except KeyError:
+                continue
+
             to_write = df_
         else:
             to_write = v
-        # Temporary safeguard: even if overwrite is True, skip overwriting files written today
-        if os.path.exists(out_file) and overwrite:
-            try:
-                mdate = datetime.fromtimestamp(os.path.getmtime(out_file)).date()
-                if mdate == datetime.today().date():
-                    # print('skip overwrite (written today):', os.path.basename(out_file))
-                    continue
-            except Exception:
-                pass
+
         to_write.to_csv(out_file)
         print('wrote', os.path.basename(out_file))
     return tile
@@ -123,15 +120,7 @@ def process_landsat(stations, rs_dir, out_dir, glob=None, shuffle=False, overwri
                     to_write = df_
                 else:
                     to_write = v
-                # Temporary safeguard: even if overwrite is True, skip overwriting files written today
-                if os.path.exists(out_file) and overwrite:
-                    try:
-                        mdate = datetime.fromtimestamp(os.path.getmtime(out_file)).date()
-                        if mdate == datetime.today().date():
-                            print('skip overwrite (written today):', os.path.basename(out_file))
-                            continue
-                    except Exception:
-                        pass
+
                 to_write.to_csv(out_file)
                 print('wrote', os.path.basename(out_file))
     else:
@@ -265,18 +254,26 @@ if __name__ == '__main__':
 
     out = os.path.join(d, 'dads', 'rs', 'landsat', 'station_data')
 
-    glob_ = 'ghcn_CANUSA_stations_mgrs'
-    index_ = 'STAID'
-    fields = os.path.join(d, 'climate', 'ghcn', 'stations', f'{glob_}.csv')
-    rs =  os.path.join(d, 'dads', 'rs', 'landsat', 'updates', 'ghcn')
+    # glob_ = 'ghcn_CANUSA_stations_mgrs'
+    # index_ = 'STAID'
+    # fields = os.path.join(d, 'climate', 'ghcn', 'stations', f'{glob_}.csv')
+    # rs =  os.path.join(d, 'dads', 'rs', 'landsat', 'updates', 'ghcn')
 
-    # glob_ = 'madis_mgrs_28OCT2024'
+    # glob_ = 'madis_17MAY2025_mgrs'
     # index_ = 'fid'
-    # fields = os.path.join(d, 'dads', 'met', 'stations', 'madis_mgrs_28OCT2024.csv')
-    # rs = os.path.join(d, 'dads', 'rs', 'madis_28OCT2024')
+    # fields = os.path.join(d, 'dads', 'met', 'stations', f'{glob_}.csv')
+    # rs = os.path.join(d, 'dads', 'rs', 'landsat', 'updates', 'madis')
+
+    # NDBC configuration
+    glob_ = 'ndbc_stations'
+    index_ = 'station_id'
+    fields = os.path.join(d, 'climate', 'ndbc', 'ndbc_meta', 'ndbc_stations.csv')
+    rs = os.path.join(d, 'dads', 'rs', 'landsat', 'updates', 'ndbc')
 
     num_workers = 6
-    process_landsat(fields, rs, out, glob=glob_, shuffle=True, overwrite=True,
+    if 'madis' in glob_:
+        raise ValueError('MADIS data needs to be appended to exising files, functionality that does not exist')
+    process_landsat(fields, rs, out, glob=glob_, shuffle=True, overwrite=False,
                     extrapolate=True, index_col=index_, num_workers=num_workers)
 
 # ========================= EOF ====================================================================

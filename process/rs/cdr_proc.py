@@ -124,6 +124,8 @@ def process_fid(fid, year, month, ds, extract_vars, out_data, overwrite, ind_col
             df_station = ds.sel(STAID=fid).to_dataframe()
         elif ind_col == 'fid':
             df_station = ds.sel(fid=fid).to_dataframe()
+        elif ind_col == 'station_id':
+            df_station = ds.sel(station_id=fid).to_dataframe()
         else:
             raise ValueError(f'Invalid indexer {ind_col}')
 
@@ -203,8 +205,9 @@ if __name__ == '__main__':
         home = os.path.expanduser('~')
         d = os.path.join(home, 'data', 'IrrigationGIS')
 
-    sites = os.path.join(d, 'dads', 'met', 'stations', 'madis_17MAY2025_gap_mgrs.csv')
+    # sites = os.path.join(d, 'dads', 'met', 'stations', 'madis_17MAY2025_gap_mgrs.csv')
     # sites = os.path.join(d, 'climate', 'ghcn', 'stations', 'ghcn_CANUSA_stations_mgrs_CDR.csv')
+    sites = os.path.join(d, 'climate', 'ndbc', 'ndbc_meta', 'ndbc_stations.csv')
 
     grid_dir = os.path.join(d, 'dads', 'rs', 'cdr', 'nc')
     csv_m_dir = os.path.join(d, 'dads', 'rs', 'cdr', 'csv')
@@ -212,7 +215,10 @@ if __name__ == '__main__':
 
     workers = 16
     extract_surface_reflectance(sites, grid_dir, incomp, csv_m_dir, num_workers=workers,
-                                overwrite=False, bounds=(-180., 25., -60., 85.), index_col='fid')
+                                overwrite=False, bounds=(-180., 25., -60., 85.), index_col='station_id')
+    # For NDBC use index_col='station_id'
+    # extract_surface_reflectance(sites, grid_dir, incomp, csv_m_dir, num_workers=workers,
+    #                             overwrite=False, bounds=(-180., 25., -60., 85.), index_col='station_id')
 
     joined_dir = os.path.join(d, 'dads', 'rs', 'cdr', 'joined')
     join_station_data(csv_m_dir, joined_dir, workers, overwrite=False)

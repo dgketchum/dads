@@ -183,8 +183,8 @@ if __name__ == '__main__':
     dem_d = '/data/ssd2/dads/dem'
 
     _bucket = 'gs://wudr'
-    station_set = 'ghcn'
-    zone = 'alaska'
+    station_set = 'ndbc'
+    zone = 'conus'
 
     if station_set == 'madis':
         stations = 'madis_17MAY2025_gap_mgrs'
@@ -195,6 +195,11 @@ if __name__ == '__main__':
         stations = 'ghcn_CANUSA_stations_mgrs'
         sites = os.path.join(root, 'climate', 'ghcn', 'stations', 'ghcn_stations_mgrs_country.csv')
         chk = os.path.join(root, 'dads', 'rs', 'ghcn_stations', 'landsat', 'tiles')
+
+    elif station_set == 'ndbc':
+        stations = 'ndbc_stations'
+        sites = os.path.join(root, 'climate', 'ndbc', 'ndbc_meta', 'ndbc_stations.csv')
+        chk = None
 
     else:
         raise ValueError

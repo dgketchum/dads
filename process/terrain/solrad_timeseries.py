@@ -180,9 +180,10 @@ if __name__ == '__main__':
 
     tiles = list(bad_files.keys())
 
-    shapefile_path_ = os.path.join(root, 'dads', 'met', 'stations', 'madis_17MAY2025_mgrs.shp')
+    # shapefile_path_ = os.path.join(root, 'dads', 'met', 'stations', 'madis_17MAY2025_mgrs.shp')
+    shapefile_path_ = os.path.join(root, 'climate', 'ndbc', 'ndbc_meta', 'ndbc_stations.shp')
     extract_raster_values_by_tile(shapefile_path_, raster_dir_, solrad_out, num_workers=16, avoid_tiles=None,
-                                  target_tiles=None, shuffle=True, overwrite=False, index_col='fid',
+                                  target_tiles=None, shuffle=True, overwrite=False, index_col='station_id',
                                   debug=False, write_errors=None)
 
     # shapefile_path_ = os.path.join(root, 'climate', 'ghcn', 'stations', 'ghcn_stations_mgrs_country.shp')

@@ -64,6 +64,7 @@ if __name__ == '__main__':
         # os.path.join(d, 'dem', 'terrain', 'new_madis'),
         # os.path.join(d, 'dem', 'terrain', 'dads_10FEB'),
         os.path.join(d, 'dem', 'terrain', 'madis_17MAY2025_gap_mgrs'),
+        # os.path.join(d, 'dem', 'terrain', 'ndbc_stations'),  # NDBC tile CSVs
     ]
     write_station_terrain(dirs_, out, shuffle=False, overwrite=False,
                           index_col='fid', coords=['latitude', 'longitude'], num_workers=12)

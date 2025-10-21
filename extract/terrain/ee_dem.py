@@ -87,6 +87,10 @@ if __name__ == '__main__':
         stations = 'ghcn_CANUSA_stations_mgrs'
         sites = os.path.join(d, 'climate', 'ghcn', 'stations', 'ghcn_stations_mgrs_country.csv')
 
+    elif station_set == 'ndbc':
+        stations = 'ndbc_stations'
+        sites = os.path.join(d, 'climate', 'ndbc', 'ndbc_meta', 'ndbc_stations.csv')
+    
     else:
         raise ValueError
 

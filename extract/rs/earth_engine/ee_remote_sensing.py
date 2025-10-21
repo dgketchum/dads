@@ -232,7 +232,7 @@ if __name__ == '__main__':
         d = '/home/dgketchum/data/IrrigationGIS'
 
     _bucket = 'gs://wudr'
-    station_set = 'madis'
+    station_set = 'ndbc'
 
     if station_set == 'madis':
         index_ = 'fid'
@@ -248,24 +248,24 @@ if __name__ == '__main__':
         ee_points = 'projects/ee-dgketchum/assets/dads/ghcn_CANUSA_stations_mgrs'
         updates_root = os.path.join(d, 'dads', 'rs', 'landsat', 'updates', 'ghcn')
 
+    elif station_set == 'ndbc':
+        index_ = 'station_id'
+        stations_glob = 'ndbc_stations'
+        sites_shp = os.path.join(d, 'climate', 'ndbc', 'ndbc_meta', 'ndbc_stations_simple.shp')
+        ee_points = 'projects/ee-dgketchum/assets/dads/ndbc_stations'
+        updates_root = os.path.join(d, 'dads', 'rs', 'landsat', 'updates', 'ndbc')
+
     else:
         raise NotImplementedError
 
-    # Use shapefile directly to determine tiles and missing stations
     stations = gpd.read_file(sites_shp)
-    bounds = (-178., 7., -53., 83.)
-    w, s, e, n = bounds
-    stations = stations[(stations['latitude'] < n) & (stations['latitude'] >= s)]
-    stations = stations[(stations['longitude'] < e) & (stations['longitude'] >= w)]
     tiles = [m for m in stations['MGRS_TILE'].unique().tolist() if isinstance(m, str)]
     mgrs_tiles = sorted(list(set(tiles)))
-
-    station_files = os.path.join(d, 'dads', 'rs', 'landsat', 'station_data')
 
     failed = []
     missing_csv = os.path.join(d, 'dads', 'rs', 'landsat', 'missing_station_years.csv')
     run_missing = False
-    years_ = [1987, 1988, 1989, 2023, 2024]
+    years_ = [2023]
 
     request_band_extract(stations_glob, points_layer=ee_points, years=years_, buffer=500.0, tiles=mgrs_tiles,
                          check_dir=updates_root, export_tif=False, dry_run=False)

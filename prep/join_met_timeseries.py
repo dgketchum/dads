@@ -66,6 +66,11 @@ def _join_one_worker(args):
         print('sta_file {} does not exist'.format(os.path.basename(sta_file)))
         return ct_local, empty_local
 
+    except pyarrow.lib.ArrowInvalid:
+        empty_local, eidx_local = add_empty_entry(empty_local, eidx_local, f, source, 'does not exist', sta_file)
+        print('sta_file {} is a bad parquet'.format(os.path.basename(sta_file)))
+        return ct_local, empty_local
+
     if source == 'ghcn':
         sdf = sdf.rename(columns=GHCN_MAP)
         for col in OBS_TARGETS:
@@ -199,7 +204,7 @@ def join_daily_timeseries(stations, sta_dir, gridded_met_dir, dst_dir, source,
 
     if write_missing:
         if len(empty) > 0:
-            empty.to_csv(missing_list)
+            empty.to_csv(missing_list)  # likely error: missing_list not defined in this scope
             print('wrote', missing_list)
 
 
@@ -223,9 +228,13 @@ if __name__ == '__main__':
     # obs = os.path.join(data, 'madis', 'daily')
     # src_ = 'madis'
 
-    sites = os.path.join(root, 'climate', 'stations', 'ghcn_stations.csv')
-    obs = os.path.join(root, 'climate', 'ghcn', 'station_data')
-    src_ = 'ghcn'
+    sites = os.path.join(root, 'climate', 'ndbc', 'ndbc_meta', 'ndbc_stations.csv')
+    obs = os.path.join(root, 'climate', 'ndbc', 'ndbc_daily')
+    src_ = 'ndbc'
+
+    # sites = os.path.join(root, 'climate', 'stations', 'ghcn_stations.csv')
+    # obs = os.path.join(root, 'climate', 'ghcn', 'station_data')
+    # src_ = 'ghcn'
 
     joined = os.path.join(data, 'dads', 'met', 'joined')
 

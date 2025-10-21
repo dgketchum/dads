@@ -47,7 +47,7 @@ def _available_station_years(station_id):
     return years
 
 
-def get_ndbc_stations(out_dir, overwrite=False):
+def get_ndbc_stations(out_dir, overwrite=False, mgrs_shapefile=None):
     """
     Fetches the list of all NDBC stations, filters for buoys, and saves
     the metadata as a CSV and a shapefile.
@@ -86,6 +86,10 @@ def get_ndbc_stations(out_dir, overwrite=False):
         df.rename(columns={'STATION_ID': 'station_id'}, inplace=True)
     if 'LOCATION' in df.columns:
         df.rename(columns={'LOCATION': 'location'}, inplace=True)
+
+    # enforce uppercase station identifiers for pipeline consistency
+    if 'station_id' in df.columns:
+        df['station_id'] = df['station_id'].astype(str).str.upper()
 
     # Parse LOCATION column (decimal or DMS inside parentheses)
     coords = df['location'].str.extract(r'([+-]?\d+(?:\.\d+)?)\s*(N|S)\s*([+-]?\d+(?:\.\d+)?)\s*(W|E)')
@@ -133,14 +137,30 @@ def get_ndbc_stations(out_dir, overwrite=False):
 
     print(f"Found {len(df)} NDBC buoys.")
 
-    df.to_csv(meta_csv, index=False)
-    print(f"Saved station metadata to {meta_csv}")
-
     gdf = gpd.GeoDataFrame(
         df, geometry=gpd.points_from_xy(df.longitude, df.latitude), crs="EPSG:4326"
     )
+    if mgrs_shapefile and os.path.exists(mgrs_shapefile):
+        mgrs = gpd.read_file(mgrs_shapefile)
+        tile_col = 'MGRS_TILE' if 'MGRS_TILE' in mgrs.columns else ('MGRS' if 'MGRS' in mgrs.columns else None)
+        if tile_col:
+            left = gdf[['station_id', 'geometry']].reset_index(drop=True)
+            sj = gpd.sjoin(left, mgrs[[tile_col, 'geometry']], how='left', predicate='within')
+            tile_map = sj.groupby('station_id')[tile_col].first()
+            gdf['MGRS_TILE'] = gdf['station_id'].map(tile_map)
+            df['MGRS_TILE'] = gdf['MGRS_TILE']
+
+    df.to_csv(meta_csv, index=False)
+    print(f"Saved station metadata to {meta_csv}")
+
     gdf.to_file(meta_shp)
     print(f"Saved station shapefile to {meta_shp}")
+
+    # write a simplified shapefile with minimal fields for downstream extractors
+    simple_cols = [c for c in ['station_id', 'latitude', 'longitude', 'MGRS_TILE', 'geometry'] if c in gdf.columns]
+    simple_shp = meta_shp.replace('.shp', '_simple.shp')
+    gdf[simple_cols].to_file(simple_shp)
+    print(f"Saved simplified station shapefile to {simple_shp}")
 
     return df.set_index('station_id')
 
@@ -313,7 +333,7 @@ if __name__ == '__main__':
 
     workers = 4
     debug_run = False
-    overwrite_station_list = False
+    overwrite_station_list = True
     overwrite_station_data = False
     start_year_download = 1970
 
@@ -321,17 +341,19 @@ if __name__ == '__main__':
     if not overwrite_station_list and os.path.exists(meta_pth):
         gdf = pd.read_csv(meta_pth)
         stations_df = gdf.set_index('station_id')
+        stations_df.index = stations_df.index.astype(str).str.upper()
     else:
-        stations_df = get_ndbc_stations(ndbc_meta_dir, overwrite=overwrite_station_list)
+        mgrs_shp = os.path.join(d, 'boundaries', 'mgrs', 'mgrs_world_attr.shp')
+        stations_df = get_ndbc_stations(ndbc_meta_dir, overwrite=overwrite_station_list, mgrs_shapefile=mgrs_shp)
 
     station_ids = stations_df.index.tolist()
     # station_ids = ['dpia1']
 
-    process_all_stations(station_ids,
-                         data_dst=ndbc_data_dir,
-                         start_year=start_year_download,
-                         workers=1,
-                         overwrite=overwrite_station_data,
-                         debug=debug_run)
+    # process_all_stations(station_ids,
+    #                      data_dst=ndbc_data_dir,
+    #                      start_year=start_year_download,
+    #                      workers=1,
+    #                      overwrite=overwrite_station_data,
+    #                      debug=debug_run)
 
 # ========================= EOF ====================================================================

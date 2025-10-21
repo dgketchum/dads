@@ -25,6 +25,7 @@ def process_station(fid, row, ts_dir, landsat_dir, cdr_dir, dem_dir, terrain_dir
                                                                        'cdr_obs_time_misalign',
                                                                        'cdr_file']):
             pass
+
         else:
             return fid, None, missing
 
@@ -269,8 +270,8 @@ def join_training(stations, ts_dir, landsat_dir, cdr, sol_dir, terrain_dir, out_
         results = []
         for arg_tuple in args:
             fid = arg_tuple[0]
-            # if fid != 'CA006158350':
-            #     continue
+            if fid != 'CMTI2':
+                continue
             f, stat, missing = process_station(*arg_tuple)
             results.append((f, stat, missing))
 
@@ -305,7 +306,7 @@ if __name__ == '__main__':
     if not os.path.exists(d):
         d = '/home/dgketchum/data/IrrigationGIS'
 
-    _source = 'madis'
+    _source = 'ndbc'
 
     if _source == 'madis':
         glob_ = 'madis_02JULY2025_mgrs'
@@ -314,6 +315,10 @@ if __name__ == '__main__':
     elif _source == 'ghcn':
         glob_ = 'ghcn_CANUSA_stations_mgrs'
         fields = os.path.join(d, 'climate', 'ghcn', 'stations', '{}.csv'.format(glob_))
+
+    elif _source == 'ndbc':
+        glob_ = 'ndbc_stations'
+        fields = os.path.join(d, 'climate', 'ndbc', 'ndbc_meta', '{}.csv'.format(glob_))
 
     else:
         raise ValueError
@@ -337,7 +342,7 @@ if __name__ == '__main__':
                   source=_source,
                   overwrite=overwrite_,
                   workers=12,
-                  debug=True,
+                  debug=False,
                   require_landsat=require_landsat_,
                   require_cdr=require_cdr_,
                   )

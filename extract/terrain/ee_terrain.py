@@ -91,19 +91,21 @@ if __name__ == '__main__':
 
     _bucket = 'gs://wudr'
 
-    # sites = os.path.join(d, 'dads', 'met', 'stations', 'dads_stations_mgrs_10FEB2025.csv')
-    # stations = 'dads_stations_mgrs_10FEB2025'
-    # check = os.path.join(d, 'dads', 'dem', 'terrain', 'madis_stations')
-
     # sites = os.path.join(d, 'climate', 'ghcn', 'stations', 'ghcn_CANUSA_stations_mgrs.csv')
     # stations = 'ghcn_CANUSA_stations_mgrs'
     # stype = 'ghcn'
     # check = os.path.join(d, 'dads', 'dem', 'terrain', 'ghcn_stations')
 
-    sites = os.path.join(d, 'dads', 'met', 'stations', 'madis_17MAY2025_gap_mgrs.csv')
-    stations = 'madis_17MAY2025_gap_mgrs'
-    check = os.path.join(d, 'dads', 'dem', 'terrain', 'madis_stations')
-    stype = 'madis'
+    # NDBC buoys
+    sites = os.path.join(d, 'climate', 'ndbc', 'ndbc_meta', 'ndbc_stations.csv')
+    stations = 'ndbc_stations'
+    check = os.path.join(d, 'dads', 'dem', 'terrain', 'ndbc_stations')
+    stype = 'ndbc'
+
+    # sites = os.path.join(d, 'dads', 'met', 'stations', 'madis_17MAY2025_gap_mgrs.csv')
+    # stations = 'madis_17MAY2025_gap_mgrs'
+    # check = os.path.join(d, 'dads', 'dem', 'terrain', 'madis_stations')
+    # stype = 'madis'
 
     kw = station_par_map(stype)
     bounds = (-180., 25., -60., 85.)
