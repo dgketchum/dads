@@ -29,7 +29,8 @@ class InferenceDataset(Dataset):
 
     - Requires identical Parquet schema as recorded in training metadata.
     - Selects the same input columns (including RS_MISS_FEATURES when present).
-    - Builds 365-day sequences (Feb 29 removed) and applies the saved scaler.
+    - Builds 365-day sequences (Feb 29 removed) and applies the saved scaler, which
+      is fit on graph train_ids only to match training and avoid leakage.
     """
     def __init__(self, file_path, expected_width, selected_indices, chunk_size, scaler, expected_columns):
         self.chunk_size = chunk_size
@@ -86,7 +87,8 @@ def infer_embeddings(model_dir, data_dir, metadata_path, embedding_path, plot=Fa
     """Infer per-station embeddings with the trained autoencoder.
 
     Uses the training metadata to enforce column identity and scaling, then averages
-    latent vectors across yearly chunks per station. Writes a JSON mapping from
+    latent vectors across yearly chunks per station. Scaler comes from the graph's
+    train_ids (train-only). Writes a JSON mapping from
     station id to embedding vector suitable for DADS.
     """
     with open(metadata_path, 'r') as f:
@@ -117,7 +119,10 @@ def infer_embeddings(model_dir, data_dir, metadata_path, embedding_path, plot=Fa
 
     var_name = meta['target_var'].replace('_obs', '')
     parquet_root = os.path.dirname(data_dir)
-    scaler, _, _ = load_variable_scaler(parquet_root, var_name, feature_names=expected_columns)
+    training_root = os.path.dirname(parquet_root)
+    graph_dir = os.path.join(training_root, 'graph', meta['target_var'])
+    split_path = os.path.join(graph_dir, 'train_ids.json')
+    scaler, _, _ = load_variable_scaler(parquet_root, var_name, feature_names=expected_columns, split_ids_path=split_path)
 
     embeddings = {}
     all_embeddings = []

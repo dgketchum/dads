@@ -3,6 +3,7 @@ import os
 from datetime import datetime
 
 import pytorch_lightning as pl
+import numpy as np
 from pytorch_lightning.callbacks import ModelCheckpoint, EarlyStopping
 from torch_geometric.loader import DataLoader
 
@@ -14,7 +15,11 @@ from prep.build_variable_scaler import load_variable_scaler
 def train_model(dirpath, parquet_dir, lstm_model, embeddings, edge_info, nodes=5, batch_size=1,
                 dropout=0.2, learning_rate=0.01, n_workers=1, logging_csv=None, device='gpu', sample=None,
                 node_ctx_dir=None):
-    """"""
+    """Train the DADS GNN with prebuilt embeddings, edges, and node contexts.
+
+    Prints a brief overview of inputs (exog, embeddings, edge attributes, nodes) before
+    model instantiation.
+    """
 
     if sample is None:
         sample = None, None
@@ -28,7 +33,7 @@ def train_model(dirpath, parquet_dir, lstm_model, embeddings, edge_info, nodes=5
     var_dir = os.path.basename(parquet_dir)
     var_name = var_dir.replace('_obs', '')
     parquet_root = os.path.dirname(parquet_dir)
-    _scaler_obj, scaler, _ = load_variable_scaler(parquet_root, var_name)
+    _scaler_obj, scaler, _ = load_variable_scaler(parquet_root, var_name, split_ids_path=os.path.join(edge_info, 'train_ids.json'))
 
     # Require node contexts
     assert node_ctx_dir is not None and os.path.isdir(node_ctx_dir), "node_ctx_dir required and must exist"
@@ -74,14 +79,41 @@ def train_model(dirpath, parquet_dir, lstm_model, embeddings, edge_info, nodes=5
                                 persistent_workers=bool(n_workers > 0),
                                 pin_memory=(device == 'gpu'))
 
+    def print_dads_training_overview(tr_ds, va_ds, n_nodes):
+        print("\n[DADS] Training overview")
+        print(f"- Train stations: {len(tr_ds.lstm_dataset.file_paths)}  Val stations: {len(va_ds.lstm_dataset.file_paths)}")
+        print(f"- Nodes per sample: {n_nodes}")
+        print(f"- Embedding dim: {tr_ds.emb_dim}  Exog dim: {tr_ds.exog_dim}")
+        has_bear = bool(getattr(tr_ds, '_bearing_map', None))
+        has_dist = bool(getattr(tr_ds, '_distance_map', None))
+        print(f"- Edge attr dim: {tr_ds.edge_dim}  (bearing={'on' if has_bear else 'off'}, distance={'on' if has_dist else 'off'})")
+        print(f"- Target exog columns: {tr_ds.exog_cols}")
+        # simple distance summary (first two targets)
+        if has_dist and isinstance(tr_ds._distance_map, dict):
+            try:
+                ks = list(tr_ds._distance_map.keys())[:2]
+                vals = []
+                for k in ks:
+                    vals.extend(list(tr_ds._distance_map[k].values()))
+                if vals:
+                    arr = np.asarray(vals, dtype=float)
+                    print(f"- Distance (km) summary over sample edges: min={arr.min():.1f}, median={np.median(arr):.1f}, max={arr.max():.1f}")
+            except Exception:
+                pass
+
+    # print overview before model instantiation
+    print_dads_training_overview(train_dataset, val_dataset, nodes)
+
     meta['column_indices'] = train_dataset.column_indices
     meta['tensor_width'] = train_dataset.tensor_width
 
     meta['scaler'] = train_dataset.lstm_dataset.scaler
-    edge_dim = next(iter(train_dataset.edge_attr.values())).shape[-1]  # infer edge attribute width
+    meta['exog_dim'] = getattr(train_dataset, 'exog_dim', 0)
+    meta['emb_dim'] = getattr(train_dataset, 'emb_dim', None)
+    edge_dim = int(getattr(train_dataset, 'edge_dim', next(iter(train_dataset.edge_attr.values())).shape[-1]))
     model = DadsMetGNN(lstm_model, output_dim=1, n_nodes=nodes, hidden_dim=1024,
                        edge_attr_dim=edge_dim, dropout=dropout, learning_rate=learning_rate,
-                       log_csv=logging_csv, **meta)
+                       log_csv=logging_csv, use_target_exog_branch=True, **meta)
 
     checkpoint_callback = ModelCheckpoint(
         monitor='val_loss',

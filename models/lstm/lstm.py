@@ -13,8 +13,8 @@ from sklearn.metrics import r2_score, root_mean_squared_error
 class LSTMPredictor(pl.LightningModule):
     def __init__(self,
                  num_bands=8,
-                 hidden_size=64,
-                 num_layers=2,
+                 hidden_size=256,
+                 num_layers=8,
                  learning_rate=0.01,
                  expansion_factor=2,
                  dropout_rate=0.1,
@@ -60,12 +60,12 @@ class LSTMPredictor(pl.LightningModule):
         out, _ = self.lstm(x)
 
         if out.dim() == 2:
-            out = out.unsqueeze(0)  # likely error if features were squeezed elsewhere
+            out = out.unsqueeze(0)
 
         out = out[:, -1, :]
 
         out = self.fc1(out)
-        out = self.output_layers(out).squeeze()
+        out = self.output_layers(out).squeeze(-1)
         return out
 
     def training_step(self, batch, batch_idx):
@@ -85,10 +85,8 @@ class LSTMPredictor(pl.LightningModule):
             val_loss = self.trainer.callback_metrics['val_loss'].item()
             r2_lstm = self.trainer.callback_metrics['r2_lstm'].item()
             r2_comp = self.trainer.callback_metrics['r2_comp'].item()
-            # r2_nl = self.trainer.callback_metrics['r2_nl'].item()
             rmse_lstm = self.trainer.callback_metrics['rmse_lstm'].item()
             rmse_comp = self.trainer.callback_metrics['rmse_comp'].item()
-            # rmse_nl = self.trainer.callback_metrics['rmse_nl'].item()
             current_lr = self.trainer.optimizers[0].param_groups[0]['lr']
             lr_ratio = current_lr / self.learning_rate
 
@@ -97,10 +95,8 @@ class LSTMPredictor(pl.LightningModule):
                         round(val_loss, 4),
                         round(r2_lstm, 4),
                         round(r2_comp, 4),
-                        # round(r2_nl, 4),
                         round(rmse_lstm, 4),
                         round(rmse_comp, 4),
-                        # round(rmse_nl, 4),
                         round(current_lr, 4),
                         round(lr_ratio, 4)]
 
@@ -130,17 +126,18 @@ class LSTMPredictor(pl.LightningModule):
         y_obs_inv = self.inverse_transform(y_obs, idx=0)
         y_hat_inv = self.inverse_transform(y_hat, idx=0)
 
-        y_hat_np = y_hat_inv.detach().cpu().numpy()
-        y_obs_np = y_obs_inv.detach().cpu().numpy()
+        y_hat_np = y_hat_inv.detach().float().cpu().numpy()
+        y_obs_np = y_obs_inv.detach().float().cpu().numpy()
 
         rmse_obs = root_mean_squared_error(y_obs_np, y_hat_np)
         r2_obs = r2_score(y_obs_np, y_hat_np)
 
-        # Comparator metrics only if comparator present (finite)
+        # Comparator metrics with NaN mask; require >=2 valid to compute
         y_comp_inv = self.inverse_transform(y_comp, idx=1)
-        y_comp_np = y_comp_inv.detach().cpu().numpy()
+        y_comp_np = y_comp_inv.detach().float().cpu().numpy()
         valid = np.isfinite(y_comp_np) & np.isfinite(y_obs_np)
-        if valid.any():
+        n_valid = int(valid.sum())
+        if n_valid >= 2:
             rmse_comp = root_mean_squared_error(y_obs_np[valid], y_comp_np[valid])
             r2_comp = r2_score(y_obs_np[valid], y_comp_np[valid])
         else:
@@ -170,7 +167,11 @@ class LSTMPredictor(pl.LightningModule):
         }
 
     def inverse_transform(self, a, idx):
-        a = a * (self.scaler.scale[0, idx] + 5e-8) + self.scaler.bias[0, idx]
+        scale = torch.as_tensor(self.scaler.scale[0, idx], dtype=torch.float32, device=a.device)
+        bias = torch.as_tensor(self.scaler.bias[0, idx], dtype=torch.float32, device=a.device)
+        with torch.amp.autocast('cuda', enabled=False):
+            a = a.float()
+            a = a * (scale + 5e-8) + bias
         return a
 
 

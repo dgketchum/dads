@@ -13,8 +13,25 @@ from torch_geometric.nn import LayerNorm, TransformerConv
 
 
 class DadsMetGNN(pl.LightningModule):
+    """DADS GNN for target-day inference with optional target exog branch.
+
+    Ingests
+    - graph.x: node features assembled by DadsDataset as [embedding, exog] per node
+      (exog = day-of-interest exogenous features: rsun, NOAA CDR daily bands, and
+      available GEO features such as lat/lon/doy/terrain).
+      Target rows have zeros(emb_dim) + exog(day); neighbor rows have embedding + zeros(exog_dim).
+    - graph.edge_attr: per-edge attribute differences (target - neighbor), optionally
+      augmented with sin/cos(bearing) and distance (km) from prep.graph.
+    - graph.node_lstm: neighbor node contexts for the day-of-interest; target row zeros.
+
+    Behavior
+    - When use_target_exog_branch is True, applies a small MLP to the exog slice and
+      adds it only to target rows, separating target-day exogenous encoding from
+      neighbor embedding features before message passing.
+    """
     def __init__(self, pretrained_lstm_path, output_dim, n_nodes=5, hidden_dim=64, edge_attr_dim=20,
-                 dropout=0.1, learning_rate=1e-3, log_csv=None, two_hop=False, **lstm_meta):
+                 dropout=0.1, learning_rate=1e-3, log_csv=None, two_hop=False,
+                 use_target_exog_branch=False, emb_dim=None, exog_dim=0, **lstm_meta):
         super().__init__()
         self.save_hyperparameters()
         self.learning_rate = learning_rate
@@ -25,6 +42,9 @@ class DadsMetGNN(pl.LightningModule):
         self.criterion = nn.MSELoss()
         self.log_csv = log_csv
         self.two_hop = two_hop
+        self.use_target_exog_branch = bool(use_target_exog_branch)
+        self.emb_dim = int(emb_dim) if emb_dim is not None else None
+        self.exog_dim = int(exog_dim) if exog_dim is not None else 0
 
         self.column_indices = lstm_meta['column_indices']
         self.tensor_width = lstm_meta['tensor_width']
@@ -40,6 +60,14 @@ class DadsMetGNN(pl.LightningModule):
             self.norm2 = LayerNorm(hidden_dim)
         self.dropout = nn.Dropout(dropout)
         self.fc = nn.Linear(hidden_dim, output_dim)
+        if self.use_target_exog_branch and self.exog_dim > 0:
+            self.target_exog_mlp = nn.Sequential(
+                nn.Linear(self.exog_dim, hidden_dim),
+                nn.ReLU(),
+                nn.Linear(hidden_dim, hidden_dim)
+            )
+        else:
+            self.target_exog_mlp = None
 
     def forward(self, graph):
 
@@ -54,6 +82,19 @@ class DadsMetGNN(pl.LightningModule):
             node_lstm_feat = self.node_lstm_proj(node_lstm)
             x = torch.cat([x, node_lstm_feat], dim=-1)
             x = self.fuse(x)
+        # Optional target-only exog branch: add exog encoding to target rows only
+        if self.target_exog_mlp is not None and self.emb_dim is not None and self.exog_dim > 0:
+            exog_slice = graph.x[:, self.emb_dim:self.emb_dim + self.exog_dim]
+            exog_feat = self.target_exog_mlp(exog_slice)
+            # locate target row indices for each graph in batch
+            if hasattr(graph, 'ptr'):
+                target_idx = graph.ptr[:-1]
+            else:
+                b = graph.batch
+                _, counts = torch.unique_consecutive(b, return_counts=True)
+                starts = torch.cat([counts.new_zeros(1), torch.cumsum(counts, dim=0)[:-1]])
+                target_idx = starts
+            x[target_idx] = x[target_idx] + exog_feat[target_idx]
         if hasattr(graph, 'edge_attr'):
             assert graph.edge_attr.dim() == 2 and graph.edge_attr.shape[1] == self.edge_attr_dim, "edge_attr dim mismatch"
         x = self.gnn_layer(x, graph.edge_index, graph.edge_attr)

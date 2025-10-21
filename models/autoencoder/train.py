@@ -44,9 +44,35 @@ def train_model(dirpath, parquet, target_var, columns, chunk_size, meta_path,
       is applied inside the model to stabilize training.
     - Outputs: latent embeddings (per-station, averaged over available yearly chunks)
       are later consumed by the DADS GNN.
+    - Scaling uses a MinMax scaler fit on graph train_ids only (no leakage).
+    - By default, enables `zero_target_in_encoder=True` so embeddings depend on
+      exogenous inputs rather than shortcutting via the target channel.
     """
 
     target_idx = [columns.index(target_var)]
+
+    def print_autoencoder_training_overview(parquet_dir, cols_cfg, actual_cols, selected_idx):
+        """Print a concise overview of AE inputs and simple stats before training."""
+        files = [f for f in os.listdir(parquet_dir) if f.endswith('.parquet')]
+        print("\n[AE] Training overview")
+        print(f"- Parquet files: {len(files)}  Sequence length: {chunk_size}")
+        print(f"- Configured columns ({len(cols_cfg)}): {cols_cfg}")
+        exog = [c for c in cols_cfg if c != target_var and c in GEO_FEATURES]
+        print(f"- Exog (GEO_FEATURES present): {exog}")
+        # summary from first file over target+exog subset
+        try:
+            sample_file = os.path.join(parquet_dir, files[0])
+            subset = [target_var] + exog
+            df = pd.read_parquet(sample_file, columns=[c for c in subset if c in actual_cols])
+            desc = df.describe().T
+            nn = df.notna().mean().rename('non_null_frac')
+            print("- Summary (first file, target+exog):")
+            for col in df.columns.tolist():
+                row = desc.loc[col]
+                nnv = float(nn.get(col, float('nan')))
+                print(f"  {col}: count={int(row['count'])}, non_null={nnv:.2f}, min={row['min']:.3f}, max={row['max']:.3f}")
+        except Exception:
+            pass
 
     # simple split by presence in provided mapping file removed; use filename hashing for split
     # If a station list exists elsewhere, integrate here.
@@ -100,7 +126,10 @@ def train_model(dirpath, parquet, target_var, columns, chunk_size, meta_path,
 
     parquet_root = os.path.dirname(parquet)
     var_name = target_var.replace('_obs', '')
-    scaler_obj, _, _ = load_variable_scaler(parquet_root, var_name, feature_names=actual_cols)
+    training_root = os.path.dirname(parquet_root)
+    graph_dir = os.path.join(training_root, 'graph', target_var)
+    split_path = os.path.join(graph_dir, 'train_ids.json')
+    scaler_obj, _, _ = load_variable_scaler(parquet_root, var_name, feature_names=actual_cols, split_ids_path=split_path)
 
     train_dataset = WeatherDataset(file_paths=file_map['train'],
                                    expected_width=len(actual_cols),
@@ -136,6 +165,9 @@ def train_model(dirpath, parquet, target_var, columns, chunk_size, meta_path,
                                 persistent_workers=True, pin_memory=True, prefetch_factor=2,
                                 collate_fn=lambda batch: [x for x in batch if x is not None])
 
+    # print overview before model instantiation
+    print_autoencoder_training_overview(parquet, columns, actual_cols, selected_indices)
+
     model = WeatherAutoencoder(input_dim=len(columns),
                                output_dim=len(target_idx),
                                latent_size=64,
@@ -144,7 +176,9 @@ def train_model(dirpath, parquet, target_var, columns, chunk_size, meta_path,
                                learning_rate=learning_rate,
                                log_csv=logging_csv,
                                scaler=val_dataset.scaler,
-                               sequence_length=chunk_size)
+                               sequence_length=chunk_size,
+                               zero_target_in_encoder=True,
+                               target_input_idx=0)
 
     print(f"Number of training samples: {len(train_dataset)}")
     print(f"Number of validation samples: {len(val_dataset)}")

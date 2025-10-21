@@ -89,6 +89,9 @@ class WeatherAutoencoder(pl.LightningModule):
       valid near-zero values.
     - Optional triplet loss encourages station-level embedding structure using
       positive/negative samples (when available).
+    - Optional exogenous-only ablation: when `zero_target_in_encoder=True`, the target
+      input channel is zeroed before encoding so embeddings reflect exogenous drivers
+      rather than the target itself.
     """
     def __init__(self, input_dim, output_dim, learning_rate, latent_size, hidden_size,
                  dropout=0.1, margin=1.0, sequence_length=365, log_csv=None, scaler=None, **kwargs):
@@ -126,6 +129,11 @@ class WeatherAutoencoder(pl.LightningModule):
         self.margin = margin
 
     def forward(self, x):
+        # Optional ablation: zero out target input channel to force exogenous-only encoding
+        if hasattr(self, 'zero_target_in_encoder') and self.zero_target_in_encoder:
+            idx = int(getattr(self, 'target_input_idx', 0))
+            x = x.clone()
+            x[:, :, idx] = 0.0
         latent_seq = self.encoder(x)
         z = self.attn_pool(latent_seq)
         x_hat = self.decoder(z)
