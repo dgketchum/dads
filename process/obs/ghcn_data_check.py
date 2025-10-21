@@ -166,7 +166,7 @@ def assess_downloaded_data(records_dir, out_csv=None, inventory=None, out_shp=No
     in_joined = summary_df.get('in_joined', pd.Series(0, index=summary_df.index)).fillna(0).astype(int)
     in_training = summary_df.get('in_training', pd.Series(0, index=summary_df.index)).fillna(0).astype(int)
 
-    remain = ~pre87_mask
+    remain = pd.Series(True, index=summary_df.index)  # include pre-1987 in diagnostics post pre-RS acceptance
     join_fail_mask = remain & (in_joined == 0)
     join_fail_ct = int(join_fail_mask.sum())
 

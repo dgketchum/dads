@@ -38,36 +38,44 @@ def _read_geo_from_parquet(args):
 
 
 class Graph:
+    """Builds station neighbor graphs and static edge/node attributes for DADS.
+
+    Outputs per target variable directory
+    - train_edge_index.json / val_edge_index.json: mapping to->list[from] neighbor ids.
+    - train_edge_attr.json / val_edge_attr.json: per-station scaled attribute vectors
+      used to form (target - neighbor) edge attributes at runtime.
+    - train_edge_bearing.json / val_edge_bearing.json: per-edge bearing to neighbor (deg).
+    - train_edge_distance.json / val_edge_distance.json: per-edge geodesic distance (km).
+    - node_index.json, train_ids.json, val_ids.json: indexing metadata.
+
+    Static geometry (bearing, distance) is computed once here for scalability; day-specific
+    data such as target exogenous features and neighbor contexts are assembled at runtime.
+    Additionally, a variable-specific MinMax scaler is constructed using train_ids only
+    (graph split) and recorded in graph_meta.json to avoid information leakage.
+    """
+
     def __init__(self, stations, output_dir, k_nearest=2, bounds=None, index_col='fid',
-                 split_mode='observations', split_percent=0.8, random_state=None,
+                 split_percent=0.8, random_state=None,
                  parquet_dir=None, use_parquet_features=False, num_workers=1,
-                 neighbor_mode='spatial', spatial_weight=0.2, neighbor_pool_factor=5,
-                 record_holders: int = 3, features=None, diversify=False):
+                 neighbor_pool_factor=5,
+                 record_holders: int = 3, features=None):
         self.fields = stations
         self.output_dir = output_dir
         self.k_nearest = k_nearest
         self.pth_stations = []
         self.bounds = bounds
         self.index_col = index_col
-        self.split_mode = split_mode
         self.split_percent = split_percent
         self.random_state = random_state
         self.parquet_dir = parquet_dir
         self.use_parquet_features = use_parquet_features
         self.num_workers = int(num_workers) if num_workers is not None else 1
-        # enforce neighbor_mode choices
-        if neighbor_mode not in ('spatial', 'features'):
-            raise ValueError("neighbor_mode must be 'spatial' or 'features'")
-        self.neighbor_mode = neighbor_mode
-        self.spatial_weight = float(spatial_weight)
         self.neighbor_pool_factor = int(neighbor_pool_factor)
         self.record_holders = int(record_holders)
-        self.diversify = bool(diversify)
-        # feature selection (optional): default to GEO_FEATURES only when using feature-space neighbors
+        # feature selection (optional)
         if features is None:
-            self.features = list(GEO_FEATURES) if self.neighbor_mode == 'features' else list(GEO_FEATURES)
+            self.features = list(GEO_FEATURES)
         else:
-            # ensure provided features are known columns
             assert all(f in GEO_FEATURES for f in features), "unknown feature(s) provided"  # likely error if not subset
             self.features = list(features)
 
@@ -78,14 +86,18 @@ class Graph:
             gdf_ = gpd.read_file(self.fields)
             self.fields = self._assign_train_split(gdf_)
 
-        # load variable-specific scaler used by models (if parquet_dir provided)
+        # load variable-specific scaler using train-only stations (dependent on split)
         self.scaler = None
         self.scaler_path = None
         self.scaler_feature_names = None
         if self.parquet_dir:
             parquet_root = os.path.dirname(self.parquet_dir)
             var_name = os.path.basename(self.parquet_dir).replace('_obs', '')
-            scaler_obj, scaler_path, feat_names = load_variable_scaler(parquet_root, var_name)
+            try:
+                tr_ids = self.fields[self.fields['train'] == 1][self.index_col].astype(str).tolist()
+            except Exception:
+                tr_ids = None  # likely error if split not present
+            scaler_obj, scaler_path, feat_names = load_variable_scaler(parquet_root, var_name, station_ids=tr_ids)
             self.scaler = scaler_obj
             self.scaler_path = scaler_path
             self.scaler_feature_names = feat_names
@@ -94,16 +106,11 @@ class Graph:
     def _assign_train_split(self, stations):
         gdf = stations.copy()
         n = gdf.shape[0]
-        if self.split_mode == 'observations' and 'obs_count_total' in gdf.columns:
-            k = int(max(1, round(n * self.split_percent)))
-            order = gdf['obs_count_total'].rank(method='first', ascending=False)
-            gdf['train'] = (order <= k).astype(int)
-        else:
-            rng = np.random.default_rng(self.random_state)  # deterministic split
-            k = int(max(1, round(n * self.split_percent)))
-            idx = rng.permutation(n)
-            train_idx = set(idx[:k])
-            gdf['train'] = [1 if i in train_idx else 0 for i in range(n)]
+        rng = np.random.default_rng(self.random_state)  # deterministic split
+        k = int(max(1, round(n * self.split_percent)))
+        idx = rng.permutation(n)
+        train_idx = set(idx[:k])
+        gdf['train'] = [1 if i in train_idx else 0 for i in range(n)]
         return gdf
 
     def generate_edge_index(self):
@@ -125,9 +132,7 @@ class Graph:
         print('[Graph] Splitting train/val GeoDataFrames')
         gdf, train_gdf, val_gdf = self._split_train_val(stations)
 
-        print('[Graph] Building neighbor edges (mode={}, k={}, spatial_weight={})'.format(self.neighbor_mode,
-                                                                                          self.k_nearest,
-                                                                                          self.spatial_weight))
+        print('[Graph] Building neighbor edges (k={})'.format(self.k_nearest))
         spatial_edges = self._build_edges(train_gdf, val_gdf, feats_scaled)
 
         print('[Graph] Converting edges to GeoDataFrame ({} edges)'.format(len(spatial_edges)))
@@ -226,7 +231,7 @@ class Graph:
         if self.scaler is not None and self.scaler_feature_names is not None:
             cols = list(feats.columns)
             # ensure selected columns exist in scaler feature set
-            assert all(c in self.scaler_feature_names for c in cols), "scaler feature_names mismatch"  # likely error if not subset
+            assert all(c in self.scaler_feature_names for c in cols), "scaler feature_names mismatch"
             idxs = [self.scaler_feature_names.index(c) for c in cols]
             bias = np.asarray(self.scaler.bias).reshape(-1)[idxs]
             scale = np.asarray(self.scaler.scale).reshape(-1)[idxs]
@@ -241,7 +246,8 @@ class Graph:
     def _build_attr_dicts(self, feats_scaled, train_flags):
         train_dct, val_dct = {}, {}
         for i, r in feats_scaled.iterrows():
-            t = int(train_flags.loc[i]) if i in train_flags.index else 0
+            v = train_flags.loc[i] if i in train_flags.index else 0
+            t = int(v.max()) if isinstance(v, pd.Series) else int(v)  # duplicate index -> Series
             if t:
                 train_dct[i] = r.to_list()
             val_dct[i] = r.to_list()
@@ -258,185 +264,117 @@ class Graph:
         return gdf, train_gdf, val_gdf
 
     def _build_edges(self, train_gdf, val_gdf, feats_scaled):
-        # Delegate to the chosen neighbor approach, each returns list of [to, from] arrays
+        # Unified: spatial candidate pool, then half similar/half dissimilar by features
         k = int(self.k_nearest) if self.k_nearest and self.k_nearest > 0 else 1
-        if self.neighbor_mode == 'spatial':
-            parts = self._build_edges_spatial(train_gdf, val_gdf, k)
-        else:  # 'features'
-            parts = self._build_edges_feature_space(train_gdf, val_gdf, feats_scaled, k)
-        spatial_edges = np.concatenate(parts) if parts else np.empty((0, 2), dtype=int)
-        spatial_edges = spatial_edges[:, [1, 0]]
-        return spatial_edges
-
-    def _build_edges_spatial(self, train_gdf, val_gdf, k):
         parts = []
-        # Prepare coordinates and haversine KNN tree
-        train_coords = np.array([[pt.y, pt.x] for pt in train_gdf.geometry], dtype=np.float64)
-        train_rad = np.radians(train_coords)
-        val_coords = np.array([[pt.y, pt.x] for pt in val_gdf.geometry], dtype=np.float64)
-        val_rad = np.radians(val_coords)
-        tree = BallTree(train_rad, metric='haversine')
-        k_pool = min(max(k * self.neighbor_pool_factor, k), len(train_gdf))
-        # val -> train edges, rank candidates by period-of-record
-        _, ind_v = tree.query(val_rad, k=k_pool)
-        mapped_neighbors = train_gdf.index.values[ind_v]
-        counts = train_gdf['obs_count_total'].reindex(train_gdf.index).fillna(0).astype(int)
-        edges_v = []
-        for i in range(mapped_neighbors.shape[0]):
-            nbrs = mapped_neighbors[i]
-            nbr_counts = counts.loc[nbrs].to_numpy()
-            order = np.argsort(-nbr_counts)[:k_pool]
-            sel = nbrs[order]
-            row = np.full_like(sel, val_gdf.index.values[i])
-            edges_v.append(np.column_stack([row, sel]))
-        if edges_v:
-            parts.append(np.vstack(edges_v))
-        # train -> train edges, drop self then rank by period-of-record
-        k_pool_t = min(max(k * self.neighbor_pool_factor + 1, 2), len(train_gdf))
-        _, ind_t = tree.query(train_rad, k=k_pool_t)
-        ind_t = ind_t[:, 1:]
-        mapped_neighbors_t = train_gdf.index.values[ind_t]
-        edges_t = []
-        for i in range(mapped_neighbors_t.shape[0]):
-            nbrs = mapped_neighbors_t[i]
-            nbr_counts = counts.loc[nbrs].to_numpy()
-            order = np.argsort(-nbr_counts)[:max(k_pool_t - 1, 1)]
-            sel = nbrs[order]
-            row = np.full_like(sel, train_gdf.index.values[i])
-            edges_t.append(np.column_stack([row, sel]))
-        if edges_t:
-            parts.append(np.vstack(edges_t))
-        return parts
-
-    def _build_edges_feature_space(self, train_gdf, val_gdf, feats_scaled, k):
-        parts = []
-        # Mixed feature+spatial: candidate pool in feature space, tie-break with distance in meters
+        # features by station id
         feats_scaled.index = feats_scaled.index.astype(str)
         tr_ids = train_gdf[self.index_col].astype(str).tolist()
         va_ids = val_gdf[self.index_col].astype(str).tolist()
         train_feat = feats_scaled.loc[tr_ids].to_numpy(dtype=np.float64) if len(tr_ids) else np.empty((0, 0))
         val_feat = feats_scaled.loc[va_ids].to_numpy(dtype=np.float64) if len(va_ids) and train_feat.size else np.empty(
             (0, train_feat.shape[1] if train_feat.size else 0))
-        # prepare spatial coords
+        # spatial coords and tree
         train_coords = np.array([[pt.y, pt.x] for pt in train_gdf.geometry], dtype=np.float64)
         train_rad = np.radians(train_coords)
         val_coords = np.array([[pt.y, pt.x] for pt in val_gdf.geometry], dtype=np.float64)
         val_rad = np.radians(val_coords)
         if train_feat.size:
-            tree_feat = BallTree(train_feat, metric='euclidean')
-            cand_mult = 8
+            tree_sp = BallTree(train_rad, metric='haversine')
+            cand_mult = max(2, int(self.neighbor_pool_factor))
 
-            # helper: greedy max-min reordering to diversify in feature space
-            def _greedy_diverse_order(cand_ids, start_idx=0):
-                if len(cand_ids) <= 1:
-                    return cand_ids
-                sel = [start_idx]  # positions, not ids
-                rem = [i for i in range(len(cand_ids)) if i != start_idx]
-                # prefetch features for candidates
-                vecs = train_feat[cand_ids] if train_feat.size else None
-                # fallback to no-op if features unavailable
-                if vecs is None or vecs.size == 0:
-                    return cand_ids
-                dmat = np.linalg.norm(vecs[:, None, :] - vecs[None, :, :], axis=-1)
-                while rem:
-                    # pick next that maximizes min distance to selected set
-                    mins = np.min(dmat[rem][:, sel], axis=1)
-                    j = rem[int(np.argmax(mins))]
-                    sel.append(j)
-                    rem.remove(j)
-                return [cand_ids[i] for i in sel]
-
-            # val -> train via blended score, then rank by PoR or diversify
+            # val -> train edges
             if len(val_feat):
                 kv = min(max(k * cand_mult, k), len(train_gdf))
-                d_feat_v, ind_feat_v = tree_feat.query(val_feat, k=kv)
+                _, ind_sp_v = tree_sp.query(val_rad, k=kv)
                 edges_v = []
-                for i in range(len(val_feat)):
-                    cand_local = ind_feat_v[i]
-                    fd = d_feat_v[i]
+                n_val = min(len(val_feat), ind_sp_v.shape[0])
+                for i in range(n_val):
+                    cand_local = ind_sp_v[i]
                     if cand_local.size == 0:
                         continue
-                    lat1 = val_rad[i, 0]
-                    lon1 = val_rad[i, 1]
-                    lat2 = train_rad[cand_local, 0]
-                    lon2 = train_rad[cand_local, 1]
-                    dlat = lat2 - lat1
-                    dlon = lon2 - lon1
-                    a = np.sin(dlat / 2) ** 2 + np.cos(lat1) * np.cos(lat2) * np.sin(dlon / 2) ** 2
-                    c = 2 * np.arctan2(np.sqrt(a), np.sqrt(1 - a))
-                    sd = 6371.0 * c
-                    fmin, fmax = fd.min(), fd.max()
-                    smin, smax = sd.min(), sd.max()
-                    fn = (fd - fmin) / (fmax - fmin + 1e-12) if fmax > fmin else fd * 0
-                    sn = (sd - smin) / (smax - smin + 1e-12) if smax > smin else sd * 0
-                    comb = self.spatial_weight * sn + (1.0 - self.spatial_weight) * fn
-                    order_cand = np.argsort(comb)[:kv]
-                    cand_global = train_gdf.index.values[cand_local[order_cand]]
-                    if self.diversify:
-                        # reorder candidates to encourage diversity using local indices
-                        cand_local_sorted = cand_local[order_cand]
-                        nbr_local = np.array(_greedy_diverse_order(cand_local_sorted.tolist(), start_idx=0))
-                        nbr_global = train_gdf.index.values[nbr_local]
-                        nbr_global = nbr_global[:k]
-                    else:
-                        counts = train_gdf['obs_count_total'].reindex(train_gdf.index).fillna(0).astype(int)
-                        cand_counts = counts.loc[cand_global].to_numpy()
-                        keep = np.argsort(-cand_counts)[:k]
-                        nbr_global = cand_global[keep]
+                    v = val_feat[i]
+                    fd = np.linalg.norm(train_feat[cand_local] - v, axis=1)
+                    sim_order = np.argsort(fd)
+                    dissim_order = np.argsort(-fd)
+                    k_sim = k // 2
+                    chosen = []
+                    for idx in sim_order:
+                        if len(chosen) >= k_sim:
+                            break
+                        chosen.append(cand_local[idx])
+                    for idx in dissim_order:
+                        if len(chosen) >= k:
+                            break
+                        j = cand_local[idx]
+                        if j not in chosen:
+                            chosen.append(j)
+                    if len(chosen) < k:
+                        for idx in sim_order:
+                            if len(chosen) >= k:
+                                break
+                            j = cand_local[idx]
+                            if j not in chosen:
+                                chosen.append(j)
+                    nbr_global = train_gdf.index.values[np.array(chosen[:k])]
                     to_global = val_gdf.index.values[i]
                     edges_v.append(np.column_stack([np.full_like(nbr_global, to_global), nbr_global]))
                 if edges_v:
                     parts.append(np.vstack(edges_v))
-            # train -> train via blended score (exclude self), then rank by PoR or diversify
+
+            # train -> train edges (exclude self)
             if len(train_feat):
                 kt = min(max(k * cand_mult, k + 1), len(train_gdf))
-                d_feat_t, ind_feat_t = tree_feat.query(train_feat, k=kt)
+                kq = min(kt + 1, len(train_gdf))
+                _, ind_sp_t = tree_sp.query(train_rad, k=kq)
                 edges_t = []
-                for i in range(len(train_feat)):
-                    cand_local = ind_feat_t[i]
-                    fd = d_feat_t[i]
+                n_tr = min(len(train_feat), ind_sp_t.shape[0])
+                for i in range(n_tr):
+                    cand_local = ind_sp_t[i]
                     if cand_local.size == 0:
                         continue
                     if cand_local[0] == i:
                         cand_local = cand_local[1:]
-                        fd = fd[1:]
                     if cand_local.size == 0:
                         continue
-                    lat1 = train_rad[i, 0]
-                    lon1 = train_rad[i, 1]
-                    lat2 = train_rad[cand_local, 0]
-                    lon2 = train_rad[cand_local, 1]
-                    dlat = lat2 - lat1
-                    dlon = lon2 - lon1
-                    a = np.sin(dlat / 2) ** 2 + np.cos(lat1) * np.cos(lat2) * np.sin(dlon / 2) ** 2
-                    c = 2 * np.arctan2(np.sqrt(a), np.sqrt(1 - a))
-                    sd = 6371.0 * c
-                    fmin, fmax = fd.min(), fd.max()
-                    smin, smax = sd.min(), sd.max()
-                    fn = (fd - fmin) / (fmax - fmin + 1e-12) if fmax > fmin else fd * 0
-                    sn = (sd - smin) / (smax - smin + 1e-12) if smax > smin else sd * 0
-                    comb = self.spatial_weight * sn + (1.0 - self.spatial_weight) * fn
-                    order_cand = np.argsort(comb)[:max(kt - 1, 1)]
-                    cand_global = train_gdf.index.values[cand_local[order_cand]]
-                    if self.diversify:
-                        cand_local_sorted = cand_local[order_cand]
-                        nbr_local = np.array(_greedy_diverse_order(cand_local_sorted.tolist(), start_idx=0))
-                        nbr_global = train_gdf.index.values[nbr_local]
-                        nbr_global = nbr_global[:k]
-                    else:
-                        counts = train_gdf['obs_count_total'].reindex(train_gdf.index).fillna(0).astype(int)
-                        cand_counts = counts.loc[cand_global].to_numpy()
-                        keep = np.argsort(-cand_counts)[:k]
-                        nbr_global = cand_global[keep]
+                    v = train_feat[i]
+                    fd = np.linalg.norm(train_feat[cand_local] - v, axis=1)
+                    sim_order = np.argsort(fd)
+                    dissim_order = np.argsort(-fd)
+                    k_sim = k // 2
+                    chosen = []
+                    for idx in sim_order:
+                        if len(chosen) >= k_sim:
+                            break
+                        chosen.append(cand_local[idx])
+                    for idx in dissim_order:
+                        if len(chosen) >= k:
+                            break
+                        j = cand_local[idx]
+                        if j not in chosen:
+                            chosen.append(j)
+                    if len(chosen) < k:
+                        for idx in sim_order:
+                            if len(chosen) >= k:
+                                break
+                            j = cand_local[idx]
+                            if j not in chosen:
+                                chosen.append(j)
+                    nbr_global = train_gdf.index.values[np.array(chosen[:k])]
                     to_global = train_gdf.index.values[i]
                     edges_t.append(np.column_stack([np.full_like(nbr_global, to_global), nbr_global]))
                 if edges_t:
                     parts.append(np.vstack(edges_t))
-        return parts
+        spatial_edges = np.concatenate(parts) if parts else np.empty((0, 2), dtype=int)
+        spatial_edges = spatial_edges[:, [1, 0]]
+        return spatial_edges
 
     def _edges_to_gdf(self, spatial_edges, gdf):
         edge_lines, train = [], []
         to_, from_ = [], []
+        bearing = []
+        bearing_out = []
+        distance_km = []
         it = tqdm(enumerate(spatial_edges), total=len(spatial_edges), desc='build edge geometries')
         for e, (i, j) in it:
             from_fid = gdf.loc[i, self.index_col]
@@ -447,6 +385,21 @@ class Graph:
             from_.append(from_fid)
             to_.append(to_fid)
             edge_lines.append(line)
+            lat1 = np.radians(point1.y)
+            lon1 = np.radians(point1.x)
+            lat2 = np.radians(point2.y)
+            lon2 = np.radians(point2.x)
+            dlon = lon2 - lon1
+            x = np.sin(dlon) * np.cos(lat2)
+            y = np.cos(lat1) * np.sin(lat2) - np.sin(lat1) * np.cos(lat2) * np.cos(dlon)
+            brng = np.degrees(np.arctan2(x, y))
+            brng = (brng + 360.0) % 360.0
+            bearing.append(float(brng))
+            bearing_out.append(float((brng + 180.0) % 360.0))
+            dlat = lat2 - lat1
+            a = np.sin(dlat / 2.0) ** 2 + np.cos(lat1) * np.cos(lat2) * np.sin(dlon / 2.0) ** 2
+            c = 2.0 * np.arctan2(np.sqrt(a), np.sqrt(1.0 - a))
+            distance_km.append(float(6371.0088 * c))
             if gdf.loc[i, 'train'] and gdf.loc[j, 'train']:
                 train.append(1)
             else:
@@ -455,38 +408,87 @@ class Graph:
         gdf_edges['to'] = to_
         gdf_edges['from'] = from_
         gdf_edges['train'] = train
+        gdf_edges['bearing'] = bearing
+        gdf_edges['bearing_to_neighbor'] = bearing_out
+        gdf_edges['distance_km'] = distance_km
         return gdf_edges
 
     def _write_outputs(self, gdf_edges, train_dct, val_dct, gdf=None):
         train_edges = gdf_edges.groupby('to')['from'].agg(list).to_dict()
+        train_bearing = gdf_edges.groupby('to')['bearing_to_neighbor'].agg(list).to_dict()
+        train_distance = gdf_edges.groupby('to')['distance_km'].agg(list).to_dict()
         # Append global record holders (longest records) to the back as fallbacks
         if gdf is not None and 'obs_count_total' in gdf.columns and self.record_holders > 0:
             train_ids = gdf[gdf['train'] == 1][self.index_col]
             counts = gdf.set_index(self.index_col)['obs_count_total'].reindex(train_ids).fillna(0)
             top_fids = counts.sort_values(ascending=False).index.tolist()[: self.record_holders]
+            gdf_by_fid = gdf.set_index(self.index_col)
             for k, nbrs in train_edges.items():
                 base = list(nbrs)
+                blist = list(train_bearing.get(k, []))
                 for fid in top_fids:
                     if fid != k and fid not in base:
                         base.append(fid)
+                        if (k in gdf_by_fid.index) and (fid in gdf_by_fid.index):
+                            p_to = Point(gdf_by_fid.loc[k, 'geometry'])
+                            p_nb = Point(gdf_by_fid.loc[fid, 'geometry'])
+                            lat_to = np.radians(p_to.y)
+                            lon_to = np.radians(p_to.x)
+                            lat_nb = np.radians(p_nb.y)
+                            lon_nb = np.radians(p_nb.x)
+                            dlon = lon_nb - lon_to
+                            x = np.sin(dlon) * np.cos(lat_nb)
+                            y = np.cos(lat_to) * np.sin(lat_nb) - np.sin(lat_to) * np.cos(lat_nb) * np.cos(dlon)
+                            b = np.degrees(np.arctan2(x, y))
+                            b = (b + 360.0) % 360.0
+                            blist.append(float(b))
                 train_edges[k] = base
+                if blist:
+                    train_bearing[k] = blist
         with open(os.path.join(self.output_dir, 'train_edge_index.json'), 'w') as f:
             json.dump(train_edges, f)
+        with open(os.path.join(self.output_dir, 'train_edge_bearing.json'), 'w') as f:
+            json.dump(train_bearing, f)
+        with open(os.path.join(self.output_dir, 'train_edge_distance.json'), 'w') as f:
+            json.dump(train_distance, f)
         with open(os.path.join(self.output_dir, 'train_edge_attr.json'), 'w') as f:
             json.dump(train_dct, f)
         val_edges = gdf_edges.groupby('to')['from'].agg(list).to_dict()
+        val_bearing = gdf_edges.groupby('to')['bearing_to_neighbor'].agg(list).to_dict()
+        val_distance = gdf_edges.groupby('to')['distance_km'].agg(list).to_dict()
         if gdf is not None and 'obs_count_total' in gdf.columns and self.record_holders > 0:
             train_ids = gdf[gdf['train'] == 1][self.index_col]
             counts = gdf.set_index(self.index_col)['obs_count_total'].reindex(train_ids).fillna(0)
             top_fids = counts.sort_values(ascending=False).index.tolist()[: self.record_holders]
+            gdf_by_fid = gdf.set_index(self.index_col)
             for k, nbrs in val_edges.items():
                 base = list(nbrs)
+                blist = list(val_bearing.get(k, []))
                 for fid in top_fids:
                     if fid != k and fid not in base:
                         base.append(fid)
+                        if (k in gdf_by_fid.index) and (fid in gdf_by_fid.index):
+                            p_to = Point(gdf_by_fid.loc[k, 'geometry'])
+                            p_nb = Point(gdf_by_fid.loc[fid, 'geometry'])
+                            lat_to = np.radians(p_to.y)
+                            lon_to = np.radians(p_to.x)
+                            lat_nb = np.radians(p_nb.y)
+                            lon_nb = np.radians(p_nb.x)
+                            dlon = lon_nb - lon_to
+                            x = np.sin(dlon) * np.cos(lat_nb)
+                            y = np.cos(lat_to) * np.sin(lat_nb) - np.sin(lat_to) * np.cos(lat_nb) * np.cos(dlon)
+                            b = np.degrees(np.arctan2(x, y))
+                            b = (b + 360.0) % 360.0
+                            blist.append(float(b))
                 val_edges[k] = base
+                if blist:
+                    val_bearing[k] = blist
         with open(os.path.join(self.output_dir, 'val_edge_index.json'), 'w') as f:
             json.dump(val_edges, f)
+        with open(os.path.join(self.output_dir, 'val_edge_bearing.json'), 'w') as f:
+            json.dump(val_bearing, f)
+        with open(os.path.join(self.output_dir, 'val_edge_distance.json'), 'w') as f:
+            json.dump(val_distance, f)
         with open(os.path.join(self.output_dir, 'val_edge_attr.json'), 'w') as f:
             json.dump(val_dct, f)
         gdf_edges.crs = CRS.from_epsg(4326)
@@ -508,13 +510,9 @@ class Graph:
             'features_order': self.attr_columns if self.attr_columns is not None else None,
             'scaler_path': self.scaler_path,
             'scaler_feature_names': self.scaler_feature_names,
-            'neighbor_mode': self.neighbor_mode,
             'k_nearest': self.k_nearest,
-            'spatial_weight': self.spatial_weight,
             'neighbor_pool_factor': self.neighbor_pool_factor,
             'record_holders': self.record_holders,
-            'diversify': self.diversify,
-            'split_mode': self.split_mode,
             'split_percent': self.split_percent,
             'random_state': self.random_state,
             'index_col': self.index_col,
@@ -535,7 +533,7 @@ if __name__ == '__main__':
     obs_vars = ['tmax_obs']
     # obs_vars = [v for v in os.listdir(parquet_root) if os.path.isdir(os.path.join(parquet_root, v))]
 
-    madis_glob = 'madis_02JULY2025_mgrs'
+    madis_glob = 'madis_17MAY2025_mgrs'
     ghcn_glob = 'ghcn_CANUSA_stations_mgrs'
     madis_shp = os.path.join(d, 'dads', 'met', 'stations', f'{madis_glob}.shp')
     ghcn_shp = os.path.join(d, 'climate', 'ghcn', 'stations', f'{ghcn_glob}.shp')
@@ -562,31 +560,31 @@ if __name__ == '__main__':
     else:
         stations_obs = get_station_observation_metadata(parquet_root, obs_vars, merged, obs_meta_shp)
 
-    select_feats = ['lat',
-                    'lon',
-                    'rsun',
-                    'aspect',
-                    'elevation',
-                    'slope',
-                    # 'B10',
-                    # 'B2',
-                    # 'B3',
-                    # 'B4',
-                    # 'B5',
-                    # 'B6',
-                    # 'B7',
-                    ]
+    select_feats = [
+        # 'lat',
+        # 'lon',
+        'rsun',
+        'aspect',
+        'elevation',
+        'slope',
+        # 'B10',
+        # 'B2',
+        # 'B3',
+        # 'B4',
+        # 'B5',
+        # 'B6',
+        # 'B7',
+    ]
 
     for target_var in obs_vars:
         output_dir_ = os.path.join(training, 'graph', target_var)
         os.makedirs(output_dir_, exist_ok=True)
         sequence_parq = os.path.join(parquet_root, target_var)
 
-        # choose neighbor_mode: 'spatial' or 'features'; when 'features', default to GEO_FEATURES
         node_prep = Graph(stations_obs, output_dir_, k_nearest=10, index_col='fid',
                           parquet_dir=sequence_parq, use_parquet_features=True,
-                          num_workers=16, neighbor_mode='features', spatial_weight=0.8,
-                          split_percent=0.8, random_state=42, features=select_feats, diversify=True)
+                          num_workers=16,
+                          split_percent=0.8, random_state=42, features=select_feats)
         node_prep.generate_edge_index()
 
 # ========================= EOF ====================================================================

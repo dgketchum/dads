@@ -249,10 +249,11 @@ def process_single_station(fid, madis_src, madis_dst, rsun_tables, overwrite, qa
         return
     local_tz = pytz.timezone(timezone_str)
 
-    c['doy'] = c.index.dayofyear
+    # Modified by dgk 2025-10-19, not yet implemented
     if c.index.tz is None:
         c.index = c.index.tz_localize('UTC')
     c.index = c.index.tz_convert(local_tz)
+    c['doy'] = c.index.dayofyear
 
     required_cols = ['temperature', 'relHumidity', 'solarRadiation', 'windSpeed', 'windDir', 'precipAccum']
     for col in required_cols:

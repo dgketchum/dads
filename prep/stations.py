@@ -6,6 +6,8 @@ import numpy as np
 import geopandas as gpd
 import pandas as pd
 from shapely.geometry import Point
+from concurrent.futures import ProcessPoolExecutor
+import pyarrow.parquet as pq
 
 from prep.columns_desc import GEO_FEATURES
 from utils.station_parameters import station_par_map
@@ -99,7 +101,7 @@ def merge_shapefiles(shapefiles, save=False, out_dir=None, filename=None):
     return merged
 
 
-def get_station_observation_metadata(parquet_root, obs_vars, stations_gdf, out_shp):
+def get_station_observation_metadata(parquet_root, obs_vars, stations_gdf, out_shp, num_workers=12):
     counts = {}
     # outer progress over variables
     for var in tqdm(obs_vars, desc='Variables', leave=True):
@@ -107,32 +109,44 @@ def get_station_observation_metadata(parquet_root, obs_vars, stations_gdf, out_s
         if not os.path.isdir(var_dir):
             continue
         files = [f for f in os.listdir(var_dir) if f.endswith('.parquet')]
-        # inner progress over files for each variable
-        for f in tqdm(files, total=len(files), desc=f'{var} files', leave=False):
-            stn = os.path.splitext(f)[0]
-            p = os.path.join(var_dir, f)
-            try:
-                n = pd.read_parquet(p).shape[0]
-            except Exception:
-                n = 0
-            d = counts.get(stn, {})
-            d[var + '_count'] = d.get(var + '_count', 0) + n
-            counts[stn] = d
+        paths = [os.path.join(var_dir, f) for f in files]
+        stns = [os.path.splitext(f)[0] for f in files]
+        if paths:
+            if num_workers and int(num_workers) > 1:
+                with ProcessPoolExecutor(max_workers=int(num_workers)) as ex:
+                    results = ex.map(_count_parquet_rows, paths)
+                    for stn, n in zip(stns, tqdm(results, total=len(paths), desc=f'{var} files', leave=False)):
+                        d = counts.get(stn, {})
+                        d[var + '_ct'] = d.get(var + '_ct', 0) + (n if n is not None else 0)
+                        counts[stn] = d
+            else:
+                for stn, p in zip(stns, tqdm(paths, total=len(paths), desc=f'{var} files', leave=False)):
+                    n = _count_parquet_rows(p)
+                    d = counts.get(stn, {})
+                    d[var + '_ct'] = d.get(var + '_ct', 0) + (n if n is not None else 0)
+                    counts[stn] = d
 
     idx = [str(i) for i in stations_gdf.get('fid', stations_gdf.index).astype(str)]
     df_counts = pd.DataFrame.from_dict(counts, orient='index')
     df_counts.index = df_counts.index.astype(str)
     df_counts = df_counts.reindex(idx)
     df_counts = df_counts.fillna(0).astype(int)
-    df_counts['obs_count_total'] = df_counts.sum(axis=1)
+    df_counts['obs_ct'] = df_counts.sum(axis=1)
 
     gdf = stations_gdf.copy()
     gdf['fid'] = gdf['fid'].astype(str)
     gdf = gdf.merge(df_counts, how='left', left_on='fid', right_index=True)
-    gdf['obs_count_total'] = gdf['obs_count_total'].fillna(0).astype(int)
+    gdf['obs_ct'] = gdf['obs_ct'].fillna(0).astype(int)
 
     gdf.to_file(out_shp, crs='EPSG:4326', engine='fiona')
     return gdf
+
+
+def _count_parquet_rows(p):
+    try:
+        return pq.ParquetFile(p).metadata.num_rows
+    except Exception:
+        return 0
 
 
 if __name__ == '__main__':

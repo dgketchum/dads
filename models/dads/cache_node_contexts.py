@@ -11,6 +11,7 @@ from tqdm import tqdm
 from models.lstm.lstm import LSTMPredictor
 from models.scalers import MinMaxScaler
 from prep.build_variable_scaler import load_variable_scaler
+from prep.columns_desc import CDR_FEATURES
 
 device_name = None
 if torch.cuda.is_available():
@@ -31,8 +32,22 @@ def _build_features(df, bias, scale):
     obs_shift = obs.copy()
     if len(obs_shift) > 1:
         obs_shift[1:, 0] = obs[:-1, 0]
-    # strictly univariate input to match retrained LSTM (num_bands=1)
-    features = obs_shift
+    obs_shift[0, 0] = obs[0, 0]
+    exog_names = ['rsun'] + list(CDR_FEATURES)
+    cols = list(df.columns)
+    ex_parts = []
+    for name in exog_names:
+        if name in cols:
+            j = cols.index(name)
+            a = df.iloc[:, j].values.astype(np.float32)
+            a = (a - bias[0, j]) / scale[0, j] + 5e-8
+            ex_parts.append(a.reshape(-1, 1))
+    if ex_parts:
+        exog = np.concatenate(ex_parts, axis=1)
+        exog = np.nan_to_num(exog, nan=0.0, posinf=0.0, neginf=0.0)
+        features = np.concatenate([obs_shift, exog], axis=1)
+    else:
+        features = obs_shift
     return features
 
 
@@ -71,7 +86,10 @@ def cache_node_contexts(lstm_model_dir, parquet_dir, scaler_json, out_dir, chunk
     # prefer unified variable-specific scaler under training/scalers/{var}.json
     var_name = os.path.basename(parquet_dir).replace('_obs', '')
     parquet_root = os.path.dirname(parquet_dir)
-    scaler, _, _ = load_variable_scaler(parquet_root, var_name)
+    training_root = os.path.dirname(parquet_root)
+    graph_dir = os.path.join(training_root, 'graph', os.path.basename(parquet_dir))
+    split_path = os.path.join(graph_dir, 'train_ids.json')
+    scaler, _, _ = load_variable_scaler(parquet_root, var_name, split_ids_path=split_path)
 
     ckpt = os.path.join(lstm_model_dir, 'best_model.ckpt')
     meta_path = os.path.join(lstm_model_dir, 'training_metadata.json')
