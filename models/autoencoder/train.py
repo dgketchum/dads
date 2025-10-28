@@ -10,10 +10,11 @@ from torch.utils.data import DataLoader
 
 from models.autoencoder.dataset import WeatherDataset
 from models.autoencoder.weather_encoder import WeatherAutoencoder
+from models.scalers import MinMaxScaler
 
 from prep.columns_desc import GEO_FEATURES, RS_MISS_FEATURES
 import pandas as pd
-from prep.build_variable_scaler import load_variable_scaler
+import numpy as np
 
 device_name = None
 if torch.cuda.is_available():
@@ -32,7 +33,7 @@ resource.setrlimit(resource.RLIMIT_NOFILE, (4096, rlimit[1]))
 
 def train_model(dirpath, parquet, target_var, columns, chunk_size, meta_path,
                 batch_size=64, learning_rate=0.001, n_workers=1, device='gpu',
-                logging_csv=None):
+                logging_csv=None, scaler_json=None):
     """Train the autoencoder on yearly 365-day chunks with a unified schema.
 
     Intent
@@ -142,12 +143,12 @@ def train_model(dirpath, parquet, target_var, columns, chunk_size, meta_path,
     # file_map['train'] = file_map['train'][:1000]
     # file_map['val'] = file_map['val'][:500]
 
-    parquet_root = os.path.dirname(parquet)
-    var_name = target_var.replace('_obs', '')
-    training_root = os.path.dirname(parquet_root)
-    graph_dir = os.path.join(training_root, 'graph', target_var)
-    split_path = os.path.join(graph_dir, 'train_ids.json')
-    scaler_obj, _, _ = load_variable_scaler(parquet_root, var_name, feature_names=actual_cols, split_ids_path=split_path)
+    assert scaler_json is not None and os.path.exists(scaler_json), "scaler_json required and must exist (from graph)"
+    with open(scaler_json, 'r') as f:
+        sp = json.load(f)
+    scaler_obj = MinMaxScaler()
+    scaler_obj.bias = np.array(sp['bias']).reshape(1, -1)
+    scaler_obj.scale = np.array(sp['scale']).reshape(1, -1)
 
     train_dataset = WeatherDataset(file_paths=file_map['train'],
                                    expected_width=len(actual_cols),
@@ -271,5 +272,6 @@ if __name__ == '__main__':
 
     train_model(chk, parq_, target_var=target_var_, columns=cols, chunk_size=365,
                 batch_size=128, learning_rate=0.001, meta_path=metadata_,
-                n_workers=workers, logging_csv=logger_csv, device=device_)
+                n_workers=workers, logging_csv=logger_csv, device=device_,
+                scaler_json=os.path.join(training, 'scalers', f"{variable_}.json"))
 # ========================= EOF ====================================================================

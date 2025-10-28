@@ -7,7 +7,6 @@ import pandas as pd
 from torch.utils.data import Dataset, DataLoader
 from models.autoencoder.weather_encoder import WeatherAutoencoder
 from models.scalers import MinMaxScaler
-from prep.build_variable_scaler import load_variable_scaler
 import matplotlib.pyplot as plt
 from sklearn.manifold import TSNE
 from tqdm import tqdm
@@ -84,7 +83,7 @@ class InferenceDataset(Dataset):
         return x
 
 
-def infer_embeddings(model_dir, data_dir, metadata_path, embedding_path, plot=False):
+def infer_embeddings(model_dir, data_dir, metadata_path, embedding_path, scaler_json, plot=False):
     """Infer per-station embeddings with the trained autoencoder.
 
     Uses the training metadata to enforce column identity and scaling, then averages
@@ -120,12 +119,12 @@ def infer_embeddings(model_dir, data_dir, metadata_path, embedding_path, plot=Fa
     model.to(device)
     model.eval()
 
-    var_name = meta['target_var'].replace('_obs', '')
-    parquet_root = os.path.dirname(data_dir)
-    training_root = os.path.dirname(parquet_root)
-    graph_dir = os.path.join(training_root, 'graph', meta['target_var'])
-    split_path = os.path.join(graph_dir, 'train_ids.json')
-    scaler, _, _ = load_variable_scaler(parquet_root, var_name, feature_names=expected_columns, split_ids_path=split_path)
+    assert scaler_json is not None and os.path.exists(scaler_json), "scaler_json required and must exist (from graph)"
+    with open(scaler_json, 'r') as f:
+        sp = json.load(f)
+    scaler = MinMaxScaler()
+    scaler.bias = np.array(sp['bias']).reshape(1, -1)
+    scaler.scale = np.array(sp['scale']).reshape(1, -1)
 
     embeddings = {}
     all_embeddings = []
@@ -219,9 +218,9 @@ if __name__ == '__main__':
 
     model_run = os.path.join(param_dir, 'checkpoints', '10211323')
     model_ = os.path.join(model_run, 'best_model.ckpt')
-    scaler_ = os.path.join(model_run, 'scaler.json')
+    scaler_json_ = os.path.join(training, 'scalers', f"{variable_}.json")
     metadata_ = os.path.join(model_run, 'training_metadata.json')
     embeddings_file = os.path.join(model_run, 'embeddings.json')
 
-    infer_embeddings(model_run, parq_, metadata_, embeddings_file, plot=False)
+    infer_embeddings(model_run, parq_, metadata_, embeddings_file, scaler_json_, plot=False)
 # ========================= EOF ====================================================================

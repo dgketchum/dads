@@ -7,6 +7,7 @@ import torch
 from tqdm import tqdm
 
 from models.scalers import MinMaxScaler
+from models.dads.value_limits import FEATURE_LIMITS, TARGET_LIMITS
 from concurrent.futures import ProcessPoolExecutor
 
 
@@ -24,7 +25,7 @@ def _read_parquet_features(arg):
     return None
 
 
-def fit_and_save_scaler(file_paths, feature_names, scaler_path, num_workers=None):
+def fit_and_save_scaler(file_paths, feature_names, scaler_path, num_workers=None, variable=None):
     """Fit MinMax scaler on provided files and persist to JSON.
 
     Expects files to already be filtered to train-only stations to avoid leakage.
@@ -41,8 +42,63 @@ def fit_and_save_scaler(file_paths, feature_names, scaler_path, num_workers=None
     assert all_data_chunks, "no data available to fit scaler"
 
     full_dataset = np.vstack(all_data_chunks)
+    mask = np.ones_like(full_dataset, dtype=bool)
+    n_rows = full_dataset.shape[0]
+    # feature-level limits
+    feature_rows_masked = np.zeros(n_rows, dtype=bool)
+    feature_invalid_stats = []
+    if FEATURE_LIMITS:
+        name_to_idx = {n: i for i, n in enumerate(feature_names)}
+        for fname, lim in FEATURE_LIMITS.items():
+            if fname in name_to_idx and lim is not None:
+                j = name_to_idx[fname]
+                lo, hi = float(lim[0]), float(lim[1])
+                xj = full_dataset[:, j]
+                bad = (xj < lo) | (xj > hi)
+                if bad.any():
+                    feature_rows_masked |= bad
+                    mask[:, j] &= ~bad
+                    cnt = int(bad.sum())
+                    mn = float(np.nanmin(xj)) if xj.size else np.nan
+                    mx = float(np.nanmax(xj)) if xj.size else np.nan
+                    feature_invalid_stats.append((fname, cnt, 100.0 * cnt / n_rows, lo, hi, mn, mx))
+    # target limits on first column (variable_obs)
+    target_rows_masked = 0
+    if variable is not None:
+        lim = TARGET_LIMITS.get(variable)
+        if lim is None:
+            raise ValueError(f"TARGET_LIMITS not set for variable {variable}")  # likely error if unset
+        lo, hi = float(lim[0]), float(lim[1])
+        x0 = full_dataset[:, 0]
+        bad0 = (x0 < lo) | (x0 > hi)
+        target_rows_masked = int(bad0.sum())
+        mask[:, 0] &= ~bad0
+    # concise prints
+    if feature_rows_masked.any():
+        print('[Scaler] rows masked by FEATURE_LIMITS:', int(feature_rows_masked.sum()), '/', int(n_rows))
+        if feature_invalid_stats:
+            feature_invalid_stats.sort(key=lambda t: t[1], reverse=True)
+            top = feature_invalid_stats[:20]
+            for name, cnt, pct, lo, hi, mn, mx in top:
+                print('[Scaler][limit]', name, 'invalid=', cnt, f'({pct:.4f}%)', 'limits=(', lo, ',', hi, ')', 'min=', mn, 'max=', mx)
+    print('[Scaler] rows masked by TARGET_LIMITS:', int(target_rows_masked), '/', int(n_rows))
+    # target distribution quick-look
+    x0 = full_dataset[:, 0]
+    try:
+        q05 = float(np.quantile(x0, 0.05))
+        q50 = float(np.quantile(x0, 0.50))
+        q95 = float(np.quantile(x0, 0.95))
+        mn0 = float(np.min(x0))
+        mx0 = float(np.max(x0))
+        suspected_kelvin = (q50 > 130.0)
+        print('[Scaler][target]', feature_names[0], 'min=', mn0, 'p05/p50/p95=', q05, q50, q95, 'max=', mx0, 'suspected_kelvin=', suspected_kelvin)
+    except Exception:
+        pass
+    # fully valid rows under all applied limits
+    fully_valid = int(np.all(mask, axis=1).sum())
+    print('[Scaler] fully_valid_rows under limits:', fully_valid, '/', int(n_rows))
     scaler = MinMaxScaler(axis=0)
-    scaler.fit(full_dataset)
+    scaler.fit(full_dataset, mask=mask)
 
     bias_ = scaler.bias.flatten().tolist()
     scale_ = scaler.scale.flatten().tolist()
@@ -81,7 +137,7 @@ def build_variable_scaler(parquet_root, variable, scaler_dir=None, num_workers=N
     os.makedirs(scaler_dir, exist_ok=True)
     scaler_path = os.path.join(scaler_dir, f"{variable}.json")
 
-    _ = fit_and_save_scaler(files, feature_names, scaler_path, num_workers)
+    _ = fit_and_save_scaler(files, feature_names, scaler_path, num_workers, variable=variable)
     return scaler_path
 
 
@@ -132,12 +188,6 @@ def load_variable_scaler(parquet_root, variable, feature_names=None, station_ids
 
 
 if __name__ == '__main__':
-    """"""
-    variable_ = 'tmax'
-
-    parquet_root_ = '/data/ssd2/dads/training/parquet'
-    scaler_dir_ = '/data/ssd2/dads/training/scalers'
-
-    path_ = build_variable_scaler(parquet_root_, variable_, scaler_dir_)
+    pass
 
 # ========================= EOF ====================================================================

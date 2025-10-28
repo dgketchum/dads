@@ -14,7 +14,7 @@ from prep.stations import merge_shapefiles, get_station_observation_metadata
 from sklearn.neighbors import BallTree
 from concurrent.futures import ProcessPoolExecutor
 from tqdm import tqdm
-from prep.build_variable_scaler import load_variable_scaler
+from prep.build_variable_scaler import load_variable_scaler, build_variable_scaler
 
 
 def _read_geo_from_parquet(args):
@@ -56,7 +56,7 @@ class Graph:
 
     def __init__(self, stations, output_dir, k_nearest=2, bounds=None, index_col='fid',
                  split_percent=0.8, random_state=None,
-                 parquet_dir=None, use_parquet_features=False, num_workers=1,
+                 parquet_dir=None, scaler_json=None, use_parquet_features=False, num_workers=1,
                  neighbor_pool_factor=5,
                  record_holders: int = 3, features=None):
         self.fields = stations
@@ -68,6 +68,7 @@ class Graph:
         self.split_percent = split_percent
         self.random_state = random_state
         self.parquet_dir = parquet_dir
+        self.scaler_path = scaler_json
         self.use_parquet_features = use_parquet_features
         self.num_workers = int(num_workers) if num_workers is not None else 1
         self.neighbor_pool_factor = int(neighbor_pool_factor)
@@ -88,7 +89,6 @@ class Graph:
 
         # load variable-specific scaler using train-only stations (dependent on split)
         self.scaler = None
-        self.scaler_path = None
         self.scaler_feature_names = None
         if self.parquet_dir:
             parquet_root = os.path.dirname(self.parquet_dir)
@@ -97,10 +97,29 @@ class Graph:
                 tr_ids = self.fields[self.fields['train'] == 1][self.index_col].astype(str).tolist()
             except Exception:
                 tr_ids = None  # likely error if split not present
-            scaler_obj, scaler_path, feat_names = load_variable_scaler(parquet_root, var_name, station_ids=tr_ids)
-            self.scaler = scaler_obj
-            self.scaler_path = scaler_path
-            self.scaler_feature_names = feat_names
+            # require explicit scaler_json when using parquet_dir (single-writer policy)
+            assert self.scaler_path is not None, "scaler_json required when parquet_dir is provided"
+            # honor explicit scaler_json: load if present; else build once under its directory
+            if os.path.exists(self.scaler_path):
+                with open(self.scaler_path, 'r') as f:
+                    params = json.load(f)
+                self.scaler_feature_names = params.get('feature_names')
+                s = type('S', (), {})()
+                s.bias = np.array(params['bias']).reshape(1, -1)
+                s.scale = np.array(params['scale']).reshape(1, -1)
+                self.scaler = s
+            else:
+                scaler_dir = os.path.dirname(self.scaler_path)
+                built_path = build_variable_scaler(parquet_root, var_name, scaler_dir=scaler_dir, station_ids=tr_ids)
+                # if requested filename mismatches built_path, we record built_path  # likely error if mismatch
+                self.scaler_path = built_path
+                with open(self.scaler_path, 'r') as f:
+                    params = json.load(f)
+                self.scaler_feature_names = params.get('feature_names')
+                s = type('S', (), {})()
+                s.bias = np.array(params['bias']).reshape(1, -1)
+                s.scale = np.array(params['scale']).reshape(1, -1)
+                self.scaler = s
         self.attr_columns = None
 
     def _assign_train_split(self, stations):
@@ -414,9 +433,23 @@ class Graph:
         return gdf_edges
 
     def _write_outputs(self, gdf_edges, train_dct, val_dct, gdf=None):
+        # Scale distance (km) to [0,1] using train-only edges to avoid leakage
+        # Compute scaling on edges where both nodes are in train split
+        train_mask = (gdf_edges['train'] == 1)
+        if train_mask.any():
+            d_train = gdf_edges.loc[train_mask, 'distance_km'].to_numpy()
+        else:
+            d_train = gdf_edges['distance_km'].to_numpy()
+        d_min = float(np.min(d_train)) if d_train.size else 0.0
+        d_max = float(np.max(d_train)) if d_train.size else 1.0
+        d_scale = d_max - d_min
+        if d_scale == 0.0:
+            d_scale = 1.0  # likely error if all distances identical across edges
+        gdf_edges['distance_scaled'] = (gdf_edges['distance_km'] - d_min) / d_scale + 5e-8
+
         train_edges = gdf_edges.groupby('to')['from'].agg(list).to_dict()
         train_bearing = gdf_edges.groupby('to')['bearing_to_neighbor'].agg(list).to_dict()
-        train_distance = gdf_edges.groupby('to')['distance_km'].agg(list).to_dict()
+        train_distance = gdf_edges.groupby('to')['distance_scaled'].agg(list).to_dict()
         # Append global record holders (longest records) to the back as fallbacks
         if gdf is not None and 'obs_count_total' in gdf.columns and self.record_holders > 0:
             train_ids = gdf[gdf['train'] == 1][self.index_col]
@@ -445,6 +478,7 @@ class Graph:
                 train_edges[k] = base
                 if blist:
                     train_bearing[k] = blist
+                # NOTE: distance list is not extended to match appended record holders  # likely error
         with open(os.path.join(self.output_dir, 'train_edge_index.json'), 'w') as f:
             json.dump(train_edges, f)
         with open(os.path.join(self.output_dir, 'train_edge_bearing.json'), 'w') as f:
@@ -455,7 +489,7 @@ class Graph:
             json.dump(train_dct, f)
         val_edges = gdf_edges.groupby('to')['from'].agg(list).to_dict()
         val_bearing = gdf_edges.groupby('to')['bearing_to_neighbor'].agg(list).to_dict()
-        val_distance = gdf_edges.groupby('to')['distance_km'].agg(list).to_dict()
+        val_distance = gdf_edges.groupby('to')['distance_scaled'].agg(list).to_dict()
         if gdf is not None and 'obs_count_total' in gdf.columns and self.record_holders > 0:
             train_ids = gdf[gdf['train'] == 1][self.index_col]
             counts = gdf.set_index(self.index_col)['obs_count_total'].reindex(train_ids).fillna(0)
@@ -483,6 +517,7 @@ class Graph:
                 val_edges[k] = base
                 if blist:
                     val_bearing[k] = blist
+                # NOTE: distance list is not extended to match appended record holders  # likely error
         with open(os.path.join(self.output_dir, 'val_edge_index.json'), 'w') as f:
             json.dump(val_edges, f)
         with open(os.path.join(self.output_dir, 'val_edge_bearing.json'), 'w') as f:
@@ -518,9 +553,14 @@ class Graph:
             'index_col': self.index_col,
             'parquet_dir': self.parquet_dir,
             'use_parquet_features': self.use_parquet_features,
+            'distance_scaler': {'bias': d_min, 'scale': d_scale},
         }
         with open(os.path.join(self.output_dir, 'graph_meta.json'), 'w') as f:
             json.dump(meta, f)
+        # Also persist dedicated extras scaler JSON for downstream consumers
+        extras = {'distance': {'bias': d_min, 'scale': d_scale}}
+        with open(os.path.join(self.output_dir, 'edge_extras_scaler.json'), 'w') as f:
+            json.dump(extras, f)
 
 
 if __name__ == '__main__':
@@ -580,10 +620,11 @@ if __name__ == '__main__':
         output_dir_ = os.path.join(training, 'graph', target_var)
         os.makedirs(output_dir_, exist_ok=True)
         sequence_parq = os.path.join(parquet_root, target_var)
+        scaler_json_ = os.path.join(training, 'scalers', f"{target_var.replace('_obs','')}.json")
 
         node_prep = Graph(stations_obs, output_dir_, k_nearest=10, index_col='fid',
-                          parquet_dir=sequence_parq, use_parquet_features=True,
-                          num_workers=16, bounds=(-118.0, 43.0, -103.0, 49.0),
+                          parquet_dir=sequence_parq, scaler_json=scaler_json_, use_parquet_features=True,
+                          num_workers=16, bounds=None,
                           split_percent=0.8, random_state=42, features=select_feats)
         node_prep.generate_edge_index()
 

@@ -14,7 +14,7 @@ from models.dads.dataset import DadsDataset
 from prep.build_variable_scaler import load_variable_scaler
 
 
-def train_model(dirpath, parquet_dir, embeddings, edge_info, nodes=5, batch_size=1,
+def train_model(dirpath, parquet_dir, embeddings, edge_info, scaler_json, nodes=5, batch_size=1,
                 dropout=0.2, learning_rate=0.01, n_workers=1, logging_csv=None, device='gpu',
                 n_samples=None, debug=False, windows_per_station=None,
                 tcn_out_dim=256, tcn_channels=128, tcn_dilations=(1, 2, 4, 8), tcn_kernel=3, tcn_dropout=0.1):
@@ -32,16 +32,6 @@ def train_model(dirpath, parquet_dir, embeddings, edge_info, nodes=5, batch_size
 
     # Minimal sequence metadata
     meta = {'chunk_size': 12}
-    # Prefer variable-specific scaler under training/scalers/{var}.json
-    var_dir = os.path.basename(parquet_dir)
-    var_name = var_dir.replace('_obs', '')
-    parquet_root = os.path.dirname(parquet_dir)
-    _scaler_obj, scaler, _ = load_variable_scaler(
-        parquet_root,
-        var_name,
-        split_ids_path=os.path.join(edge_info, 'train_ids.json'),
-        rebuild=(not debug)
-    )
 
     # Station-based split from graph prep
     all_files = {os.path.splitext(f)[0]: os.path.join(parquet_dir, f)
@@ -64,7 +54,7 @@ def train_model(dirpath, parquet_dir, embeddings, edge_info, nodes=5, batch_size
         v_files = v_files[:max(1, min(n_samples, len(v_files)))]
 
     train_dataset = DadsDataset(nodes, t_files, meta, embeddings, train_edges, train_attr,
-                                scaler=scaler, sample=sample[0], lstm_workers=n_workers,
+                                scaler=scaler_json, sample=sample[0], lstm_workers=n_workers,
                                 normalize_keys=train_stations,
                                 windows_per_station=(64 if debug and n_samples is not None else windows_per_station),
                                 neighbor_file_map=all_files)
@@ -96,7 +86,7 @@ def train_model(dirpath, parquet_dir, embeddings, edge_info, nodes=5, batch_size
     val_attr = os.path.join(edge_info, 'val_edge_attr.json')
 
     val_dataset = DadsDataset(nodes, v_files, meta, embeddings, val_edges, val_attr,
-                              scaler=scaler, sample=sample[1], lstm_workers=n_workers,
+                              scaler=scaler_json, sample=sample[1], lstm_workers=n_workers,
                               normalize_keys=train_stations,
                               windows_per_station=(16 if debug and n_samples is not None else windows_per_station),
                               neighbor_file_map=all_files)
@@ -222,7 +212,9 @@ if __name__ == '__main__':
     workers = 40
     device_ = 'gpu'
 
-    train_model(chk, parquet_dir_, encoder_dir, edges, batch_size=4096, nodes=5, dropout=0.5,
+    scaler_json_ = os.path.join(training, 'scalers', f'{target_var}.json')
+
+    train_model(chk, parquet_dir_, encoder_dir, edges, scaler_json_, batch_size=4096, nodes=5, dropout=0.5,
                 learning_rate=0.001, n_workers=workers, logging_csv=logger_csv, device=device_,
                 n_samples=(N_SAMPLES if DEBUG else None), debug=DEBUG,
                 windows_per_station=WINDOWS_PER_STATION)

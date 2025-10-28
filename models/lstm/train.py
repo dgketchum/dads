@@ -123,9 +123,13 @@ def train_model(dirpath, sequence_data, target_var, training_stations, batch_siz
     with open(meta_path, 'w') as f:
         json.dump({'num_bands': num_bands, 'expansion_factor': 2}, f)
 
-    # build train-only scaler using graph split ids (no global fallback)
-    scaler, scaler_path, _ = load_variable_scaler(sequence_data, target_var, feature_names,
-                                                  split_ids_path=training_stations)
+    # Use scaler from graph (single-writer policy); do not rebuild here
+    assert scaler_path is not None and os.path.exists(scaler_path), "scaler_json required and must exist (from graph)"
+    with open(scaler_path, 'r') as f:
+        sp = json.load(f)
+    scaler = MinMaxScaler()
+    scaler.bias = np.array(sp['bias']).reshape(1, -1)
+    scaler.scale = np.array(sp['scale']).reshape(1, -1)
 
     # print overview before model instantiation
     print_lstm_training_overview(file_map['train_files'], file_map['val_files'], feature_names, exog_names, num_bands, chunk_size)

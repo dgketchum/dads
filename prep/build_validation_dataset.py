@@ -7,6 +7,7 @@ import pandas as pd
 import pyarrow.parquet as pq
 from pyarrow.lib import ArrowInvalid
 from tqdm import tqdm
+from models.dads.value_limits import TARGET_LIMITS
 
 
 def _unique_val_stations(val_dir: str, limit_files: int = 0) -> List[str]:
@@ -83,6 +84,18 @@ def _process_one_station(args: Tuple[str, str, str, Dict[str, str], Dict[str, st
             continue
         s = s.reindex(join.index)
         join[product] = s
+    if join.empty:
+        return st
+    # Apply target limits to obs and products (set out-of-range to NaN)
+    base_var = target_var.replace('_obs', '')
+    lim = TARGET_LIMITS.get(base_var)
+    if lim is not None:
+        lo, hi = float(lim[0]), float(lim[1])
+        for c in list(join.columns):
+            v = pd.to_numeric(join[c], errors='coerce')
+            join.loc[(v < lo) | (v > hi), c] = np.nan
+    # Drop rows with NaN obs after clamping
+    join = join.dropna(subset=['obs'])
     if join.empty:
         return st
     out = pd.DataFrame({'station': st, 'dt': join.index.strftime('%Y-%m-%d')})

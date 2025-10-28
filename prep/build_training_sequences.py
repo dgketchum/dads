@@ -7,6 +7,8 @@ import numpy as np
 import pandas as pd
 import torch
 from tqdm import tqdm
+from prep.qaqc_schema import remap_known_sentinels
+from models.dads.value_limits import FEATURE_LIMITS, TARGET_LIMITS
 
 from prep.columns_desc import TARGETS, TERRAIN_FEATURES, GEO_FEATURES
 from prep.columns_desc import LANDSAT_FEATURES, CDR_FEATURES, RS_MISS_FEATURES
@@ -148,6 +150,17 @@ def process_station(fid, row, ts_dir, landsat_dir, cdr_dir, dem_dir, terrain_dir
         if b in ts.columns:
             ts[b] = pd.to_numeric(ts[b], errors='coerce')
 
+    # QA: remap coded sentinels to NaN for NOAA CDR and available targets
+    remap_known_sentinels(ts, [b for b in CDR_FEATURES if b in ts.columns], include_huge=True)
+    remap_known_sentinels(ts, [c for c in ['tmax_obs', 'tmin_obs', 'rsds_obs', 'ea_obs', 'wind_obs', 'prcp_obs'] if c in ts.columns], include_huge=True)
+
+    # Apply feature-level clamps to NaN out-of-range values
+    for fname, lim in FEATURE_LIMITS.items():
+        if fname in ts.columns and lim is not None:
+            lo, hi = float(lim[0]), float(lim[1])
+            v = pd.to_numeric(ts[fname], errors='coerce')
+            ts.loc[(v < lo) | (v > hi), fname] = np.nan
+
     # add RS missingness flags once per station timeline
     for b in LANDSAT_FEATURES:
         miss_col = f'{b}_miss'
@@ -160,6 +173,13 @@ def process_station(fid, row, ts_dir, landsat_dir, cdr_dir, dem_dir, terrain_dir
         if obs_var in ts.columns and ts[obs_var].notna().any():
             base_var_name = obs_var.replace('_obs', '')
             gridded_var = f'{base_var_name}_{gridded_suffix}'
+
+            # Apply target-specific clamps when available
+            lim = TARGET_LIMITS.get(base_var_name)
+            if lim is not None:
+                lo, hi = float(lim[0]), float(lim[1])
+                vv = pd.to_numeric(ts[obs_var], errors='coerce')
+                ts.loc[(vv < lo) | (vv > hi), obs_var] = np.nan
 
             # add comparator column if absent, and a missingness column
             comp_miss_col = f'{gridded_var}_miss'
