@@ -50,8 +50,8 @@ Notes
   stages.
 - Construct a spatial graph that encodes geographic neighborhoods; persist splits, node index, and graph metadata for
   reproducibility.
-- Train a sequence model to produce day‑specific node contexts; cache contexts for efficient reuse during graph
-  training.
+- Produce near‑term, day‑specific neighbor contexts on‑the‑fly via a lightweight temporal encoder (TCN) over
+  12‑day windows; no disk caching required.
 - Train a representation model to produce station embeddings from multi‑feature sequences.
 - Train a lightweight spatio‑temporal GNN that fuses embeddings, edge attributes, and node contexts to predict the
   target.

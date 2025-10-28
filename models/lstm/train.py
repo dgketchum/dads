@@ -143,6 +143,7 @@ def train_model(dirpath, sequence_data, target_var, training_stations, batch_siz
                                            drop_last=False,
                                            shuffle_files=True,
                                            shuffle_within=True)
+
     train_dataloader = DataLoader(train_dataset,
                                   batch_sampler=train_batch_sampler,
                                   num_workers=int(n_workers),

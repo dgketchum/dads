@@ -51,8 +51,12 @@ class WeatherDataset(Dataset):
         def load_one(file_path):
             staid = os.path.basename(file_path).replace('.parquet', '')
             df = pd.read_parquet(file_path)
+
             if self.expected_columns is not None:
-                assert list(df.columns) == list(self.expected_columns)
+                if not list(df.columns) == list(self.expected_columns):
+                    print(f"Skipping {file_path}, columns mismatch. Expected {expected_width} columns, got {df.shape[1]}")
+                    return staid, None, 0, 0
+
             assert isinstance(df.index, pd.DatetimeIndex)
             df = df.sort_index()
             # drop leap day to enforce 365-day alignment

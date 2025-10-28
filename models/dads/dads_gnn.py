@@ -11,29 +11,26 @@ from torch import optim as optim
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from torch_geometric.nn import LayerNorm, TransformerConv
 
+from models.temporal.tcn import TemporalConvEncoder
+
 
 class DadsMetGNN(pl.LightningModule):
-    """DADS GNN for target-day inference with optional target exog branch.
+    """DADS GNN with on-the-fly TCN contexts for neighbors.
 
     Ingests
-    - graph.x: node features assembled by DadsDataset as [embedding, exog] per node
-      (exog = day-of-interest exogenous features: rsun, NOAA CDR daily bands, and
-      available GEO features such as lat/lon/doy/terrain).
-      Target rows have zeros(emb_dim) + exog(day); neighbor rows have embedding + zeros(exog_dim).
-    - graph.edge_attr: per-edge attribute differences (target - neighbor), optionally
-      augmented with sin/cos(bearing) and distance (km) from prep.graph.
-    - graph.node_lstm: neighbor node contexts for the day-of-interest; target row zeros.
-
-    Behavior
-    - When use_target_exog_branch is True, applies a small MLP to the exog slice and
-      adds it only to target rows, separating target-day exogenous encoding from
-      neighbor embedding features before message passing.
+    - graph.x: [embedding, exog] per node. Target: zeros(emb) + exog(day). Neighbors: embedding + zeros(exog).
+    - graph.edge_attr: per-edge attributes (target - neighbor), optional bearing/distance.
+    - neighbor sequences (provided in batch): shape [B, n_nodes, T, C] with boolean mask of availability.
     """
-    def __init__(self, pretrained_lstm_path, output_dim, n_nodes=5, hidden_dim=64, edge_attr_dim=20,
+    def __init__(self, output_dim, n_nodes=5, hidden_dim=64, edge_attr_dim=20,
                  dropout=0.1, learning_rate=1e-3, log_csv=None, two_hop=False,
-                 use_target_exog_branch=False, emb_dim=None, exog_dim=0, **lstm_meta):
+                 use_target_exog_branch=False, emb_dim=None, exog_dim=0,
+                 scaler=None, column_indices=None,
+                 # TCN params
+                 tcn_in_channels=8, tcn_out_dim=256, tcn_channels=128, tcn_dilations=(1, 2, 4, 8),
+                 tcn_kernel=3, tcn_dropout=0.1):
         super().__init__()
-        self.save_hyperparameters()
+        self.save_hyperparameters(ignore=['scaler'])
         self.learning_rate = learning_rate
         self.n_nodes = n_nodes
         self.output_dim = output_dim
@@ -46,12 +43,23 @@ class DadsMetGNN(pl.LightningModule):
         self.emb_dim = int(emb_dim) if emb_dim is not None else None
         self.exog_dim = int(exog_dim) if exog_dim is not None else 0
 
-        self.column_indices = lstm_meta['column_indices']
-        self.tensor_width = lstm_meta['tensor_width']
-        self.scaler = lstm_meta['scaler']
+        self.column_indices = column_indices
+        self.scaler = scaler
+
+        # Temporal encoder producing neighbor contexts
+        self.tcn = TemporalConvEncoder(
+            in_channels=int(tcn_in_channels),
+            channels=int(tcn_channels),
+            kernel_size=int(tcn_kernel),
+            dilations=tuple(tcn_dilations),
+            dropout=float(tcn_dropout),
+            out_dim=int(tcn_out_dim)
+        )
 
         self.node_proj = nn.LazyLinear(hidden_dim)
-        self.node_lstm_proj = nn.LazyLinear(hidden_dim)
+        # Pre-GNN LayerNorm to tame attention logits in TransformerConv (helps fp16/bf16 stability)
+        self.pre_norm = LayerNorm(hidden_dim)
+        self.node_ctx_proj = nn.LazyLinear(hidden_dim)
         self.fuse = nn.Linear(hidden_dim * 2, hidden_dim)
         self.gnn_layer = TransformerConv(hidden_dim, hidden_dim, heads=1, edge_dim=edge_attr_dim, dropout=dropout)
         self.norm = LayerNorm(hidden_dim)
@@ -69,18 +77,30 @@ class DadsMetGNN(pl.LightningModule):
         else:
             self.target_exog_mlp = None
 
-    def forward(self, graph):
+    def _assert_finite(self, tensor, name):
+        if tensor is None:
+            return
+        if not torch.isfinite(tensor).all():
+            n_total = tensor.numel()
+            n_nan = torch.isnan(tensor).sum().item()
+            n_inf = torch.isinf(tensor).sum().item()
+            raise ValueError(f"Non-finite values detected in {name}: nan={n_nan}, inf={n_inf}, total={n_total}")
 
+    def _forward_gnn(self, graph):
+
+        # Runtime guards
+        self._assert_finite(graph.x, 'graph.x')
         x = self.node_proj(graph.x)
-        # If provided, concatenate per-node LSTM outputs with node features, then fuse
-        if hasattr(graph, 'node_lstm'):
-            node_lstm = graph.node_lstm
-            if node_lstm.dim() == 1:
-                node_lstm = node_lstm.unsqueeze(-1)
-            node_lstm = node_lstm.float()
-            assert node_lstm.shape[0] == graph.x.shape[0], "node_lstm rows must match nodes"
-            node_lstm_feat = self.node_lstm_proj(node_lstm)
-            x = torch.cat([x, node_lstm_feat], dim=-1)
+        # If provided, concatenate per-node context outputs with node features, then fuse
+        if hasattr(graph, 'node_ctx'):
+            node_ctx = graph.node_ctx
+            if node_ctx.dim() == 1:
+                node_ctx = node_ctx.unsqueeze(-1)
+            node_ctx = node_ctx.float()
+            assert node_ctx.shape[0] == graph.x.shape[0], "node_ctx rows must match nodes"
+            self._assert_finite(node_ctx, 'graph.node_ctx')
+            node_ctx_feat = self.node_ctx_proj(node_ctx)
+            x = torch.cat([x, node_ctx_feat], dim=-1)
             x = self.fuse(x)
         # Optional target-only exog branch: add exog encoding to target rows only
         if self.target_exog_mlp is not None and self.emb_dim is not None and self.exog_dim > 0:
@@ -94,16 +114,21 @@ class DadsMetGNN(pl.LightningModule):
                 _, counts = torch.unique_consecutive(b, return_counts=True)
                 starts = torch.cat([counts.new_zeros(1), torch.cumsum(counts, dim=0)[:-1]])
                 target_idx = starts
-            x[target_idx] = x[target_idx] + exog_feat[target_idx]
+            # Scale down residual add for stability under mixed precision
+            x[target_idx] = x[target_idx] + 0.1 * exog_feat[target_idx]
         if hasattr(graph, 'edge_attr'):
             assert graph.edge_attr.dim() == 2 and graph.edge_attr.shape[1] == self.edge_attr_dim, "edge_attr dim mismatch"
-        x = self.gnn_layer(x, graph.edge_index, graph.edge_attr)
+        # Run GNN layers in fp32 to avoid fp16 overflow in attention computations
+        x = self.pre_norm(x)
+        with torch.amp.autocast('cuda', enabled=False):
+            x = self.gnn_layer(x.float(), graph.edge_index, graph.edge_attr.float())
         x = self.norm(x)
         x = F.relu(x)
         x = self.dropout(x)
         if self.two_hop:
             res = x
-            x = self.gnn_layer2(x, graph.edge_index, graph.edge_attr)
+            with torch.amp.autocast('cuda', enabled=False):
+                x = self.gnn_layer2(x.float(), graph.edge_index, graph.edge_attr.float())
             x = self.norm2(x)
             x = F.relu(x)
             x = self.dropout(x)
@@ -122,19 +147,64 @@ class DadsMetGNN(pl.LightningModule):
         out = out.squeeze(-1)
         return out
 
+    def _encode_contexts(self, neighbor_seq, neighbor_mask):
+        # neighbor_seq: [B, n_nodes, T, C]
+        B, K, T, C = neighbor_seq.shape
+        x = neighbor_seq.view(B * K, T, C).permute(0, 2, 1).contiguous()  # [BK, C, T]
+        # Guard inputs for finiteness
+        self._assert_finite(x, 'neighbor_seq')
+        with torch.amp.autocast('cuda', enabled=torch.is_autocast_enabled()):
+            ctx = self.tcn(x)  # [BK, D]
+        self._assert_finite(ctx, 'tcn_ctx')
+        ctx = ctx.view(B, K, -1)
+        # Impute missing per-sample with mean of available
+        mask = neighbor_mask  # [B, K]
+        D = ctx.shape[-1]
+        ctx_filled = []
+        for b in range(B):
+            m = mask[b]
+            if m.any():
+                mean_vec = ctx[b, m].mean(dim=0)
+            else:
+                mean_vec = torch.zeros(D, device=ctx.device, dtype=ctx.dtype)
+            row = torch.where(m.view(-1, 1), ctx[b], mean_vec.view(1, -1))
+            ctx_filled.append(row)
+        ctx_filled = torch.stack(ctx_filled, dim=0)  # [B, K, D]
+        return ctx_filled
+
+    def forward(self, graph, neighbor_seq=None, neighbor_mask=None):
+        if neighbor_seq is not None and neighbor_mask is not None:
+            # Build node_ctx from TCN contexts
+            device = graph.x.device
+            neighbor_seq = neighbor_seq.to(device)
+            neighbor_mask = neighbor_mask.to(device)
+            ctx = self._encode_contexts(neighbor_seq, neighbor_mask)  # [B, K, D]
+            B, K, D = ctx.shape
+            # expand with target zeros and flatten to match Batch node order
+            zeros = torch.zeros(B, 1, D, device=ctx.device, dtype=ctx.dtype)
+            node_ctx = torch.cat([zeros, ctx], dim=1)  # [B, 1+K, D]
+            # scatter into graph order using ptr
+            if hasattr(graph, 'ptr'):
+                parts = []
+                for b in range(B):
+                    parts.append(node_ctx[b])
+                graph.node_ctx = torch.cat(parts, dim=0)
+            else:
+                graph.node_ctx = node_ctx.view(-1, D)
+        return self._forward_gnn(graph)
+
     def training_step(self, batch, batch_idx):
-        graph, y_obs = batch
-        y_hat = self(graph)
-
-        y_obs = y_obs[:, -1:]
-
+        graph, y_obs, neighbor_seq, neighbor_mask = batch
+        y_hat = self(graph, neighbor_seq, neighbor_mask)
+        # Match shapes for loss: y_hat [B], take last target as [B]
+        y_obs = y_obs[:, -1]
         loss = F.mse_loss(y_hat, y_obs)
         self.log('train_loss', loss)
         return loss
 
     def validation_step(self, batch, batch_idx):
-        graph, y_obs = batch
-        y_hat = self(graph)
+        graph, y_obs, neighbor_seq, neighbor_mask = batch
+        y_hat = self(graph, neighbor_seq, neighbor_mask)
 
         y_hat = y_hat.squeeze()
         y_obs = y_obs[:, -1]
@@ -146,8 +216,14 @@ class DadsMetGNN(pl.LightningModule):
             y_obs = y_obs.unsqueeze(0)
             y_hat = y_hat.unsqueeze(0)
 
+        # Compute metrics in fp32 on CPU; clamp extremes to avoid overflow during early training
+        y_obs = y_obs.float()
+        y_hat = y_hat.float()
         y_obs = self.inverse_transform(y_obs, idx=self.column_indices[0])
         y_hat = self.inverse_transform(y_hat, idx=self.column_indices[0])
+        y_obs = torch.nan_to_num(y_obs, nan=0.0, posinf=0.0, neginf=0.0)
+        y_hat = torch.nan_to_num(y_hat, nan=0.0, posinf=0.0, neginf=0.0)
+        y_hat = y_hat.clamp_(-1e4, 1e4)  # clamp for metrics only; model uses unclamped values for training
 
         y_obs = y_obs.detach().cpu().numpy()
         y_hat = y_hat.detach().cpu().numpy()
@@ -160,7 +236,7 @@ class DadsMetGNN(pl.LightningModule):
                  batch_size=graph.batch_size)
 
         self.log('rmse_dads', rmse_dads, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True,
-                  batch_size=graph.batch_size)
+                 batch_size=graph.batch_size)
 
         current_lr = self.trainer.optimizers[0].param_groups[0]['lr']
         self.log('lr', current_lr, on_step=False, on_epoch=True, prog_bar=True,

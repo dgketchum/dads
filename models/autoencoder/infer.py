@@ -10,6 +10,7 @@ from models.scalers import MinMaxScaler
 from prep.build_variable_scaler import load_variable_scaler
 import matplotlib.pyplot as plt
 from sklearn.manifold import TSNE
+from tqdm import tqdm
 
 device_name = None
 if torch.cuda.is_available():
@@ -113,6 +114,8 @@ def infer_embeddings(model_dir, data_dir, metadata_path, embedding_path, plot=Fa
         margin=meta['margin'],
         data_columns=meta['data_columns'],
         column_order=meta['column_order'],
+        zero_target_in_encoder=True,
+        target_input_idx=0,
     )
     model.to(device)
     model.eval()
@@ -130,27 +133,35 @@ def infer_embeddings(model_dir, data_dir, metadata_path, embedding_path, plot=Fa
 
     files_ = [os.path.join(data_dir, f) for f in os.listdir(data_dir) if f.endswith('.parquet')]
 
-    for i, file_path in enumerate(files_):
+    for i, file_path in enumerate(tqdm(files_, desc='Inferring station embeddings')):
 
         station_name = os.path.basename(file_path).replace('.parquet', '')
 
-        dataset = InferenceDataset(file_path, expected_width, selected_indices, sequence_length, scaler, expected_columns)
+        try:
+            dataset = InferenceDataset(file_path, expected_width, selected_indices, sequence_length, scaler, expected_columns)
+        except Exception as e:
+            print(f"Skipping {station_name}: {e}")
+            continue
         if len(dataset) == 0:
             # No valid yearly chunks; skip this file
             print(f"Skipping {station_name}: no valid 365-day chunks found.")
             continue
-        dataloader = DataLoader(dataset, batch_size=1, shuffle=False, num_workers=0)
+        try:
+            dataloader = DataLoader(dataset, batch_size=1, shuffle=False, num_workers=0)
 
-        station_embeddings = []
-        with torch.no_grad():
-            for batch in dataloader:
-                x = batch.to(device)
-                x = torch.nan_to_num(x)
-                _, z = model(x)
-                station_embeddings.append(z.unsqueeze(2).detach().cpu())
+            station_embeddings = []
+            with torch.no_grad():
+                for batch in dataloader:
+                    x = batch.to(device)
+                    x = torch.nan_to_num(x)
+                    _, z = model(x)
+                    station_embeddings.append(z.unsqueeze(2).detach().cpu())
 
-        # Average embeddings if there are multiple samples per station
-        mean_embedding = torch.cat(station_embeddings, dim=0).mean(dim=0)
+            # Average embeddings if there are multiple samples per station
+            mean_embedding = torch.cat(station_embeddings, dim=0).mean(dim=0)
+        except Exception as e:
+            print(f"Skipping {station_name}: {e}")
+            continue
         # std_embedding = torch.cat(station_embeddings, dim=0).std(dim=0)
         embeddings[station_name] = mean_embedding.tolist()
         all_embeddings.append(mean_embedding)
@@ -160,20 +171,18 @@ def infer_embeddings(model_dir, data_dir, metadata_path, embedding_path, plot=Fa
         # print(f'...of {len(station_embeddings)}')
         # print('')
 
-    all_embeddings = torch.cat(all_embeddings, dim=1).T.numpy()
-
-    tsne = TSNE(n_components=2, random_state=42)
-    embeddings_2d = tsne.fit_transform(all_embeddings)
-
-    plt.figure(figsize=(10, 8))
-    plt.scatter(embeddings_2d[:, 0], embeddings_2d[:, 1])
-    for i, name in enumerate(station_names):
-        plt.annotate(name, (embeddings_2d[i, 0], embeddings_2d[i, 1]))
-
-    plt.title("t-SNE Visualization of Station Embeddings")
-    plt.xlabel("t-SNE Dimension 1")
-    plt.ylabel("t-SNE Dimension 2")
-    plt.show()
+    if plot and all_embeddings:
+        emb_arr = torch.cat(all_embeddings, dim=1).T.numpy()
+        tsne = TSNE(n_components=2, random_state=42)
+        embeddings_2d = tsne.fit_transform(emb_arr)
+        plt.figure(figsize=(10, 8))
+        plt.scatter(embeddings_2d[:, 0], embeddings_2d[:, 1])
+        for i, name in enumerate(station_names):
+            plt.annotate(name, (embeddings_2d[i, 0], embeddings_2d[i, 1]))
+        plt.title("t-SNE Visualization of Station Embeddings")
+        plt.xlabel("t-SNE Dimension 1")
+        plt.ylabel("t-SNE Dimension 2")
+        plt.show()
 
     with open(embedding_path, 'w') as fp:
         json.dump(embeddings, fp, indent=4)
@@ -208,7 +217,7 @@ if __name__ == '__main__':
     param_dir = os.path.join(training, 'autoencoder')
     parq_ = os.path.join(training, 'parquet', target_var_)
 
-    model_run = os.path.join(param_dir, 'checkpoints', '10011529')
+    model_run = os.path.join(param_dir, 'checkpoints', '10211323')
     model_ = os.path.join(model_run, 'best_model.ckpt')
     scaler_ = os.path.join(model_run, 'scaler.json')
     metadata_ = os.path.join(model_run, 'training_metadata.json')

@@ -23,7 +23,8 @@ else:
     print('CUDA is not available. PyTorch will use the CPU.')
 
 torch.set_float32_matmul_precision('medium')
-torch.cuda.get_device_name(torch.cuda.current_device())
+torch.cuda.get_device_name(torch.cuda.current_device())  # likely error if CUDA not available
+torch.backends.cudnn.benchmark = True
 
 rlimit = resource.getrlimit(resource.RLIMIT_NOFILE)
 resource.setrlimit(resource.RLIMIT_NOFILE, (4096, rlimit[1]))
@@ -74,10 +75,6 @@ def train_model(dirpath, parquet, target_var, columns, chunk_size, meta_path,
         except Exception:
             pass
 
-    # simple split by presence in provided mapping file removed; use filename hashing for split
-    # If a station list exists elsewhere, integrate here.
-    train_feats = {}
-
     file_map = {'train': [], 'val': []}
     for filename in os.listdir(parquet):
         if not filename.endswith('.parquet'):
@@ -96,6 +93,27 @@ def train_model(dirpath, parquet, target_var, columns, chunk_size, meta_path,
         raise ValueError(f'Missing expected columns in parquet: {missing}')
 
     selected_indices = [actual_cols.index(c) for c in columns]
+
+    # graph-dependent split (overrides naive) using prepared graph station IDs
+    parquet_root_ = os.path.dirname(parquet)
+    training_root_ = os.path.dirname(parquet_root_)
+    graph_dir_ = os.path.join(training_root_, 'graph', target_var)
+    train_ids_path_ = os.path.join(graph_dir_, 'train_ids.json')
+    val_ids_path_ = os.path.join(graph_dir_, 'val_ids.json')
+    if os.path.exists(train_ids_path_) and os.path.exists(val_ids_path_):
+        try:
+            with open(train_ids_path_, 'r') as fp:
+                tr_ids = set(str(s) for s in json.load(fp))
+            with open(val_ids_path_, 'r') as fp:
+                va_ids = set(str(s) for s in json.load(fp))
+            all_paths_ = [os.path.join(parquet, f) for f in os.listdir(parquet) if f.endswith('.parquet')]
+            id_to_path_ = {os.path.splitext(os.path.basename(p))[0]: p for p in all_paths_}
+            file_map = {
+                'train': [id_to_path_[s] for s in tr_ids if s in id_to_path_],
+                'val': [id_to_path_[s] for s in va_ids if s in id_to_path_],
+            }
+        except Exception:
+            pass  # likely error if split files malformed
 
     meta = {
         'chunk_size': chunk_size,
@@ -145,7 +163,7 @@ def train_model(dirpath, parquet, target_var, columns, chunk_size, meta_path,
                                   batch_size=batch_size,
                                   shuffle=True,
                                   num_workers=n_workers,
-                                  persistent_workers=True, pin_memory=True, prefetch_factor=2,
+                                  persistent_workers=False, pin_memory=True, prefetch_factor=2,
                                   collate_fn=lambda batch: [x for x in batch if x is not None])
 
     val_dataset = WeatherDataset(file_paths=file_map['val'],
@@ -162,7 +180,7 @@ def train_model(dirpath, parquet, target_var, columns, chunk_size, meta_path,
                                 batch_size=batch_size,
                                 shuffle=False,
                                 num_workers=n_workers,
-                                persistent_workers=True, pin_memory=True, prefetch_factor=2,
+                                persistent_workers=False, pin_memory=True, prefetch_factor=2,
                                 collate_fn=lambda batch: [x for x in batch if x is not None])
 
     # print overview before model instantiation
@@ -201,7 +219,9 @@ def train_model(dirpath, parquet, target_var, columns, chunk_size, meta_path,
     )
 
     trainer = pl.Trainer(max_epochs=1000, callbacks=[checkpoint_callback, early_stop_callback],
-                         accelerator=device, devices=1)
+                         accelerator=device, devices=1,
+                         precision='16-mixed',
+                         gradient_clip_val=1.0)
     trainer.fit(model, train_dataloader, val_dataloader)
 
 
@@ -240,7 +260,7 @@ if __name__ == '__main__':
     chk = os.path.join(param_dir, 'checkpoints', now)
     metadata_ = os.path.join(chk, 'training_metadata.json')
 
-    os.mkdir(chk)
+    os.makedirs(chk, exist_ok=True)
     print(f'mkdir: {chk}')
     logger_csv = os.path.join(chk, 'training_{}.csv'.format(now))
     # logger_csv = None

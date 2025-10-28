@@ -7,15 +7,17 @@ import torch
 from torch.utils.data import Dataset
 from torch_geometric.data import Data
 
-from models.lstm.dataset import LSTMDataset
 from models.scalers import MinMaxScaler
 from tqdm import tqdm
-from prep.columns_desc import GEO_FEATURES
+from concurrent.futures import ThreadPoolExecutor
+from collections import OrderedDict
+from prep.columns_desc import GEO_FEATURES, CDR_FEATURES
 
 
 class DadsDataset(Dataset):
-    def __init__(self, n_nodes, lstm_input_files, lstm_meta, embedding_dir, edge_map_file, edge_attr_file,
-                 scaler, sample=None, node_ctx_dir=None, lstm_workers=1, record_holders: int = 3):
+    def __init__(self, n_nodes, lstm_input_files, seq_meta, embedding_dir, edge_map_file, edge_attr_file,
+                 scaler, sample=None, lstm_workers=1, record_holders: int = 3, normalize_keys=None,
+                 windows_per_station=None, neighbor_file_map=None):
         """Build per-sample graphs for DADS from prebuilt components.
 
         Ingests
@@ -30,9 +32,6 @@ class DadsDataset(Dataset):
           (target_attr - neighbor_attr). If a sibling '*_edge_bearing.json' is present, per-edge
           sin/cos(bearing) are appended; geodesic distance (km, Haversine) is appended using lat/lon
           read from station Parquets.
-        - Node contexts (node_ctx_dir): per-station/day .npy vectors captured from the LSTM
-          pretrainer via models.dads.cache_node_contexts (hook on LSTMPredictor.fc1); used for
-          neighbor rows at the day-of-interest; missing neighbors are mean-imputed.
         - Variable scaler (scaler): MinMaxScaler json from prep.build_variable_scaler; fit on graph
           train_ids only and used to scale day-of-interest exogenous features at the target node.
 
@@ -43,9 +42,9 @@ class DadsDataset(Dataset):
             scaled slice of GEO_FEATURES present in the station Parquet on that day
             (exog = rsun, NOAA CDR daily bands, and available lat/lon/doy/terrain).
           * Neighbor rows (idx 1..k): [embedding, zeros(exog_dim)].
-        - graph.node_lstm: shape (1 + n_nodes, ctx_dim)
-          * Target row is zeros; neighbor rows hold LSTM contexts for `day_int` if available,
-            otherwise filled with a distance-weighted mean of available neighbor contexts.
+        - Neighbor sequences (returned alongside graph): shape (n_nodes, T, C)
+          * For each neighbor, a 12-day window of [lagged target, exogenous] channels ending
+            at day-of-interest if available; otherwise zeros with a mask indicating missing.
         - graph.edge_index: shape (2, n_nodes) with directed edges neighbor->target.
         - graph.edge_attr: shape (n_nodes, edge_dim) with (target_attr - neighbor_attr),
           optionally augmented with sin/cos(bearing) and distance (km).
@@ -55,7 +54,6 @@ class DadsDataset(Dataset):
         Builders
         - Embeddings: models/autoencoder/infer.py
         - Graph files: prep/graph.py (train_edge_index.json, train_edge_attr.json, and val analogs)
-        - Node contexts: models/dads/cache_node_contexts.py
         - Variable scaler: prep/build_variable_scaler.py
         """
 
@@ -64,20 +62,32 @@ class DadsDataset(Dataset):
         with open(embedding_dict_file, 'r') as f:
             embeddings = json.load(f)
         embed_dict = embeddings
-        _emb_lens = {len(v) for v in embed_dict.values()}
-        assert len(_emb_lens) == 1, "embedding vectors must be uniform length"
-        embeddings = [(k, torch.tensor(v)) for k, v in embeddings.items()]
-        # Embeddings may be saved as [latent, 1]; squeeze trailing dim to get 1D per station
-        embedding_arr = torch.stack([v[1] for v in embeddings], dim=0)
-        if embedding_arr.dim() == 3 and embedding_arr.shape[-1] == 1:
-            embedding_arr = embedding_arr.squeeze(-1)
-        min_ = embedding_arr.min(dim=0).values
-        max_ = embedding_arr.max(dim=0).values
+        # build raw tensor per station and ensure 1D shape
+        raw = {}
+        for k, v in embed_dict.items():
+            t = torch.tensor(v)
+            if t.dim() == 2 and t.shape[-1] == 1:
+                t = t.squeeze(-1)
+            elif t.dim() > 1:
+                t = t.view(-1)
+            raw[k] = t
+        # verify uniform dimensionality
+        lens = {int(t.shape[-1]) for t in raw.values()}
+        assert len(lens) == 1, "embedding vectors must be uniform length"
+        # choose keys for normalization (train-only if provided)
+        if normalize_keys is not None:
+            norm_keys = [k for k in raw.keys() if k in normalize_keys]
+        else:
+            norm_keys = list(raw.keys())
+        if not norm_keys:
+            norm_keys = list(raw.keys())
+        norm_arr = torch.stack([raw[k] for k in norm_keys], dim=0)
+        min_ = norm_arr.min(dim=0).values
+        max_ = norm_arr.max(dim=0).values
         denom = (max_ - min_)
         denom[denom == 0] = 1.0
-        embedding_arr = (embedding_arr - min_) / denom
-
-        self.embeddings = {k[0]: embedding_arr[i] for i, k in enumerate(embeddings)}
+        # apply normalization to all stations
+        self.embeddings = {k: (t - min_) / denom for k, t in raw.items()}
 
         with open(edge_attr_file, 'r') as f:
             edge_attr = json.load(f)
@@ -124,21 +134,25 @@ class DadsDataset(Dataset):
         attr_keys = set(self.edge_attr.keys())
         valid_nodes = node_keys & attr_keys
 
+        # Targets: only those with files in this dataset; Neighbors: may come from a larger pool
+        file_keys = {os.path.splitext(os.path.basename(f))[0] for f in lstm_input_files}
+        if neighbor_file_map is not None:
+            neighbor_keys = set(neighbor_file_map.keys())
+        else:
+            neighbor_keys = file_keys
+
         attributes = {}
         for k in tqdm(edge_map.keys(), desc='Building Graph Edge Attributes'):
-            if k not in valid_nodes:
+            if k not in valid_nodes or k not in file_keys:
                 continue
             try:
                 possible_edges = edge_map[k]
             except KeyError:
                 continue
-            # Preserve order from possible_edges; keep only valid neighbors and exclude self
-            filtered = [e for e in possible_edges if e != k and e in valid_nodes]
+            # Keep only valid neighbors that also have files (in neighbor_keys) and are not self
+            filtered = [e for e in possible_edges if (e != k and e in valid_nodes and e in neighbor_keys)]
             if len(filtered) >= n_nodes:
                 attributes[k] = filtered  # keep all candidates; select n at sample-time
-
-        file_keys = {os.path.splitext(os.path.basename(f))[0] for f in lstm_input_files}
-        attributes = {k: v for k, v in attributes.items() if k in file_keys}
 
         if sample:
             keys = list(attributes.keys())
@@ -152,7 +166,6 @@ class DadsDataset(Dataset):
         self._bearing_map = bearing_map
         self._distance_map = distance_map
 
-        self.model = 'lstm'
         self.record_holders = int(record_holders)
         # Determine feature names and tensor width from first file
         first_file = filter_files[0]
@@ -162,7 +175,8 @@ class DadsDataset(Dataset):
         # column indices: y=0, comparator=1, features start=2; no hf; set hf idx to tensor_width for downstream math
         self.tensor_width = num_features
         self.column_indices = (0, 1, 2, self.tensor_width)
-        chunk_size = lstm_meta.get('chunk_size', 12)
+        chunk_size = int(seq_meta.get('chunk_size', 12))
+        self.seq_len = chunk_size
 
         # load scaler from json path
         with open(scaler, 'r') as f:
@@ -174,17 +188,32 @@ class DadsDataset(Dataset):
             assert scaler_params['feature_names'] == feature_names, "scaler feature_names mismatch"
 
         station_names = [os.path.splitext(os.path.basename(f))[0] for f in filter_files]
-        self.lstm_dataset = LSTMDataset(file_paths=filter_files,
-                                        station_names=station_names,
-                                        feature_names=feature_names,
-                                        sample_dimensions=(chunk_size, num_features),
-                                        scaler=scaler_obj,
-                                        return_station_name=True,
-                                        n_workers=lstm_workers)
-        assert node_ctx_dir is not None and os.path.isdir(node_ctx_dir), "node_ctx_dir required and must exist"
-        self.node_ctx_dir = node_ctx_dir
-        # map station -> parquet path for fetching day-of-interest exogenous features
+        # lightweight in-class window indexer (no LSTM dependency)
+        self.file_paths = list(filter_files)
+        self.file_station_names = list(station_names)
+        self.feature_names = feature_names
+        self.sample_dimensions = (chunk_size, num_features)
+        self.scaler = scaler_obj
+        self.max_windows_per_file = None if windows_per_station is None else int(windows_per_station)
+        self._build_index(lstm_workers)
+        # sequences for neighbor TCN: select [target, rsun] + CDR bands, scaled
+        exog_names = ['rsun'] + list(CDR_FEATURES)
+        self.seq_exog_idx = [i for i, n in enumerate(feature_names) if n in exog_names]
+        self.seq_selected_indices = [0] + self.seq_exog_idx
+        self.seq_selected_columns = [feature_names[i] for i in self.seq_selected_indices]
+        # bias/scale for selected indices only
+        bias = np.asarray(scaler_obj.bias).reshape(-1)
+        scale = np.asarray(scaler_obj.scale).reshape(-1)
+        self.seq_bias = bias[self.seq_selected_indices].astype(np.float32)
+        self.seq_scale = scale[self.seq_selected_indices].astype(np.float32)
+        self.seq_in_channels = 1 + len(self.seq_exog_idx)
+        # map station -> parquet path for fetching day-of-interest exogenous features (targets only)
         self._file_map = {os.path.splitext(os.path.basename(f))[0]: f for f in filter_files}
+        # neighbor file map (may include stations beyond targets)
+        if neighbor_file_map is not None:
+            self._nbr_file_map = dict(neighbor_file_map)
+        else:
+            self._nbr_file_map = dict(self._file_map)
         # exogenous feature columns available in parquet and desired for target-node features
         self.exog_cols = [c for c in GEO_FEATURES if c in feature_names]
         self.exog_idx = [feature_names.index(c) for c in self.exog_cols]
@@ -201,43 +230,128 @@ class DadsDataset(Dataset):
         self.exog_dim = int(len(self.exog_cols))
         base_edge_dim = int(next(iter(self.edge_attr.values())).shape[-1])
         self.edge_dim = base_edge_dim + (2 if self._bearing_map is not None else 0) + (1 if self._distance_map is not None else 0)
-        # infer node context dimensionality once for stable batching
-        self.ctx_dim = None
-        for stn in self.edge_map.keys():
-            stn_dir = os.path.join(self.node_ctx_dir, stn)
-            if not os.path.isdir(stn_dir):
-                continue
-            for name in os.listdir(stn_dir):
-                if name.endswith('.npy'):
-                    arr = np.load(os.path.join(stn_dir, name))
-                    arr = np.asarray(arr).squeeze()
-                    self.ctx_dim = int(arr.shape[-1])
-                    break
-            if self.ctx_dim is not None:
-                break
-        assert self.ctx_dim is not None, "no node contexts found for any station in this dataset"
+        # small per-worker LRU caches to reduce parquet IO
+        self._seq_cache = OrderedDict()   # file -> (arr_selected[T,C], di_idx[T])
+        self._seq_cache_max = max(256, min(4096, len(self._file_map)))
+        self._exog_cache = OrderedDict()  # file -> (arr_exog[T,exog_dim], di_idx[T])
+        self._exog_cache_max = max(256, min(4096, len(self._file_map)))
+        # no pre-cached contexts; contexts computed on-the-fly by the model's TCN
 
     def __len__(self):
-        return len(self.lstm_dataset)
+        return len(self.index)
+
+    def _scan_windows_worker(self, task):
+        file_idx, file_path, chunk_size_, target_col = task
+        try:
+            df = pd.read_parquet(file_path, columns=[target_col])
+            # drop only rows with NaN target
+            df.dropna(subset=[target_col], inplace=True)
+            if len(df) < chunk_size_:
+                return file_idx, [], []
+            di = df.index.to_julian_date().astype(np.int32).to_numpy()
+            is_consec = (di[1:] - di[:-1]) == 1
+            win = chunk_size_ - 1
+            if len(is_consec) < win:
+                return file_idx, [], []
+            conv = np.convolve(is_consec, np.ones(win, dtype=int), mode='valid')
+            starts = np.where(conv == win)[0]
+            end_days = [int(di[s + win]) for s in starts]
+            return file_idx, starts.tolist(), end_days
+        except Exception:
+            return file_idx, [], []
+
+    def _build_index(self, n_workers):
+        chunk_size_ = self.sample_dimensions[0]
+        target_col = self.feature_names[0]
+        tasks = [(i, self.file_paths[i], chunk_size_, target_col) for i in range(len(self.file_paths))]
+        index_ = []
+        if n_workers == 1:
+            results = []
+            for t in tqdm(tasks, total=len(tasks), desc="Indexing windows"):
+                results.append(self._scan_windows_worker(t))
+        else:
+            with ThreadPoolExecutor(max_workers=n_workers) as ex:
+                results = list(tqdm(ex.map(self._scan_windows_worker, tasks),
+                                    total=len(tasks), desc="Indexing windows"))
+        rng = np.random.default_rng(42)
+        for file_index, starts, end_days in results:
+            if not starts:
+                continue
+            if self.max_windows_per_file is not None and len(starts) > self.max_windows_per_file:
+                sel = rng.choice(len(starts), size=self.max_windows_per_file, replace=False)
+                starts = [starts[int(i)] for i in sel]
+                end_days = [end_days[int(i)] for i in sel]
+            for s, d in zip(starts, end_days):
+                index_.append((file_index, s, d))
+        self.index = index_
+
+    def _get_seq_cached(self, fp):
+        # Returns (arr[T,C], di_idx[T]) for seq_selected_columns
+        if fp in self._seq_cache:
+            arr, di_idx = self._seq_cache.pop(fp)
+            self._seq_cache[fp] = (arr, di_idx)
+            return arr, di_idx
+        df = pd.read_parquet(fp, columns=self.seq_selected_columns)
+        df.dropna(subset=[self.seq_selected_columns[0]], inplace=True)
+        if df.empty:
+            arr = np.zeros((0, len(self.seq_selected_columns)), dtype=np.float32)
+            di_idx = np.zeros((0,), dtype=np.int32)
+        else:
+            arr = df.to_numpy(dtype=np.float32)
+            arr = (arr - self.seq_bias) / self.seq_scale + 5e-8
+            arr = np.nan_to_num(arr, nan=0.0, posinf=0.0, neginf=0.0)
+            di_idx = df.index.to_julian_date().astype(np.int32).to_numpy()
+        self._seq_cache[fp] = (arr, di_idx)
+        if len(self._seq_cache) > self._seq_cache_max:
+            self._seq_cache.popitem(last=False)
+        return arr, di_idx
+
+    def _get_exog_cached(self, fp):
+        # Returns (arr[T, exog_dim], di_idx[T]) for target exog cols
+        if self.exog_dim == 0:
+            return np.zeros((0, 0), dtype=np.float32), np.zeros((0,), dtype=np.int32)
+        if fp in self._exog_cache:
+            arr, di_idx = self._exog_cache.pop(fp)
+            self._exog_cache[fp] = (arr, di_idx)
+            return arr, di_idx
+        df = pd.read_parquet(fp, columns=self.exog_cols)
+        if df.empty:
+            arr = np.zeros((0, self.exog_dim), dtype=np.float32)
+            di_idx = np.zeros((0,), dtype=np.int32)
+        else:
+            di_idx = df.index.to_julian_date().astype(np.int32).to_numpy()
+            arr = df.to_numpy(dtype=np.float32)
+            arr = (arr - self.exog_bias) / self.exog_scale + 5e-8
+            arr = np.nan_to_num(arr, nan=0.0, posinf=0.0, neginf=0.0)
+        self._exog_cache[fp] = (arr, di_idx)
+        if len(self._exog_cache) > self._exog_cache_max:
+            self._exog_cache.popitem(last=False)
+        return arr, di_idx
 
     def _get_target_exog(self, station, day_int):
         # fetch scaled exogenous features for the day-of-interest
         if self.exog_dim == 0:
             return torch.empty(0, dtype=torch.float32)
         fp = self._file_map[station]
-        df = pd.read_parquet(fp, columns=self.exog_cols)
-        di = df.index.to_julian_date().astype(np.int32).to_numpy()
-        m = (di == int(day_int))
-        idx = np.where(m)[0]
-        assert idx.size > 0, "no exogenous row for this day"
-        row = df.iloc[idx[0]].to_numpy(dtype=np.float32)
-        row = (row - self.exog_bias) / self.exog_scale + 5e-8
-        return torch.from_numpy(row)
+        arr, di_idx = self._get_exog_cached(fp)
+        di = int(day_int)
+        where = np.where(di_idx == di)[0]
+        assert where.size > 0, "no exogenous row for this day"
+        row = arr[where[0]]
+        row = np.nan_to_num(row, nan=0.0, posinf=0.0, neginf=0.0)
+        return torch.from_numpy(row.astype(np.float32))
 
     def __getitem__(self, idx):
-
-        # in the reanalysis-independent model, seq should be unused
-        y, comparator, _, target_station, day_int = self.lstm_dataset[idx]
+        # Sample from local index: (file_idx, start_iloc, end_day)
+        file_idx, start_iloc, day_int = self.index[idx]
+        target_station = self.file_station_names[file_idx]
+        # Load scaled target sequence y for the window
+        df_y = pd.read_parquet(self.file_paths[file_idx], columns=[self.feature_names[0]])
+        df_y.dropna(subset=[self.feature_names[0]], inplace=True)
+        chunk = df_y.iloc[start_iloc: start_iloc + self.sample_dimensions[0]].to_numpy(dtype=np.float32)
+        # scale using variable-specific scaler (column 0)
+        y = (chunk - self.scaler.bias[0, 0]) / self.scaler.scale[0, 0] + 5e-8
+        y = torch.from_numpy(y.squeeze(-1))
 
         candidates = self.edge_map[target_station]
         # Split candidates into natural neighbors and trailing record_holders
@@ -245,56 +359,28 @@ class DadsDataset(Dataset):
         naturals = candidates[:-tail_n] if tail_n > 0 else candidates
         record_tail = candidates[-tail_n:] if tail_n > 0 else []
 
-        # choose up to n_nodes neighbors preferring those with available context for this day
-        chosen, ctx_list, missing_flags = [], [], []
-        # 1) First pass: naturals that HAVE contexts for this day (sample uniformly, deterministic per (station, day))
-        avail_pairs = []
-        di = int(day_int)
-        for stn in naturals:
-            p = os.path.join(self.node_ctx_dir, stn, f"{di}.npy")
-            if os.path.exists(p):
-                v = np.load(p)
-                v = np.asarray(v).squeeze()
-                t = torch.from_numpy(v)
-                if t.dim() != 1:
-                    t = t.view(-1)  # likely error if not 1D
-                assert t.shape[-1] == self.ctx_dim, "node context width mismatch"
-                avail_pairs.append((stn, t))
-        if avail_pairs:
-            seed_ = (sum(ord(ch) for ch in str(target_station)) + di) & 0xFFFFFFFF  # stable seed
-            rng = np.random.default_rng(seed_)
-            k = min(self.n_nodes, len(avail_pairs))
-            sel = rng.choice(len(avail_pairs), size=k, replace=False)
-            for i in sel:
-                stn, t = avail_pairs[int(i)]
-                chosen.append(stn)
-                ctx_list.append(t)
-                missing_flags.append(False)
-        # 2) Second pass: remaining naturals WITHOUT contexts
-        if len(chosen) < self.n_nodes:
-            selected = set(chosen)
-            for stn in naturals:
-                if len(chosen) >= self.n_nodes:
-                    break
-                if stn in selected:
-                    continue
-                chosen.append(stn)
-                ctx_list.append(None)
-                missing_flags.append(True)
-        # 3) Final pass: record holders (appended by prep) as last resort
+        # choose up to n_nodes neighbors deterministically from naturals, then fill from record holders
+        seed_ = (sum(ord(ch) for ch in str(target_station)) + int(day_int)) & 0xFFFFFFFF
+        rng = np.random.default_rng(seed_)
+        chosen = []
+        if naturals:
+            k = min(self.n_nodes, len(naturals))
+            if len(naturals) > k:
+                idx = rng.choice(len(naturals), size=k, replace=False)
+                chosen.extend([naturals[int(i)] for i in idx])
+            else:
+                chosen.extend(naturals)
         if len(chosen) < self.n_nodes and record_tail:
             for stn in record_tail:
                 if len(chosen) >= self.n_nodes:
                     break
-                if stn in chosen:
-                    continue
-                chosen.append(stn)
-                ctx_list.append(None)
-                missing_flags.append(True)
+                if stn not in chosen:
+                    chosen.append(stn)
 
         source_stations = chosen if chosen else candidates[:self.n_nodes]
         source_embeddings = [self.embeddings[stn] for stn in source_stations]
         emb_stack = torch.stack(source_embeddings, dim=0)
+
         # build target-node features from day-of-interest exogenous data; neighbors keep embeddings
         di = int(day_int)
         exog_vec = self._get_target_exog(target_station, di)
@@ -304,10 +390,12 @@ class DadsDataset(Dataset):
         x = torch.cat([tgt_row.unsqueeze(0), nbr_rows], dim=0)
         assert x.shape[0] == len(source_stations) + 1, "node count mismatch"
 
+        # Build directed edges: neighbors (rows 1-k) → target (row 0)
         source_indices = torch.arange(1, len(source_stations) + 1)
         target_index = torch.zeros(len(source_stations), dtype=torch.long)
         edge_index = torch.stack([source_indices, target_index], dim=0)
 
+        # Per-edge attributes are (target_attr - neighbor_attr) from precomputed station features
         to_point = self.edge_attr[target_station]
         from_point = [to_point - self.edge_attr[stn] for stn in source_stations]
         edge_attr = torch.stack(from_point, dim=0)
@@ -316,50 +404,59 @@ class DadsDataset(Dataset):
                 bm = self._bearing_map[target_station]
                 ang = torch.tensor([bm.get(s, 0.0) for s in source_stations], dtype=edge_attr.dtype)
                 rad = torch.deg2rad(ang)
-                sc = torch.stack([torch.sin(rad), torch.cos(rad)], dim=1)
+                sc = torch.stack([torch.sin(rad), torch.cos(rad)], dim=1)  # append sin/cos(bearing)
             else:
-                sc = torch.zeros((edge_attr.shape[0], 2), dtype=edge_attr.dtype)
+                sc = torch.zeros((edge_attr.shape[0], 2), dtype=edge_attr.dtype)  # no bearings available
             edge_attr = torch.cat([edge_attr, sc], dim=1)
         if self._distance_map is not None:
             if target_station in self._distance_map:
                 dm = self._distance_map[target_station]
                 dist = torch.tensor([dm.get(s, 0.0) for s in source_stations], dtype=edge_attr.dtype).unsqueeze(1)
             else:
-                dist = torch.zeros((edge_attr.shape[0], 1), dtype=edge_attr.dtype)
+                dist = torch.zeros((edge_attr.shape[0], 1), dtype=edge_attr.dtype)  # missing distances default to 0
             edge_attr = torch.cat([edge_attr, dist], dim=1)
         assert edge_attr.shape[0] == len(source_stations), "edge count mismatch"
 
+        # Initialize graph; node_ctx will be filled by the model using TCN contexts
         graph = Data(x=x, edge_index=edge_index, edge_attr=edge_attr)
-        graph.node_lstm = torch.zeros(x.shape[0], self.ctx_dim)
+        # Build neighbor 12-day sequences for TCN; shape (k, T, C)
+        seq_list = []
+        mask_list = []
+        di = int(day_int)
+        for stn in source_stations:
+            fp = self._nbr_file_map.get(stn)
+            ok = False
+            if fp is not None and os.path.exists(fp):
+                try:
+                    arr, di_idx = self._get_seq_cached(fp)
+                    if arr.shape[0] >= self.seq_len:
+                        where = np.where(di_idx == di)[0]
+                        if where.size > 0:
+                            end = int(where[0])
+                            start = end - (self.seq_len - 1)
+                            if start >= 0:
+                                window_days = di_idx[start:end + 1]
+                                if np.all(window_days[1:] - window_days[:-1] == 1):
+                                    y_seq = arr[start:end + 1, 0:1]
+                                    y_shift = y_seq.copy()
+                                    if y_shift.shape[0] > 1:
+                                        y_shift[1:, 0] = y_seq[:-1, 0]
+                                    y_shift[0, 0] = y_seq[0, 0]
+                                    exog = arr[start:end + 1, 1:]
+                                    feats = np.concatenate([y_shift, exog], axis=1)
+                                    seq_list.append(torch.from_numpy(feats))
+                                    mask_list.append(True)
+                                    ok = True
+                except Exception:
+                    pass
+            if not ok:
+                seq_list.append(torch.zeros(self.seq_len, self.seq_in_channels, dtype=torch.float32))
+                mask_list.append(False)
 
-        if any(missing_flags):
-            tmpl = next((t for t in ctx_list if t is not None), None)
-            assert tmpl is not None, "no available node contexts for neighbors on this day"
-            # distance-weighted mean if distances provided, else simple mean
-            avail_pairs = [(stn, t) for stn, t, m in zip(source_stations, ctx_list, missing_flags) if t is not None]
-            if self._distance_map is not None and target_station in self._distance_map:
-                dm = self._distance_map[target_station]
-                ws = []
-                for stn, _ in avail_pairs:
-                    d_km = float(dm.get(stn, 0.0))
-                    ws.append(1.0 / (d_km + 1e-6))
-                w = torch.tensor(ws, dtype=torch.float32)
-                w = w / w.sum()
-                avail = torch.stack([t for _, t in avail_pairs], dim=0).float()
-                mean_vec = (avail * w.view(-1, 1)).sum(dim=0)
-            else:
-                avail = torch.stack([t for _, t in avail_pairs], dim=0).float()
-                mean_vec = avail.mean(dim=0)
-            ctx_filled = [mean_vec if m else t for t, m in zip(ctx_list, missing_flags)]
-        else:
-            ctx_filled = ctx_list
-        ctx_t = torch.stack(ctx_filled, dim=0).float()
-        zero_row = torch.zeros_like(ctx_t[0])
-        node_ctx = torch.cat([zero_row.unsqueeze(0), ctx_t], dim=0)
-        assert node_ctx.shape[0] == x.shape[0], "node_lstm rows must match nodes"
-        graph.node_lstm = node_ctx
+        neighbor_seq = torch.stack(seq_list, dim=0)  # (k, T, C)
+        neighbor_mask = torch.tensor(mask_list, dtype=torch.bool)
 
-        return graph, y
+        return graph, y, neighbor_seq, neighbor_mask
 
 
 if __name__ == '__main__':

@@ -4,8 +4,8 @@ import json
 import pandas as pd
 
 
-def validate_training_schema(sample_file, scaler_json, lstm_model_dir, edge_attr_file, embedding_dir,
-                             edge_map_file=None, node_ctx_dir=None):
+def validate_training_schema(sample_file, scaler_json, edge_attr_file, embedding_dir,
+                             edge_map_file=None):
     df = pd.read_parquet(sample_file)
     cols = df.columns.tolist()
 
@@ -20,11 +20,8 @@ def validate_training_schema(sample_file, scaler_json, lstm_model_dir, edge_attr
     assert cols[1].startswith(base) and not cols[1].endswith('_obs'), "second column should be gridded match for target"
     assert 'day_int' not in cols and 'day_diff' not in cols, "window bookkeeping leaked into table"
 
-    meta_path = os.path.join(lstm_model_dir, 'training_metadata.json')
-    with open(meta_path, 'r') as f:
-        meta = json.load(f)
-    num_bands = int(meta['num_bands'])
-    assert num_bands == len(cols) - 2, "num_bands must equal feature_count - 2"
+    # Expect features: target, comparator (optional), rsun + CDR bands + others.
+    num_bands = len(cols) - 2
 
     with open(edge_attr_file, 'r') as f:
         edge_attr = json.load(f)
@@ -54,18 +51,7 @@ def validate_training_schema(sample_file, scaler_json, lstm_model_dir, edge_attr
                 if n not in edge_attr:
                     missing_attr += 1
 
-    ctx_dim = None
-    if node_ctx_dir is not None:
-        stn = os.path.splitext(os.path.basename(sample_file))[0]
-        stn_dir = os.path.join(node_ctx_dir, stn)
-        if os.path.isdir(stn_dir):
-            for name in os.listdir(stn_dir):
-                if name.endswith('.npy'):
-                    import numpy as np
-                    arr = np.load(os.path.join(stn_dir, name))
-                    assert arr.ndim in (1, 2), "node context must be 1D or batched 2D"
-                    ctx_dim = int(arr.shape[-1])
-                    break
+    ctx_dim = None  # contexts now produced on-the-fly by TCN
 
     report = {
         'target_col': cols[0],
@@ -91,11 +77,9 @@ if __name__ == '__main__':
 
     # Locate training root
     training = '/data/ssd2/dads/training'
-    lstm_ckpt = 'tmax_20251004_1650'
 
     parquet_dir = os.path.join(training, 'parquet', target_var)
     graph_dir = os.path.join(training, 'graph', target_var)
-    node_ctx_dir = os.path.join(training, 'node_ctx')
 
     # Pick latest autoencoder checkpoint with embeddings.json
     ae_root = os.path.join(training, 'autoencoder', 'checkpoints')
@@ -111,10 +95,6 @@ if __name__ == '__main__':
             break
     if embedding_dir is None:
         raise FileNotFoundError('No autoencoder run with embeddings.json found.')
-
-    lstm_model_dir = os.path.join(training, 'lstm','checkpoints', lstm_ckpt)
-    if not os.path.isdir(lstm_model_dir):
-        raise FileNotFoundError(f'Missing LSTM checkpoints dir: {lstm_model_dir}')
 
     # Graph files
     train_edge_attr = os.path.join(graph_dir, 'train_edge_attr.json')
@@ -148,11 +128,9 @@ if __name__ == '__main__':
 
     report = validate_training_schema(sample_file,
                                       scaler_json,
-                                      lstm_model_dir,
                                       train_edge_attr,
                                       embedding_dir,
-                                      edge_map_file=train_edge_index,
-                                      node_ctx_dir=node_ctx_dir)
+                                      edge_map_file=train_edge_index)
     print('Schema check report:')
     for k, v in report.items():
         print(f'- {k}: {v}')

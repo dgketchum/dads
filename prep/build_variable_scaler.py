@@ -93,13 +93,33 @@ def get_variable_scaler_path(parquet_root, variable, ensure_dir=True):
     return os.path.join(scaler_dir, f"{variable}.json")
 
 
-def load_variable_scaler(parquet_root, variable, feature_names=None, station_ids=None, split_ids_path=None):
-    """Always (re)build and load a train-only scaler to prevent information leakage.
+def load_variable_scaler(parquet_root, variable, feature_names=None, station_ids=None, split_ids_path=None,
+                         rebuild=True):
+    """Load a variable-specific MinMax scaler; optionally rebuild.
 
-    The graph's train_ids define the station subset used for fitting.
+    - When rebuild=True (default), fit using train-only stations (from station_ids or split_ids_path)
+      and persist to training/scalers/{variable}.json to prevent leakage.
+    - When rebuild=False, reuse an existing scaler JSON if present; if missing, falls back to rebuild.
     """
-    assert (station_ids is not None) or (split_ids_path is not None), "train_ids required for scaler"
-    # always (re)build from the provided split to avoid leakage
+    path = get_variable_scaler_path(parquet_root, variable, ensure_dir=True)
+
+    if not rebuild and os.path.exists(path):
+        try:
+            with open(path, 'r') as f:
+                params = json.load(f)
+            # Validate feature_names if provided
+            if 'feature_names' in params and feature_names is not None:
+                assert params['feature_names'] == feature_names, "scaler feature_names mismatch"
+            scaler = MinMaxScaler()
+            scaler.bias = torch.as_tensor(params['bias']).reshape(1, -1).numpy()
+            scaler.scale = torch.as_tensor(params['scale']).reshape(1, -1).numpy()
+            return scaler, path, params.get('feature_names')
+        except Exception:
+            # fall through to rebuild on any error
+            pass
+
+    # Rebuild path: require train-only ids
+    assert (station_ids is not None) or (split_ids_path is not None), "train_ids required for scaler rebuild"
     path = build_variable_scaler(parquet_root, variable, station_ids=station_ids, split_ids_path=split_ids_path)
     with open(path, 'r') as f:
         params = json.load(f)

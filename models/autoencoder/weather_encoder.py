@@ -246,14 +246,16 @@ def stack_batch(batch):
     x, y, mask, pos, neg = [], [], [], [], []
 
     for item in batch:
-        if any([i is None for i in item]):
-            continue
-        else:
-            x.append(item[0])
-            y.append(item[1])
-            mask.append(item[2])
-            pos.append(item[3])
-            neg.append(item[4])
+        xi, yi, mi, pi, ni = item
+        if pi is None:
+            pi = torch.full_like(xi, torch.nan)
+        if ni is None:
+            ni = torch.full_like(xi, torch.nan)
+        x.append(xi)
+        y.append(yi)
+        mask.append(mi)
+        pos.append(pi)
+        neg.append(ni)
 
     x = torch.stack(x)
     y = torch.stack(y)

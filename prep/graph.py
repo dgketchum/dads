@@ -583,7 +583,7 @@ if __name__ == '__main__':
 
         node_prep = Graph(stations_obs, output_dir_, k_nearest=10, index_col='fid',
                           parquet_dir=sequence_parq, use_parquet_features=True,
-                          num_workers=16,
+                          num_workers=16, bounds=(-118.0, 43.0, -103.0, 49.0),
                           split_percent=0.8, random_state=42, features=select_feats)
         node_prep.generate_edge_index()
 
