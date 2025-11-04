@@ -25,22 +25,16 @@ if torch.cuda.is_available():  # avoid CPU-only crash
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 class InferenceDataset(Dataset):
-    """Inference-time yearly chunking aligned with training metadata.
-
-    - Requires identical Parquet schema as recorded in training metadata.
-    - Selects the same input columns (including RS_MISS_FEATURES when present).
-    - Builds 365-day sequences (Feb 29 removed) and applies the saved scaler, which
-      is fit on graph train_ids only to match training and avoid leakage.
-    """
-    def __init__(self, file_path, expected_width, selected_indices, chunk_size, scaler, expected_columns):
+    def __init__(self, file_path, expected_width, selected_indices, chunk_size, scaler, expected_columns, window_stride):
         self.chunk_size = chunk_size
         self.selected_indices = selected_indices
         self.scaler = scaler
         self.expected_width = expected_width
         self.expected_columns = expected_columns
+        self.window_stride = int(window_stride)
 
-        # Build yearly 365-day chunks from a Parquet file, mirroring training
         self.data = []
+        self.months = []
 
         df = pd.read_parquet(file_path)
         if self.expected_columns is not None:
@@ -48,24 +42,25 @@ class InferenceDataset(Dataset):
         if not isinstance(df.index, pd.DatetimeIndex):
             raise ValueError("Parquet file index must be a DatetimeIndex")
         df = df.sort_index()
-        # drop leap day to enforce 365-day alignment
         df = df[~((df.index.month == 2) & (df.index.day == 29))]
         if df.shape[1] != expected_width:
-            # Skip file if width mismatch
             self.data = []
             return
 
-        years = range(df.index.min().year, df.index.max().year + 1)
-        for y in years:
-            start = pd.Timestamp(y, 1, 1)
-            end = pd.Timestamp(y, 12, 31)
-            idx = pd.date_range(start, end, freq='D')
-            idx = idx[~((idx.month == 2) & (idx.day == 29))]
-            sub = df.reindex(idx)
-            if len(sub) != self.chunk_size:
-                continue
-            arr = torch.as_tensor(sub.values, dtype=torch.float32)
-            self.data.append(arr)
+        # continuous daily index across full record and sliding windows
+        start = pd.Timestamp(df.index.min().year, df.index.min().month, df.index.min().day)
+        end = pd.Timestamp(df.index.max().year, df.index.max().month, df.index.max().day)
+        idx = pd.date_range(start, end, freq='D')
+        idx = idx[~((idx.month == 2) & (idx.day == 29))]
+        sub = df.reindex(idx)
+
+        if len(sub) >= self.chunk_size:
+            for start_i in range(0, len(sub) - self.chunk_size + 1, self.window_stride):
+                win = sub.iloc[start_i:start_i + self.chunk_size]
+                arr = torch.as_tensor(win.values, dtype=torch.float32)
+                self.data.append(arr)
+                center = win.index[self.chunk_size // 2]
+                self.months.append(int(center.month))
 
     def scale_chunk(self, chunk):
         chunk_np = chunk.numpy()
@@ -95,6 +90,7 @@ def infer_embeddings(model_dir, data_dir, metadata_path, embedding_path, scaler_
         meta = json.load(f)
 
     sequence_length = meta['sequence_length']
+    window_stride = int(meta.get('window_stride', sequence_length))
     input_dim = meta['input_dim']
     output_dim = meta['output_dim']
     selected_indices = meta['selected_indices']
@@ -127,6 +123,7 @@ def infer_embeddings(model_dir, data_dir, metadata_path, embedding_path, scaler_
     scaler.scale = np.array(sp['scale']).reshape(1, -1)
 
     embeddings = {}
+    seasonal_embeddings = {}
     all_embeddings = []
     station_names = []
 
@@ -137,27 +134,45 @@ def infer_embeddings(model_dir, data_dir, metadata_path, embedding_path, scaler_
         station_name = os.path.basename(file_path).replace('.parquet', '')
 
         try:
-            dataset = InferenceDataset(file_path, expected_width, selected_indices, sequence_length, scaler, expected_columns)
+            dataset = InferenceDataset(file_path, expected_width, selected_indices, sequence_length, scaler, expected_columns, window_stride)
         except Exception as e:
             print(f"Skipping {station_name}: {e}")
             continue
         if len(dataset) == 0:
-            # No valid yearly chunks; skip this file
-            print(f"Skipping {station_name}: no valid 365-day chunks found.")
+            # no valid chunks; skip this file
+            print(f"Skipping {station_name}: no valid chunks found.")
             continue
         try:
             dataloader = DataLoader(dataset, batch_size=1, shuffle=False, num_workers=0)
 
             station_embeddings = []
+            station_embeddings_by_month = {}
             with torch.no_grad():
+                k = 0
                 for batch in dataloader:
                     x = batch.to(device)
                     x = torch.nan_to_num(x)
                     _, z = model(x)
                     station_embeddings.append(z.unsqueeze(2).detach().cpu())
+                    m = dataset.months[k]
+                    if m not in station_embeddings_by_month:
+                        station_embeddings_by_month[m] = []
+                    station_embeddings_by_month[m].append(z.detach().cpu())
+                    k += 1
 
             # Average embeddings if there are multiple samples per station
             mean_embedding = torch.cat(station_embeddings, dim=0).mean(dim=0)
+            # Per-month averages
+            month_means = {}
+            for m, arrs in station_embeddings_by_month.items():
+                collapsed = []
+                for t in arrs:
+                    if t.dim() == 2 and t.shape[0] == 1:
+                        collapsed.append(t.squeeze(0))
+                    else:
+                        collapsed.append(t)
+                mm = torch.stack(collapsed, dim=0).mean(dim=0)
+                month_means[str(int(m))] = mm.tolist()
         except Exception as e:
             print(f"Skipping {station_name}: {e}")
             continue
@@ -165,6 +180,7 @@ def infer_embeddings(model_dir, data_dir, metadata_path, embedding_path, scaler_
         embeddings[station_name] = mean_embedding.tolist()
         all_embeddings.append(mean_embedding)
         station_names.append(station_name)
+        seasonal_embeddings[station_name] = month_means
         # print('{:.3f}'.format(mean_embedding.mean().item()), station_name)
         # print('{:.3f}'.format(std_embedding.mean().item()), station_name)
         # print(f'...of {len(station_embeddings)}')
@@ -185,6 +201,9 @@ def infer_embeddings(model_dir, data_dir, metadata_path, embedding_path, scaler_
 
     with open(embedding_path, 'w') as fp:
         json.dump(embeddings, fp, indent=4)
+    seasonal_path = embedding_path.replace('.json', '_by_month.json')
+    with open(seasonal_path, 'w') as fp:
+        json.dump(seasonal_embeddings, fp, indent=4)
 
 
 if __name__ == '__main__':

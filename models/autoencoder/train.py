@@ -8,7 +8,7 @@ import torch
 from pytorch_lightning.callbacks import ModelCheckpoint, EarlyStopping
 from torch.utils.data import DataLoader
 
-from models.autoencoder.dataset import WeatherDataset
+from models.autoencoder.dataset import WeatherDataset, WeatherIterableDataset
 from models.autoencoder.weather_encoder import WeatherAutoencoder
 from models.scalers import MinMaxScaler
 
@@ -33,7 +33,10 @@ resource.setrlimit(resource.RLIMIT_NOFILE, (4096, rlimit[1]))
 
 def train_model(dirpath, parquet, target_var, columns, chunk_size, meta_path,
                 batch_size=64, learning_rate=0.001, n_workers=1, device='gpu',
-                logging_csv=None, scaler_json=None):
+                logging_csv=None, scaler_json=None, window_stride=None,
+                debug_n_samples=None, debug_max_files=None,
+                debug_max_train_files=None, debug_max_val_files=None,
+                use_compile=False, max_epochs=None, autotune_warmup=False):
     """Train the autoencoder on yearly 365-day chunks with a unified schema.
 
     Intent
@@ -116,6 +119,27 @@ def train_model(dirpath, parquet, target_var, columns, chunk_size, meta_path,
         except Exception:
             pass  # likely error if split files malformed
 
+    # Debug: optionally limit number of files to speed up dataset construction
+    if (debug_max_files is not None) or (debug_max_train_files is not None) or (debug_max_val_files is not None):
+        # prefer explicit train/val limits when provided; fall back to single value heuristic
+        if debug_max_train_files is not None:
+            keep_tr = max(1, int(debug_max_train_files))
+        elif debug_max_files is not None:
+            keep_tr = max(1, int(debug_max_files))
+        else:
+            keep_tr = len(file_map['train'])
+
+        if debug_max_val_files is not None:
+            keep_va = max(1, int(debug_max_val_files))
+        elif debug_max_files is not None:
+            keep_va = max(1, int(max(1, debug_max_files // 4)))
+        else:
+            keep_va = len(file_map['val'])
+
+        file_map['train'] = file_map['train'][:keep_tr]
+        file_map['val'] = file_map['val'][:keep_va]
+        print(f"Debug mode: limiting files -> train: {len(file_map['train'])}, val: {len(file_map['val'])}")
+
     meta = {
         'chunk_size': chunk_size,
         'data_columns': columns,
@@ -131,6 +155,7 @@ def train_model(dirpath, parquet, target_var, columns, chunk_size, meta_path,
         'dropout': 0.1,
         'learning_rate': learning_rate,
         'sequence_length': chunk_size,
+        'window_stride': int(window_stride) if window_stride is not None else int(chunk_size),
         'margin': 1.0,
         'encoder_heads': 1,
         'encoder_layers': 2,
@@ -150,42 +175,73 @@ def train_model(dirpath, parquet, target_var, columns, chunk_size, meta_path,
     scaler_obj.bias = np.array(sp['bias']).reshape(1, -1)
     scaler_obj.scale = np.array(sp['scale']).reshape(1, -1)
 
-    train_dataset = WeatherDataset(file_paths=file_map['train'],
-                                   expected_width=len(actual_cols),
-                                   col_indices=len(selected_indices),
-                                   chunk_size=chunk_size,
-                                   target_indices=target_idx,
-                                   expected_columns=actual_cols,
-                                   selected_indices=selected_indices,
-                                   num_workers=12,
-                                   scaler=scaler_obj)
+    # Stream windows on-the-fly to reduce memory footprint
+    train_dataset = WeatherIterableDataset(file_paths=file_map['train'],
+                                           expected_width=len(actual_cols),
+                                           col_indices=len(selected_indices),
+                                           chunk_size=chunk_size,
+                                           target_indices=target_idx,
+                                           expected_columns=actual_cols,
+                                           selected_indices=selected_indices,
+                                           num_workers=n_workers,
+                                           scaler=scaler_obj,
+                                           window_stride=int(window_stride) if window_stride is not None else int(chunk_size),
+                                           triplet_sampling=False,
+                                           max_samples=int(debug_n_samples) if debug_n_samples is not None else None,
+                                           max_files=(int(debug_max_train_files) if debug_max_train_files is not None else None),
+                                           split_name='train',
+                                           shuffle_files=True)
+
+    def _collate(batch):
+        batch = [b for b in batch if b is not None]
+        x_list, y_list, m_list, p_list, n_list = zip(*batch)
+        p_list = [torch.full_like(xi, torch.nan) if pi is None else pi for xi, pi in zip(x_list, p_list)]
+        n_list = [torch.full_like(xi, torch.nan) if ni is None else ni for xi, ni in zip(x_list, n_list)]
+        x = torch.stack(x_list, dim=0)
+        y = torch.stack(y_list, dim=0)
+        m = torch.stack(m_list, dim=0)
+        p = torch.stack(p_list, dim=0)
+        n = torch.stack(n_list, dim=0)
+        return x, y, m, p, n
 
     train_dataloader = DataLoader(train_dataset,
                                   batch_size=batch_size,
-                                  shuffle=True,
+                                  shuffle=False,
                                   num_workers=n_workers,
                                   persistent_workers=False, pin_memory=True, prefetch_factor=2,
-                                  collate_fn=lambda batch: [x for x in batch if x is not None])
+                                  collate_fn=_collate)
 
-    val_dataset = WeatherDataset(file_paths=file_map['val'],
-                                 expected_width=len(actual_cols),
-                                 col_indices=len(selected_indices),
-                                 chunk_size=chunk_size,
-                                 target_indices=target_idx,
-                                 expected_columns=actual_cols,
-                                 selected_indices=selected_indices,
-                                 num_workers=12,
-                                 scaler=scaler_obj)
+    val_dataset = WeatherIterableDataset(file_paths=file_map['val'],
+                                         expected_width=len(actual_cols),
+                                         col_indices=len(selected_indices),
+                                         chunk_size=chunk_size,
+                                         target_indices=target_idx,
+                                         expected_columns=actual_cols,
+                                         selected_indices=selected_indices,
+                                         num_workers=n_workers,
+                                         scaler=scaler_obj,
+                                         window_stride=int(window_stride) if window_stride is not None else int(chunk_size),
+                                         triplet_sampling=False,
+                                         max_samples=(
+                                             max(1, int(debug_n_samples // 4)) if isinstance(debug_n_samples, int) and debug_n_samples > 0 else None
+                                         ),
+                                         max_files=(int(debug_max_val_files) if debug_max_val_files is not None else None),
+                                         split_name='val',
+                                         shuffle_files=False)
 
     val_dataloader = DataLoader(val_dataset,
                                 batch_size=batch_size,
                                 shuffle=False,
                                 num_workers=n_workers,
                                 persistent_workers=False, pin_memory=True, prefetch_factor=2,
-                                collate_fn=lambda batch: [x for x in batch if x is not None])
+                                collate_fn=_collate)
 
     # print overview before model instantiation
     print_autoencoder_training_overview(parquet, columns, actual_cols, selected_indices)
+
+    # Prepare scaler subset to match selected input feature order for on-device scaling
+    bias_sel = scaler_obj.bias[:, selected_indices]
+    scale_sel = scaler_obj.scale[:, selected_indices]
 
     model = WeatherAutoencoder(input_dim=len(columns),
                                output_dim=len(target_idx),
@@ -195,9 +251,38 @@ def train_model(dirpath, parquet, target_var, columns, chunk_size, meta_path,
                                learning_rate=learning_rate,
                                log_csv=logging_csv,
                                scaler=val_dataset.scaler,
+                               scaler_bias=bias_sel.reshape(-1).tolist(),
+                               scaler_scale=scale_sel.reshape(-1).tolist(),
                                sequence_length=chunk_size,
                                zero_target_in_encoder=True,
-                               target_input_idx=0)
+                               target_input_idx=0,
+                               )
+
+    # Try to compile heavy submodules only to avoid capturing Lightning internals.
+    _short_debug = any(v is not None for v in (debug_n_samples, debug_max_files))
+    if use_compile and not _short_debug:
+        try:
+            # Best-effort disable cudagraphs in Inductor to improve stability
+            try:
+                import torch as _t
+                _t._inductor.config.triton.cudagraphs = False
+            except Exception:
+                pass
+            # Optionally emphasize autotune during warmup runs; leave default otherwise
+            try:
+                import torch as _t
+                if autotune_warmup:
+                    _t._inductor.config.triton.autotune = True
+            except Exception:
+                pass
+            model.encoder = torch.compile(model.encoder, mode='max-autotune')
+            model.decoder = torch.compile(model.decoder, mode='max-autotune')
+            model.attn_pool = torch.compile(model.attn_pool, mode='max-autotune')
+            print('Enabled torch.compile for encoder/decoder/attn_pool.')
+        except Exception as e:
+            print(f'torch.compile submodules unavailable or failed: {e}')
+    elif _short_debug:
+        print('Debug mode: skipping torch.compile to avoid potential cudagraph/dynamo issues.')
 
     print(f"Number of training samples: {len(train_dataset)}")
     print(f"Number of validation samples: {len(val_dataset)}")
@@ -207,7 +292,9 @@ def train_model(dirpath, parquet, target_var, columns, chunk_size, meta_path,
         filename="best_model",
         dirpath=dirpath,
         save_top_k=1,
-        mode="min"
+        mode="min",
+        save_last=True,
+        check_on_train_epoch_end=False,
     )
 
     early_stop_callback = EarlyStopping(
@@ -217,13 +304,50 @@ def train_model(dirpath, parquet, target_var, columns, chunk_size, meta_path,
         verbose=False,
         mode="min",
         check_finite=True,
+        strict=False,
     )
 
-    trainer = pl.Trainer(max_epochs=1000, callbacks=[checkpoint_callback, early_stop_callback],
-                         accelerator=device, devices=1,
-                         precision='16-mixed',
-                         gradient_clip_val=1.0)
+    # Trainer configuration
+    trainer_kwargs = dict(
+        max_epochs=(int(max_epochs) if max_epochs is not None else 1000),
+        callbacks=[checkpoint_callback, early_stop_callback],
+        accelerator=device,
+        devices=1,
+        precision='16-mixed',
+        # Disable PL gradient clipping to avoid fused AdamW + AMP incompatibility
+        gradient_clip_val=0.0,
+        accumulate_grad_batches=2,
+        num_sanity_val_steps=0,
+    )
+
+    # If short debug (sample-capped), drastically shorten the run
+    if _short_debug:
+        trainer_kwargs.update(dict(
+            max_epochs=1,
+            limit_train_batches=2,
+            limit_val_batches=1,
+        ))
+        print('Debug mode: using max_epochs=1, limit_train_batches=2, limit_val_batches=1')
+
+    trainer = pl.Trainer(**trainer_kwargs)
     trainer.fit(model, train_dataloader, val_dataloader)
+
+
+def debug_sample(dirpath, parquet, target_var, columns, chunk_size, meta_path,
+                 n_samples=2048, n_files=4, n_train_files=None, n_val_files=None, **kwargs):
+    """Run a very small debug training to validate the loop quickly.
+
+    Parameters
+    - n_samples: cap the number of training samples (windows) loaded.
+    - n_files: limit the number of parquet files considered to speed up dataset build.
+    Other training kwargs like batch_size/learning_rate can be passed via **kwargs.
+    """
+    return train_model(dirpath, parquet, target_var, columns, chunk_size, meta_path,
+                       debug_n_samples=int(n_samples) if n_samples is not None else None,
+                       debug_max_files=int(n_files) if n_files is not None else None,
+                       debug_max_train_files=(int(n_train_files) if n_train_files is not None else None),
+                       debug_max_val_files=(int(n_val_files) if n_val_files is not None else None),
+                       **kwargs)
 
 
 if __name__ == '__main__':
@@ -238,7 +362,7 @@ if __name__ == '__main__':
     if device_name == 'NVIDIA GeForce RTX 2080':
         workers = 4
     elif device_name == 'NVIDIA RTX A6000':
-        workers = 8
+        workers = 16
     else:
         raise NotImplementedError('Specify the machine this is running on')
 
@@ -252,6 +376,17 @@ if __name__ == '__main__':
         training = nvm
     else:
         raise NotImplementedError
+
+    # Configure persistent compiler caches to reuse autotune across runs
+    cache_root = os.path.join(training, 'cache')
+    inductor_cache = os.path.join(cache_root, 'inductor')
+    triton_cache = os.path.join(cache_root, 'triton')
+    os.makedirs(inductor_cache, exist_ok=True)
+    os.makedirs(triton_cache, exist_ok=True)
+    os.environ.setdefault('TORCHINDUCTOR_CACHE_DIR', inductor_cache)
+    os.environ.setdefault('TRITON_CACHE_DIR', triton_cache)
+    print(f"Inductor cache dir: {os.environ.get('TORCHINDUCTOR_CACHE_DIR')}")
+    print(f"Triton cache dir:   {os.environ.get('TRITON_CACHE_DIR')}")
 
     param_dir = os.path.join(training, 'autoencoder')
     parq_ = os.path.join(training, 'parquet', target_var_)
@@ -267,11 +402,29 @@ if __name__ == '__main__':
     # logger_csv = None
     device_ = 'gpu'
 
-    # Include RS missingness flags to make embeddings mask-aware of RS availability
     cols = [target_var_] + GEO_FEATURES + RS_MISS_FEATURES
 
-    train_model(chk, parq_, target_var=target_var_, columns=cols, chunk_size=365,
-                batch_size=128, learning_rate=0.001, meta_path=metadata_,
+    seq_len_ = 120
+    stride_ = 30
+    
+    # Keep batch size consistent across debug and full runs to maximize
+    # kernel/cache reuse from autotune.
+    batch_size_ = 2048
+    
+    # Full run (no debug file limits)
+    train_model(chk, parq_, target_var=target_var_, columns=cols, chunk_size=seq_len_,
+                batch_size=batch_size_, learning_rate=0.001, meta_path=metadata_,
                 n_workers=workers, logging_csv=logger_csv, device=device_,
-                scaler_json=os.path.join(training, 'scalers', f"{variable_}.json"))
+                scaler_json=os.path.join(training, 'scalers', f"{variable_}.json"),
+                window_stride=stride_,
+                use_compile=True, autotune_warmup=False)
+
+    # Debug sample: same setup, limit training files to 1000
+    # debug_sample(dirpath=chk, parquet=parq_, target_var=target_var_, columns=cols, chunk_size=seq_len_,
+    #              n_samples=None, n_files=None, n_val_files=500, n_train_files=1000,
+    #              batch_size=batch_size_, learning_rate=0.001, meta_path=metadata_,
+    #              n_workers=workers, logging_csv=logger_csv, device=device_,
+    #              scaler_json=os.path.join(training, 'scalers', f"{variable_}.json"),
+    #              window_stride=stride_,
+    #              use_compile=True, max_epochs=5, autotune_warmup=True)
 # ========================= EOF ====================================================================

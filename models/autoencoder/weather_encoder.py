@@ -94,7 +94,8 @@ class WeatherAutoencoder(pl.LightningModule):
       rather than the target itself.
     """
     def __init__(self, input_dim, output_dim, learning_rate, latent_size, hidden_size,
-                 dropout=0.1, margin=1.0, sequence_length=365, log_csv=None, scaler=None, **kwargs):
+                 dropout=0.1, margin=1.0, sequence_length=365, log_csv=None, scaler=None,
+                 scaler_bias=None, scaler_scale=None, **kwargs):
 
         super(WeatherAutoencoder, self).__init__()
         self.latent_size = latent_size
@@ -126,10 +127,44 @@ class WeatherAutoencoder(pl.LightningModule):
         self.y_hat_last = []
         self.mask = []
 
+        # Register scaler parameters as buffers for on-device scaling.
+        # Expect scaler_bias/scale sized to the selected input features (C_in).
+        if scaler_bias is not None and scaler_scale is not None:
+            sb = torch.as_tensor(scaler_bias, dtype=torch.float32)
+            ss = torch.as_tensor(scaler_scale, dtype=torch.float32)
+            if sb.ndim == 1:
+                sb = sb.view(1, 1, -1)
+                ss = ss.view(1, 1, -1)
+            elif sb.ndim == 2:
+                sb = sb.view(1, *sb.shape)
+                ss = ss.view(1, *ss.shape)
+            self.register_buffer('x_bias', sb)
+            self.register_buffer('x_scale', ss)
+            # Derive target scaler slices assuming target indices map into inputs.
+            tgt_idx = int(getattr(self, 'target_input_idx', 0))
+            t_bias = sb[..., tgt_idx:tgt_idx + self.output_dim]
+            t_scale = ss[..., tgt_idx:tgt_idx + self.output_dim]
+            self.register_buffer('y_bias', t_bias)
+            self.register_buffer('y_scale', t_scale)
+
+    def _scale_inputs(self, x):
+        if hasattr(self, 'x_bias') and hasattr(self, 'x_scale'):
+            return (x - self.x_bias) / self.x_scale + 5e-8
+        return x
+
+    def _scale_targets(self, y):
+        if hasattr(self, 'y_bias') and hasattr(self, 'y_scale'):
+            return (y - self.y_bias) / self.y_scale + 5e-8
+        return y
+
         self.margin = margin
 
     def forward(self, x):
         # Optional ablation: zero out target input channel to force exogenous-only encoding
+        # Scale inputs on-device, then replace NaNs.
+        x = self._scale_inputs(x)
+        x = torch.nan_to_num(x)
+
         if hasattr(self, 'zero_target_in_encoder') and self.zero_target_in_encoder:
             idx = int(getattr(self, 'target_input_idx', 0))
             x = x.clone()
@@ -151,20 +186,25 @@ class WeatherAutoencoder(pl.LightningModule):
                 nn.init.uniform_(module.bias, -0.1, 0.1)
 
     def training_step(self, batch, batch_idx):
+        # Mark step boundary for cudagraph safety (no-op if unsupported)
+        try:
+            torch.compiler.cudagraph_mark_step_begin()
+        except Exception:
+            pass
         x, y, mask, x_pos, x_neg = stack_batch(batch)
         bsz = x.size(0)
 
-        x = torch.nan_to_num(x)
+        # Forward scales inputs internally. Scale targets to the same space.
+        y = self._scale_targets(y)
         y = torch.nan_to_num(y)
-        y = y.view(-1, self.output_dim)
-        # fill NaNs only where missing; previous mask assignment likely inverted
 
         y_hat, z = self(x)
 
+        # Flatten for masked loss
         y_hat = y_hat.reshape(-1, self.output_dim)
-        mask = mask[:, :, :self.output_dim].view(-1, self.output_dim)
+        y = y.reshape(-1, self.output_dim)
+        mask = mask[:, :, :self.output_dim].reshape(-1, self.output_dim)
 
-        # apply mask without swapping tensors
         y = y[mask]
         y_hat = y_hat[mask]
         nan_mask = ~torch.isnan(y_hat)
@@ -175,33 +215,42 @@ class WeatherAutoencoder(pl.LightningModule):
             valid_pos = (~torch.isnan(x_pos)).float().mean()
             valid_neg = (~torch.isnan(x_neg)).float().mean()
             if valid_pos > 0.3 and valid_neg > 0.3:
-                x_pos = torch.nan_to_num(x_pos)
-                x_neg = torch.nan_to_num(x_neg)
                 _, z_pos = self(x_pos)
                 _, z_neg = self(x_neg)
                 triplet_loss = self.triplet_loss(z, z_pos, z_neg)
                 loss += triplet_loss * 2.0
                 self.log('triplet_loss', triplet_loss, batch_size=bsz)
 
-        self.log('reconstruction_loss', loss, batch_size=bsz)
-        self.log('train_loss', loss, on_step=True, batch_size=bsz)
+        # Log CPU scalars to avoid compiled graph interactions in Lightning internals
+        rec_val = float(loss.detach().cpu())
+        self.log('reconstruction_loss', rec_val, batch_size=bsz)
+        self.log('train_loss', rec_val, on_step=True, batch_size=bsz)
 
         return loss
 
     def validation_step(self, batch, batch_idx):
+        # Mark step boundary for cudagraph safety (no-op if unsupported)
+        try:
+            torch.compiler.cudagraph_mark_step_begin()
+        except Exception:
+            pass
         x, y, mask, x_pos, x_neg = stack_batch(batch)
         bsz = x.size(0)
 
-        x = torch.nan_to_num(x)
-        y = y.view(-1, self.output_dim)
-        mask = mask[:, :, :self.output_dim].view(-1, self.output_dim)
+        # Scale targets to match network output space.
+        y = self._scale_targets(y)
 
         y_hat, z = self(x)
-        y_hat = y_hat.reshape(-1, self.output_dim)
 
-        self.y_hat_last.append(y_hat)
-        self.y_last.append(y)
-        self.mask.append(mask)
+        # Flatten and mask
+        y_hat = y_hat.reshape(-1, self.output_dim)
+        y = y.reshape(-1, self.output_dim)
+        mask = mask[:, :, :self.output_dim].reshape(-1, self.output_dim)
+
+        # Detach and move to CPU to avoid GPU memory growth and compiled graph capture
+        self.y_hat_last.append(y_hat.detach().cpu())
+        self.y_last.append(y.detach().cpu())
+        self.mask.append(mask.detach().cpu())
 
         y = y.flatten()
         y_hat = y_hat.flatten()
@@ -210,7 +259,6 @@ class WeatherAutoencoder(pl.LightningModule):
         y = y[loss_mask]
         y_hat = y_hat[loss_mask]
 
-        # TODO: this should not be necessary
         nan_mask = ~torch.isnan(y)
 
         if y[nan_mask].numel() == 0:
@@ -218,17 +266,22 @@ class WeatherAutoencoder(pl.LightningModule):
         else:
             loss_obs = self.criterion(y[nan_mask], y_hat[nan_mask])
 
-        self.log('val_loss', loss_obs, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True, batch_size=bsz)
+        val_val = float(loss_obs.detach().cpu())
+        self.log('val_loss', val_val, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True, batch_size=bsz)
 
         current_lr = self.trainer.optimizers[0].param_groups[0]['lr']
-        self.log('lr', current_lr, on_step=False, on_epoch=True, prog_bar=True, batch_size=bsz)
+        self.log('lr', float(current_lr), on_step=False, on_epoch=True, prog_bar=True, batch_size=bsz)
         lr_ratio = current_lr / self.learning_rate
-        self.log('lr_ratio', lr_ratio, on_step=False, on_epoch=True, prog_bar=True, batch_size=bsz)
+        self.log('lr_ratio', float(lr_ratio), on_step=False, on_epoch=True, prog_bar=True, batch_size=bsz)
 
         return loss_obs
 
     def configure_optimizers(self):
-        optimizer = optim.Adam(self.parameters(), lr=self.learning_rate, weight_decay=1e-4)
+        # Prefer fused AdamW when available for GPU speedups.
+        try:
+            optimizer = optim.AdamW(self.parameters(), lr=self.learning_rate, weight_decay=1e-4, fused=True)
+        except TypeError:
+            optimizer = optim.AdamW(self.parameters(), lr=self.learning_rate, weight_decay=1e-4)
         scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=2)
         return {
             'optimizer': optimizer,
@@ -243,6 +296,10 @@ class WeatherAutoencoder(pl.LightningModule):
 
 
 def stack_batch(batch):
+    if isinstance(batch, (tuple, list)) and len(batch) == 5 and torch.is_tensor(batch[0]):
+        x, y, mask, pos, neg = batch
+        return x, y, mask, pos, neg
+
     x, y, mask, pos, neg = [], [], [], [], []
 
     for item in batch:
