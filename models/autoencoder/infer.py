@@ -10,6 +10,8 @@ from models.scalers import MinMaxScaler
 import matplotlib.pyplot as plt
 from sklearn.manifold import TSNE
 from tqdm import tqdm
+from sklearn.linear_model import LinearRegression
+from sklearn.metrics import r2_score
 
 device_name = None
 if torch.cuda.is_available():
@@ -109,7 +111,7 @@ def infer_embeddings(model_dir, data_dir, metadata_path, embedding_path, scaler_
         margin=meta['margin'],
         data_columns=meta['data_columns'],
         column_order=meta['column_order'],
-        zero_target_in_encoder=True,
+        zero_target_in_encoder=False,
         target_input_idx=0,
     )
     model.to(device)
@@ -205,6 +207,12 @@ def infer_embeddings(model_dir, data_dir, metadata_path, embedding_path, scaler_
     with open(seasonal_path, 'w') as fp:
         json.dump(seasonal_embeddings, fp, indent=4)
 
+    # Optional quick probe: monthly mean R^2 using seasonal embeddings
+    try:
+        probe_monthly_means(seasonal_path, data_dir, expected_columns[0])
+    except Exception:
+        pass
+
 
 if __name__ == '__main__':
     d = '/media/research/IrrigationGIS/dads'
@@ -242,4 +250,63 @@ if __name__ == '__main__':
     embeddings_file = os.path.join(model_run, 'embeddings.json')
 
     infer_embeddings(model_run, parq_, metadata_, embeddings_file, scaler_json_, plot=False)
+
+
+def _safe_monthly_mean(parquet_path, target_col):
+    try:
+        df = pd.read_parquet(parquet_path, columns=[target_col])
+        if not isinstance(df.index, pd.DatetimeIndex) or df.empty:
+            return None
+        df = df.sort_index()
+        df = df[~((df.index.month == 2) & (df.index.day == 29))]
+        g = df.groupby(df.index.month)[target_col].mean()
+        return g.to_dict()
+    except Exception:
+        return None
+
+
+def probe_monthly_means(seasonal_embeddings_path, data_dir, target_col):
+    """Linear probe: predict station monthly mean of target from seasonal embeddings.
+
+    Prints per-month R^2 across stations and overall average R^2.
+    """
+    with open(seasonal_embeddings_path, 'r') as f:
+        seasonal = json.load(f)
+    # Build features and targets per month
+    months = [str(i) for i in range(1, 13)]
+    Xm, ym = {}, {}
+    for st in os.listdir(data_dir):
+        if not st.endswith('.parquet'):
+            continue
+        sid = os.path.splitext(st)[0]
+        if sid not in seasonal:
+            continue
+        z_by_m = seasonal[sid]
+        m_means = _safe_monthly_mean(os.path.join(data_dir, st), target_col)
+        if m_means is None:
+            continue
+        for m in months:
+            if m in z_by_m and int(m) in m_means and z_by_m[m] is not None:
+                zm = np.array(z_by_m[m], dtype=float).reshape(1, -1)
+                yv = float(m_means[int(m)])
+                Xm.setdefault(m, []).append(zm.squeeze(0))
+                ym.setdefault(m, []).append(yv)
+    if not Xm:
+        print('[Probe] No seasonal embeddings + monthly means overlap; skipping probe.')
+        return
+    rs = []
+    for m in months:
+        X = np.array(Xm.get(m, []), dtype=float)
+        y = np.array(ym.get(m, []), dtype=float)
+        if len(X) < 8:  # need enough stations per month
+            continue
+        # simple linear regression
+        model = LinearRegression()
+        model.fit(X, y)
+        yhat = model.predict(X)
+        r2 = r2_score(y, yhat)
+        rs.append(r2)
+        print(f"[Probe][month={m}] stations={len(X)} R2={r2:.3f}")
+    if rs:
+        print(f"[Probe] Monthly mean R2 avg={np.mean(rs):.3f} over {len(rs)} months")
 # ========================= EOF ====================================================================

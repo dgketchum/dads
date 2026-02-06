@@ -7,12 +7,13 @@ import pytorch_lightning as pl
 import torch
 from pytorch_lightning.callbacks import ModelCheckpoint, EarlyStopping
 from torch.utils.data import DataLoader
+from pytorch_lightning.loggers import CSVLogger
 
 from models.autoencoder.dataset import WeatherDataset, WeatherIterableDataset
 from models.autoencoder.weather_encoder import WeatherAutoencoder
 from models.scalers import MinMaxScaler
 
-from prep.columns_desc import GEO_FEATURES, RS_MISS_FEATURES
+from prep.columns_desc import GEO_FEATURES, RS_MISS_FEATURES, LANDSAT_FEATURES, CDR_FEATURES
 import pandas as pd
 import numpy as np
 
@@ -32,11 +33,14 @@ resource.setrlimit(resource.RLIMIT_NOFILE, (4096, rlimit[1]))
 
 
 def train_model(dirpath, parquet, target_var, columns, chunk_size, meta_path,
-                batch_size=64, learning_rate=0.001, n_workers=1, device='gpu',
+                batch_size=64, learning_rate=0.0003, n_workers=1, device='gpu',
                 logging_csv=None, scaler_json=None, window_stride=None,
                 debug_n_samples=None, debug_max_files=None,
                 debug_max_train_files=None, debug_max_val_files=None,
-                use_compile=False, max_epochs=None, autotune_warmup=False):
+                use_compile=False, max_epochs=None, autotune_warmup=False,
+                min_target_frac=0.8, require_rs_present=True,
+                zero_target_in_encoder=False, val_check_interval=None,
+                warmup_toggle_epochs=None):
     """Train the autoencoder on yearly 365-day chunks with a unified schema.
 
     Intent
@@ -50,8 +54,8 @@ def train_model(dirpath, parquet, target_var, columns, chunk_size, meta_path,
     - Outputs: latent embeddings (per-station, averaged over available yearly chunks)
       are later consumed by the DADS GNN.
     - Scaling uses a MinMax scaler fit on graph train_ids only (no leakage).
-    - By default, enables `zero_target_in_encoder=True` so embeddings depend on
-      exogenous inputs rather than shortcutting via the target channel.
+    - For production embeddings, set `zero_target_in_encoder=True` so embeddings
+      depend on exogenous inputs rather than the target channel.
     """
 
     target_idx = [columns.index(target_var)]
@@ -175,6 +179,10 @@ def train_model(dirpath, parquet, target_var, columns, chunk_size, meta_path,
     scaler_obj.bias = np.array(sp['bias']).reshape(1, -1)
     scaler_obj.scale = np.array(sp['scale']).reshape(1, -1)
 
+    # Compute indices of RS features within selected training columns (for optional gating)
+    rs_names = [n for n in (LANDSAT_FEATURES + CDR_FEATURES) if n in columns]
+    rs_indices = [columns.index(n) for n in rs_names]
+
     # Stream windows on-the-fly to reduce memory footprint
     train_dataset = WeatherIterableDataset(file_paths=file_map['train'],
                                            expected_width=len(actual_cols),
@@ -190,11 +198,20 @@ def train_model(dirpath, parquet, target_var, columns, chunk_size, meta_path,
                                            max_samples=int(debug_n_samples) if debug_n_samples is not None else None,
                                            max_files=(int(debug_max_train_files) if debug_max_train_files is not None else None),
                                            split_name='train',
-                                           shuffle_files=True)
+                                           shuffle_files=True,
+                                           min_target_frac=float(min_target_frac),
+                                           require_rs_present=bool(require_rs_present),
+                                           rs_feature_indices=rs_indices,
+                                           min_rs_count=1)
 
     def _collate(batch):
         batch = [b for b in batch if b is not None]
-        x_list, y_list, m_list, p_list, n_list = zip(*batch)
+        # Support either 5-tuple or 6-tuple (with station id)
+        if len(batch[0]) == 6:
+            x_list, y_list, m_list, p_list, n_list, s_list = zip(*batch)
+        else:
+            x_list, y_list, m_list, p_list, n_list = zip(*batch)
+            s_list = [ -1 for _ in x_list ]
         p_list = [torch.full_like(xi, torch.nan) if pi is None else pi for xi, pi in zip(x_list, p_list)]
         n_list = [torch.full_like(xi, torch.nan) if ni is None else ni for xi, ni in zip(x_list, n_list)]
         x = torch.stack(x_list, dim=0)
@@ -202,7 +219,8 @@ def train_model(dirpath, parquet, target_var, columns, chunk_size, meta_path,
         m = torch.stack(m_list, dim=0)
         p = torch.stack(p_list, dim=0)
         n = torch.stack(n_list, dim=0)
-        return x, y, m, p, n
+        s = torch.as_tensor(s_list, dtype=torch.long)
+        return x, y, m, p, n, s
 
     train_dataloader = DataLoader(train_dataset,
                                   batch_size=batch_size,
@@ -227,7 +245,11 @@ def train_model(dirpath, parquet, target_var, columns, chunk_size, meta_path,
                                          ),
                                          max_files=(int(debug_max_val_files) if debug_max_val_files is not None else None),
                                          split_name='val',
-                                         shuffle_files=False)
+                                         shuffle_files=False,
+                                         min_target_frac=float(min_target_frac),
+                                         require_rs_present=bool(require_rs_present),
+                                         rs_feature_indices=rs_indices,
+                                         min_rs_count=1)
 
     val_dataloader = DataLoader(val_dataset,
                                 batch_size=batch_size,
@@ -243,20 +265,25 @@ def train_model(dirpath, parquet, target_var, columns, chunk_size, meta_path,
     bias_sel = scaler_obj.bias[:, selected_indices]
     scale_sel = scaler_obj.scale[:, selected_indices]
 
+    # Warmup: optionally start with zero_target_in_encoder=False and toggle to True after N epochs.
+    start_zero_target = bool(zero_target_in_encoder)
+    if warmup_toggle_epochs is not None and int(warmup_toggle_epochs) > 0:
+        start_zero_target = False
+
     model = WeatherAutoencoder(input_dim=len(columns),
-                               output_dim=len(target_idx),
-                               latent_size=64,
-                               hidden_size=32,
-                               dropout=0.1,
-                               learning_rate=learning_rate,
-                               log_csv=logging_csv,
-                               scaler=val_dataset.scaler,
-                               scaler_bias=bias_sel.reshape(-1).tolist(),
-                               scaler_scale=scale_sel.reshape(-1).tolist(),
-                               sequence_length=chunk_size,
-                               zero_target_in_encoder=True,
-                               target_input_idx=0,
-                               )
+                                output_dim=len(target_idx),
+                                latent_size=64,
+                                hidden_size=32,
+                                dropout=0.1,
+                                learning_rate=learning_rate,
+                                log_csv=logging_csv,
+                                scaler=val_dataset.scaler,
+                                scaler_bias=bias_sel.reshape(-1).tolist(),
+                                scaler_scale=scale_sel.reshape(-1).tolist(),
+                                sequence_length=chunk_size,
+                               zero_target_in_encoder=start_zero_target,
+                                target_input_idx=0,
+                                )
 
     # Try to compile heavy submodules only to avoid capturing Lightning internals.
     _short_debug = any(v is not None for v in (debug_n_samples, debug_max_files))
@@ -294,7 +321,7 @@ def train_model(dirpath, parquet, target_var, columns, chunk_size, meta_path,
         save_top_k=1,
         mode="min",
         save_last=True,
-        check_on_train_epoch_end=False,
+        save_on_train_epoch_end=False,
     )
 
     early_stop_callback = EarlyStopping(
@@ -307,6 +334,13 @@ def train_model(dirpath, parquet, target_var, columns, chunk_size, meta_path,
         strict=False,
     )
 
+    # CSV logger configured under current checkpoint dir
+    csv_logger = CSVLogger(save_dir=dirpath, name='logs')
+    try:
+        print(f"CSV logs: {csv_logger.log_dir}/metrics.csv")
+    except Exception:
+        pass
+
     # Trainer configuration
     trainer_kwargs = dict(
         max_epochs=(int(max_epochs) if max_epochs is not None else 1000),
@@ -318,16 +352,41 @@ def train_model(dirpath, parquet, target_var, columns, chunk_size, meta_path,
         gradient_clip_val=0.0,
         accumulate_grad_batches=2,
         num_sanity_val_steps=0,
+        check_val_every_n_epoch=1,
+        reload_dataloaders_every_n_epochs=1,
+        logger=csv_logger,
     )
 
-    # If short debug (sample-capped), drastically shorten the run
-    if _short_debug:
+    # Remove step-based validation unless explicitly requested
+    if val_check_interval is not None:
+        trainer_kwargs['val_check_interval'] = int(val_check_interval)
+
+    # Optional warmup: toggle zero_target_in_encoder to True after N epochs
+    if warmup_toggle_epochs is not None and int(warmup_toggle_epochs) > 0:
+        import pytorch_lightning as _pl
+        class ZeroTargetToggle(_pl.Callback):
+            def __init__(self, toggle_epoch: int):
+                self.toggle_epoch = int(toggle_epoch)
+            def on_train_epoch_end(self, trainer, pl_module):
+                # epochs are 0-indexed internally; activate after toggle_epoch completed
+                if trainer.current_epoch + 1 >= self.toggle_epoch and getattr(pl_module, 'zero_target_in_encoder', None) is False:
+                    pl_module.zero_target_in_encoder = True
+                    try:
+                        pl_module.log('toggle_zero_target', 1, on_epoch=True)
+                    except Exception:
+                        pass
+        trainer_kwargs['callbacks'] = trainer_kwargs['callbacks'] + [ZeroTargetToggle(warmup_toggle_epochs)]
+
+    # If short debug AND no explicit file limits provided, cap batches
+    if _short_debug and (debug_max_files is None and debug_max_train_files is None and debug_max_val_files is None):
         trainer_kwargs.update(dict(
             max_epochs=1,
             limit_train_batches=2,
-            limit_val_batches=1,
+            limit_val_batches=0,
         ))
-        print('Debug mode: using max_epochs=1, limit_train_batches=2, limit_val_batches=1')
+        print('Debug mode: sample-capped; limiting batches to speed up loop.')
+    elif _short_debug:
+        print('Debug mode: file-capped; not limiting train/val batches.')
 
     trainer = pl.Trainer(**trainer_kwargs)
     trainer.fit(model, train_dataloader, val_dataloader)
@@ -362,7 +421,7 @@ if __name__ == '__main__':
     if device_name == 'NVIDIA GeForce RTX 2080':
         workers = 4
     elif device_name == 'NVIDIA RTX A6000':
-        workers = 16
+        workers = 24
     else:
         raise NotImplementedError('Specify the machine this is running on')
 
@@ -378,7 +437,8 @@ if __name__ == '__main__':
         raise NotImplementedError
 
     # Configure persistent compiler caches to reuse autotune across runs
-    cache_root = os.path.join(training, 'cache')
+    # Use persistent cache at /data/ssd2/dads/cache to reuse autotune across runs
+    cache_root = '/data/ssd2/dads/cache'
     inductor_cache = os.path.join(cache_root, 'inductor')
     triton_cache = os.path.join(cache_root, 'triton')
     os.makedirs(inductor_cache, exist_ok=True)
@@ -409,22 +469,27 @@ if __name__ == '__main__':
     
     # Keep batch size consistent across debug and full runs to maximize
     # kernel/cache reuse from autotune.
-    batch_size_ = 2048
+    batch_size_ = 512
     
     # Full run (no debug file limits)
     train_model(chk, parq_, target_var=target_var_, columns=cols, chunk_size=seq_len_,
-                batch_size=batch_size_, learning_rate=0.001, meta_path=metadata_,
+                batch_size=batch_size_, learning_rate=0.0003, meta_path=metadata_,
                 n_workers=workers, logging_csv=logger_csv, device=device_,
                 scaler_json=os.path.join(training, 'scalers', f"{variable_}.json"),
                 window_stride=stride_,
-                use_compile=True, autotune_warmup=False)
+                use_compile=True, autotune_warmup=False,
+                min_target_frac=0.85, require_rs_present=False,
+                zero_target_in_encoder=False,
+                val_check_interval=5000)
 
-    # Debug sample: same setup, limit training files to 1000
+    # Debug sample: ready for quick overfit/validation
     # debug_sample(dirpath=chk, parquet=parq_, target_var=target_var_, columns=cols, chunk_size=seq_len_,
-    #              n_samples=None, n_files=None, n_val_files=500, n_train_files=1000,
-    #              batch_size=batch_size_, learning_rate=0.001, meta_path=metadata_,
+    #              n_files=None, n_val_files=50, n_train_files=200,
+    #              batch_size=256, learning_rate=0.0003, meta_path=metadata_,
     #              n_workers=workers, logging_csv=logger_csv, device=device_,
     #              scaler_json=os.path.join(training, 'scalers', f"{variable_}.json"),
     #              window_stride=stride_,
-    #              use_compile=True, max_epochs=5, autotune_warmup=True)
+    #              use_compile=False, max_epochs=3, autotune_warmup=False,
+    #              min_target_frac=0.8, require_rs_present=False,
+    #              zero_target_in_encoder=False, val_check_interval=300)
 # ========================= EOF ====================================================================
