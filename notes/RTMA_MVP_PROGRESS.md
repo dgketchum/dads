@@ -4,10 +4,10 @@
 
 We split MVP work from cube/spatial refactor:
 - `cube` branch remains for Phase 0 cube/spatial work.
-- Humidity MVP is now based on `main` in a clean worktree (`mvp/rtma-humidity`).
+- Humidity MVP is now based on `main` in a clean worktree (`mvp/rtma-humidity`) at `/home/dgketchum/code/dads-mvp`.
 
-We also created a temporary Codex worktree under `/tmp/dads-mvp-codex` to develop MVP utilities that can be
-cherry-picked into the real MVP worktree.
+During agent/sandbox sessions, a temporary worktree may be used under `/tmp/dads-mvp-codex` to develop changes
+and then cherry-pick them into `/home/dgketchum/code/dads-mvp`.
 
 Worktree details: see `notes/WORKTREE_SETUP.md`.
 
@@ -23,6 +23,17 @@ stored as `Int32` with band descriptions matching the Earth Engine export signat
 This strongly suggests the archive was produced by `extract/rs/earth_engine/rtma_export.py` (or a close variant):
 - daily aggregation from hourly imagery
 - integer casting and band scaling (implied; not stored as GeoTIFF scale/offset metadata)
+
+### Practical decoding assumptions (based on spot checks)
+
+The values we sampled are consistent with:
+- `PRES` stored as integer **hPa** (no `/100` decoding; convert to kPa with `/10` if needed).
+- Most other fields stored as integer `value * 100` (decode with `/100`):
+  - `TMP`, `DPT` → °C
+  - `UGRD`, `VGRD`, `WIND` → m/s
+  - `WDIR` → degrees
+  - `ACPC01` → mm (daily sum; `value/100`)
+  - `TCDC` likely percent or fraction-derived percent; confirm via distribution check before using.
 
 ### Important caveats discovered
 
@@ -46,7 +57,14 @@ This strongly suggests the archive was produced by `extract/rs/earth_engine/rtma
 
 ## MVP utilities added (Codex worktree)
 
-These files exist in `/tmp/dads-mvp-codex` and are ready to commit/cherry-pick:
+These utilities were implemented and committed in the Codex worktree and should be cherry-picked into
+`/home/dgketchum/code/dads-mvp`:
+
+- Commit: `b22b518` (`MVP: RTMA daily station tables + station-day join`)
+- Cherry-pick:
+  - `cd /home/dgketchum/code/dads-mvp && git cherry-pick b22b518`
+
+Files:
 - `process/gridded/rtma_station_daily.py`
   - Converts hourly RTMA/URMA station extracts (monthly Parquets written by `extract/met_data/grid/rtma_extact.py`)
     into daily per-station Parquets with a stable schema and derived fields.
