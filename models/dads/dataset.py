@@ -11,7 +11,7 @@ from models.scalers import MinMaxScaler
 from tqdm import tqdm
 from concurrent.futures import ThreadPoolExecutor
 from collections import OrderedDict
-from prep.columns_desc import GEO_FEATURES, CDR_FEATURES
+from prep.columns_desc import GEO_FEATURES, CDR_FEATURES, TERRAIN_FEATURES, CDR_MISS_FEATURES
 
 
 class DadsDataset(Dataset):
@@ -71,9 +71,11 @@ class DadsDataset(Dataset):
             elif t.dim() > 1:
                 t = t.view(-1)
             raw[k] = t
+
         # verify uniform dimensionality
         lens = {int(t.shape[-1]) for t in raw.values()}
         assert len(lens) == 1, "embedding vectors must be uniform length"
+
         # choose keys for normalization (train-only if provided)
         if normalize_keys is not None:
             norm_keys = [k for k in raw.keys() if k in normalize_keys]
@@ -86,6 +88,7 @@ class DadsDataset(Dataset):
         max_ = norm_arr.max(dim=0).values
         denom = (max_ - min_)
         denom[denom == 0] = 1.0
+
         # apply normalization to all stations
         self.embeddings = {k: (t - min_) / denom for k, t in raw.items()}
 
@@ -114,6 +117,7 @@ class DadsDataset(Dataset):
                 for nb, b in zip(nbrs, blist):
                     m[nb] = float(b)
                 bearing_map[k] = m
+                
         # Optional distance file (km)
         distance_file = edge_attr_file.replace('edge_attr', 'edge_distance')
         distance_map = None
@@ -196,9 +200,9 @@ class DadsDataset(Dataset):
         self.scaler = scaler_obj
         self.max_windows_per_file = None if windows_per_station is None else int(windows_per_station)
         self._build_index(lstm_workers)
-        # sequences for neighbor TCN: select [target, rsun] + CDR bands, scaled
-        exog_names = ['rsun'] + list(CDR_FEATURES)
-        self.seq_exog_idx = [i for i, n in enumerate(feature_names) if n in exog_names]
+        # sequences for neighbor TCN: select [target, rsun, CDR, CDR_miss, doy_sin, doy_cos], scaled
+        seq_names = ['rsun'] + list(CDR_FEATURES) + list(CDR_MISS_FEATURES) + ['doy_sin', 'doy_cos']
+        self.seq_exog_idx = [i for i, n in enumerate(feature_names) if n in seq_names]
         self.seq_selected_indices = [0] + self.seq_exog_idx
         self.seq_selected_columns = [feature_names[i] for i in self.seq_selected_indices]
         # bias/scale for selected indices only
@@ -214,8 +218,11 @@ class DadsDataset(Dataset):
             self._nbr_file_map = dict(neighbor_file_map)
         else:
             self._nbr_file_map = dict(self._file_map)
-        # exogenous feature columns available in parquet and desired for target-node features
-        self.exog_cols = [c for c in GEO_FEATURES if c in feature_names]
+        # exogenous feature columns available in parquet and desired for node features (target and neighbors)
+        # Use only exogenous inputs: RSUN + NOAA CDR (daily) + CDR missingness flags + TERRAIN + seasonal DOY features.
+        # (Landsat bands are not used in node exog.)
+        allowed_exog = ['rsun'] + list(CDR_FEATURES) + list(CDR_MISS_FEATURES) + list(TERRAIN_FEATURES) + ['doy_sin', 'doy_cos']
+        self.exog_cols = [c for c in allowed_exog if c in feature_names]
         self.exog_idx = [feature_names.index(c) for c in self.exog_cols]
         if self.exog_cols:
             _bias = np.asarray(scaler_obj.bias).reshape(-1)
@@ -229,7 +236,8 @@ class DadsDataset(Dataset):
         self.emb_dim = int(next(iter(self.embeddings.values())).shape[-1])
         self.exog_dim = int(len(self.exog_cols))
         base_edge_dim = int(next(iter(self.edge_attr.values())).shape[-1])
-        self.edge_dim = base_edge_dim + (2 if self._bearing_map is not None else 0) + (1 if self._distance_map is not None else 0)
+        # Include dynamic (target_exog_today - neighbor_exog_today) deltas in edge attributes at sample-time
+        self.edge_dim = base_edge_dim + (2 if self._bearing_map is not None else 0) + (1 if self._distance_map is not None else 0) + int(len(self.exog_cols))
         # small per-worker LRU caches to reduce parquet IO
         self._seq_cache = OrderedDict()   # file -> (arr_selected[T,C], di_idx[T])
         self._seq_cache_max = max(256, min(4096, len(self._file_map)))
@@ -359,17 +367,11 @@ class DadsDataset(Dataset):
         naturals = candidates[:-tail_n] if tail_n > 0 else candidates
         record_tail = candidates[-tail_n:] if tail_n > 0 else []
 
-        # choose up to n_nodes neighbors deterministically from naturals, then fill from record holders
-        seed_ = (sum(ord(ch) for ch in str(target_station)) + int(day_int)) & 0xFFFFFFFF
-        rng = np.random.default_rng(seed_)
+        # choose up to n_nodes neighbors deterministically from naturals (graph order), then fill from record holders
         chosen = []
         if naturals:
             k = min(self.n_nodes, len(naturals))
-            if len(naturals) > k:
-                idx = rng.choice(len(naturals), size=k, replace=False)
-                chosen.extend([naturals[int(i)] for i in idx])
-            else:
-                chosen.extend(naturals)
+            chosen.extend(naturals[:k])
         if len(chosen) < self.n_nodes and record_tail:
             for stn in record_tail:
                 if len(chosen) >= self.n_nodes:
@@ -381,19 +383,8 @@ class DadsDataset(Dataset):
         source_embeddings = [self.embeddings[stn] for stn in source_stations]
         emb_stack = torch.stack(source_embeddings, dim=0)
 
-        # build target-node features from day-of-interest exogenous data; neighbors keep embeddings
-        di = int(day_int)
-        exog_vec = self._get_target_exog(target_station, di)
-        zeros_exog = torch.zeros(self.exog_dim, dtype=emb_stack.dtype)
-        tgt_row = torch.cat([torch.zeros(self.emb_dim, dtype=emb_stack.dtype), exog_vec], dim=-1)
-        nbr_rows = torch.cat([emb_stack, zeros_exog.repeat(len(source_stations), 1)], dim=1)
-        x = torch.cat([tgt_row.unsqueeze(0), nbr_rows], dim=0)
-        assert x.shape[0] == len(source_stations) + 1, "node count mismatch"
-
-        # Build directed edges: neighbors (rows 1-k) → target (row 0)
-        source_indices = torch.arange(1, len(source_stations) + 1)
-        target_index = torch.zeros(len(source_stations), dtype=torch.long)
-        edge_index = torch.stack([source_indices, target_index], dim=0)
+        # We'll build neighbor sequences and also capture each neighbor's current-day observation
+        # before assembling node features so we can append the observation to neighbor rows.
 
         # Per-edge attributes are (target_attr - neighbor_attr) from precomputed station features
         to_point = self.edge_attr[target_station]
@@ -417,12 +408,12 @@ class DadsDataset(Dataset):
             edge_attr = torch.cat([edge_attr, dist], dim=1)
         assert edge_attr.shape[0] == len(source_stations), "edge count mismatch"
 
-        # Initialize graph; node_ctx will be filled by the model using TCN contexts
-        graph = Data(x=x, edge_index=edge_index, edge_attr=edge_attr)
         # Build neighbor 12-day sequences for TCN; shape (k, T, C)
         seq_list = []
         mask_list = []
         di = int(day_int)
+        obs_curr = []
+        nbr_exog_today = []
         for stn in source_stations:
             fp = self._nbr_file_map.get(stn)
             ok = False
@@ -446,17 +437,75 @@ class DadsDataset(Dataset):
                                     feats = np.concatenate([y_shift, exog], axis=1)
                                     seq_list.append(torch.from_numpy(feats))
                                     mask_list.append(True)
+                                    # capture current-day observation (scaled) for neighbor
+                                    obs_curr.append(float(arr[end, 0]))
+                                    # capture neighbor exog vector for current day (scaled)
+                                    # Retrieve from cached exog array to ensure identical ordering as self.exog_cols
+                                    exog_arr, exog_di = self._get_exog_cached(fp)
+                                    if exog_arr.shape[0] > 0:
+                                        w2 = np.where(exog_di == di)[0]
+                                        if w2.size > 0:
+                                            nbr_exog_today.append(torch.from_numpy(exog_arr[int(w2[0])].astype(np.float32)))
+                                        else:
+                                            nbr_exog_today.append(torch.zeros(self.exog_dim, dtype=torch.float32))
+                                    else:
+                                        nbr_exog_today.append(torch.zeros(self.exog_dim, dtype=torch.float32))
                                     ok = True
                 except Exception:
                     pass
             if not ok:
                 seq_list.append(torch.zeros(self.seq_len, self.seq_in_channels, dtype=torch.float32))
                 mask_list.append(False)
+                obs_curr.append(0.0)
+                nbr_exog_today.append(torch.zeros(self.exog_dim, dtype=torch.float32))
 
         neighbor_seq = torch.stack(seq_list, dim=0)  # (k, T, C)
         neighbor_mask = torch.tensor(mask_list, dtype=torch.bool)
 
-        return graph, y, neighbor_seq, neighbor_mask
+        # build target-node features from day-of-interest exogenous data; neighbors use their own exog for this day
+        di = int(day_int)
+        exog_vec = self._get_target_exog(target_station, di)
+        zeros_exog = torch.zeros(self.exog_dim, dtype=emb_stack.dtype)
+        # target node: no embedding (inference at places without station embeddings)
+        tgt_row = torch.cat([torch.zeros(self.emb_dim, dtype=emb_stack.dtype), exog_vec, torch.zeros(1, dtype=emb_stack.dtype)], dim=-1)
+        # neighbor rows: [embedding, neighbor_exog_today, obs_current]
+        obs_tensor = torch.tensor(obs_curr, dtype=emb_stack.dtype).unsqueeze(1)
+        nbr_exog_mat = torch.stack(nbr_exog_today, dim=0).to(dtype=emb_stack.dtype)
+        nbr_rows = torch.cat([emb_stack, nbr_exog_mat, obs_tensor], dim=1)
+        x = torch.cat([tgt_row.unsqueeze(0), nbr_rows], dim=0)
+        assert x.shape[0] == len(source_stations) + 1, "node count mismatch"
+
+        # Build directed edges: neighbors (rows 1-k) → target (row 0)
+        source_indices = torch.arange(1, len(source_stations) + 1)
+        target_index = torch.zeros(len(source_stations), dtype=torch.long)
+        edge_index = torch.stack([source_indices, target_index], dim=0)
+
+        # Append dynamic (target_exog_today - neighbor_exog_today) to edge attributes
+        if self.exog_dim > 0:
+            delta = exog_vec.unsqueeze(0) - nbr_exog_mat
+            edge_attr = torch.cat([edge_attr, delta.to(dtype=edge_attr.dtype)], dim=1)
+
+        # Initialize graph; node_ctx will be filled by the model using TCN contexts
+        graph = Data(x=x, edge_index=edge_index, edge_attr=edge_attr)
+
+        # Build target exog-only temporal context (pad y channel with zeros to match neighbor TCN channels)
+        target_seq = torch.zeros(self.seq_len, self.seq_in_channels, dtype=torch.float32)
+        try:
+            arr_t, di_idx_t = self._get_seq_cached(self.file_paths[file_idx])
+            where_t = np.where(di_idx_t == di)[0]
+            if where_t.size > 0:
+                end_t = int(where_t[0])
+                start_t = end_t - (self.seq_len - 1)
+                if start_t >= 0:
+                    window_days_t = di_idx_t[start_t:end_t + 1]
+                    if np.all(window_days_t[1:] - window_days_t[:-1] == 1):
+                        exog_t = arr_t[start_t:end_t + 1, 1:]  # exog-only channels
+                        if exog_t.shape[0] == self.seq_len:
+                            target_seq[:, 1:] = torch.from_numpy(exog_t)
+        except Exception:
+            pass
+
+        return graph, y, neighbor_seq, neighbor_mask, target_seq
 
 
 if __name__ == '__main__':

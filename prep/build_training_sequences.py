@@ -2,12 +2,11 @@ import os
 from datetime import datetime
 import multiprocessing
 
-
+import pyarrow
 import numpy as np
 import pandas as pd
 import torch
 from tqdm import tqdm
-from prep.qaqc_schema import remap_known_sentinels
 from models.dads.value_limits import FEATURE_LIMITS, TARGET_LIMITS
 
 from prep.columns_desc import TARGETS, TERRAIN_FEATURES, GEO_FEATURES
@@ -149,10 +148,6 @@ def process_station(fid, row, ts_dir, landsat_dir, cdr_dir, dem_dir, terrain_dir
     for b in CDR_FEATURES:
         if b in ts.columns:
             ts[b] = pd.to_numeric(ts[b], errors='coerce')
-
-    # QA: remap coded sentinels to NaN for NOAA CDR and available targets
-    remap_known_sentinels(ts, [b for b in CDR_FEATURES if b in ts.columns], include_huge=True)
-    remap_known_sentinels(ts, [c for c in ['tmax_obs', 'tmin_obs', 'rsds_obs', 'ea_obs', 'wind_obs', 'prcp_obs'] if c in ts.columns], include_huge=True)
 
     # Apply feature-level clamps to NaN out-of-range values
     for fname, lim in FEATURE_LIMITS.items():
@@ -320,6 +315,46 @@ def join_training(stations, ts_dir, landsat_dir, cdr, sol_dir, terrain_dir, out_
     print('missing', total_missing)
 
 
+def _encode_parquet_file(p):
+    try:
+        df = pd.read_parquet(p)
+    except pyarrow.lib.ArrowInvalid:
+        print(f'{p} is not a valid parquet file')
+        return None
+    if not isinstance(df.index, pd.DatetimeIndex):  # likely error if index isn't datetime
+        df.index = pd.to_datetime(df.index)
+    doy = df.index.dayofyear.astype(np.float32)
+    df['doy_sin'] = np.sin(2 * np.pi * doy / 365.25)
+    df['doy_cos'] = np.cos(2 * np.pi * doy / 365.25)
+    df.to_parquet(p)
+    return p
+
+
+def add_doy_encoding(parquet_root, num_workers=32):
+    files = []
+    targets = TARGETS
+    for t in targets:
+        t_dir = os.path.join(parquet_root, t)
+        if not os.path.isdir(t_dir):  # likely error if expected target dir missing
+            continue
+        for r, _, fns in os.walk(t_dir):
+            for fn in fns:
+                if fn.endswith('.parquet'):
+                    files.append(os.path.join(r, fn))
+
+    if not files:
+        return
+
+    if num_workers == 1:
+        for p in tqdm(files, total=len(files)):
+            _encode_parquet_file(p)
+        return
+
+    with multiprocessing.Pool(processes=num_workers) as pool:
+        for _ in tqdm(pool.imap_unordered(_encode_parquet_file, files, chunksize=64), total=len(files)):
+            pass
+
+
 if __name__ == '__main__':
 
     d = '/media/research/IrrigationGIS'
@@ -357,14 +392,16 @@ if __name__ == '__main__':
     require_landsat_ = False
     require_cdr_ = False
 
-    join_training(fields, joined, landsat_, cdr_, solrad, terrain,
-                  out_dir=training,
-                  source=_source,
-                  overwrite=overwrite_,
-                  workers=12,
-                  debug=False,
-                  require_landsat=require_landsat_,
-                  require_cdr=require_cdr_,
-                  )
+    # join_training(fields, joined, landsat_, cdr_, solrad, terrain,
+    #               out_dir=training,
+    #               source=_source,
+    #               overwrite=overwrite_,
+    #               workers=12,
+    #               debug=False,
+    #               require_landsat=require_landsat_,
+    #               require_cdr=require_cdr_,
+    #               )
+
+    add_doy_encoding(training)
 
 # ========================= EOF ==============================================================================

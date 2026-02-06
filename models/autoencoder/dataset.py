@@ -23,12 +23,15 @@ class WeatherDataset(Dataset):
       speeds up training.
     - Optional contrastive triplet sampling can be disabled to avoid extra
       encoder passes when speed is preferred over representation shaping.
+    - New: can enforce minimum target coverage per window (``min_target_frac``)
+      to ensure reconstruction receives meaningful supervision.
     """
     def __init__(self, file_paths, expected_width, col_indices, chunk_size,
                  scaler,
                  target_indices=None, transform=None, expected_columns=None, selected_indices=None,
                  num_workers=12, window_stride=None, triplet_sampling=True, max_samples=None,
-                 max_files=None, split_name=None, tqdm_desc=None):
+                 max_files=None, split_name=None, tqdm_desc=None,
+                 min_target_frac=0.8):
 
         self.chunk_size = chunk_size
         self.transform = transform
@@ -39,6 +42,7 @@ class WeatherDataset(Dataset):
         self.num_workers = num_workers
         self.window_stride = int(window_stride) if window_stride is not None else int(chunk_size)
         self.triplet_sampling = bool(triplet_sampling)
+        self.min_target_frac = float(min_target_frac)
         self._max_samples = int(max_samples) if max_samples is not None else None
         self._max_files = int(max_files) if max_files is not None else None
         self._split_name = split_name
@@ -94,7 +98,7 @@ class WeatherDataset(Dataset):
                     t_total = t_vals.size
                     t_valid = np.isfinite(t_vals).sum()
                     t_frac = t_valid / t_total if t_total > 0 else 0.0
-                    if t_frac < 0.10:
+                    if t_frac < self.min_target_frac:
                         dropped += 1
                         continue
                     arr = torch.as_tensor(win.values, dtype=torch.float32)
@@ -205,6 +209,7 @@ class WeatherDataset(Dataset):
         - target: (T, C_tgt) columns to reconstruct (by target_indices)
         - mask: (T, C_tgt) boolean mask for valid target elements
         - positive_chunk / negative_chunk: same shape as chunk or None
+        - station_idx: integer id for supervised contrastive shaping
         """
 
         # Return raw (unscaled) data; scaling occurs in the model on device.
@@ -245,7 +250,8 @@ class WeatherDataset(Dataset):
             else:
                 negative_chunk = negative_chunk[:, :self.col_indices].clone()
 
-        return chunk, target, mask, positive_chunk, negative_chunk
+        sidx = int(self.station_idx[idx]) if (0 <= idx < len(self.station_idx)) else -1
+        return chunk, target, mask, positive_chunk, negative_chunk, sidx
 
 
 def diff_pairs(tensor, pairs):
@@ -279,7 +285,8 @@ class WeatherIterableDataset(IterableDataset):
                  scaler,
                  target_indices=None, transform=None, expected_columns=None, selected_indices=None,
                  num_workers=12, window_stride=None, triplet_sampling=False, max_samples=None,
-                 max_files=None, split_name=None, shuffle_files=True, tqdm_desc=None):
+                 max_files=None, split_name=None, shuffle_files=True, tqdm_desc=None,
+                 min_target_frac=0.8, require_rs_present=False, rs_feature_indices=None, min_rs_count=1):
 
         super().__init__()
         self.file_paths = list(file_paths)
@@ -299,6 +306,10 @@ class WeatherIterableDataset(IterableDataset):
         self._shuffle_files = bool(shuffle_files)
         self._tqdm_desc = tqdm_desc
         self.scaler = scaler
+        self.min_target_frac = float(min_target_frac)
+        self.require_rs_present = bool(require_rs_present)
+        self._rs_idxs = list(rs_feature_indices) if rs_feature_indices is not None else []
+        self.min_rs_count = int(min_rs_count)
 
         # Effective file list (respect max_files if provided)
         if self._max_files is not None:
@@ -326,6 +337,9 @@ class WeatherIterableDataset(IterableDataset):
         return all_paths[start:end]
 
     def _iter_file(self, file_path):
+        # cache station id for this file
+        staid = os.path.splitext(os.path.basename(file_path))[0]
+        sidx = getattr(self, '_station_id_map', {}).get(staid, -1)
         def _synthesize_missing_flags(df_local):
             # Ensure any *_miss columns exist. If base present, flag = isna(base)
             # If base missing, set flag=1.0 (conservative).
@@ -419,7 +433,7 @@ class WeatherIterableDataset(IterableDataset):
             return
 
         # target coverage threshold
-        min_frac = 0.10
+        min_frac = self.min_target_frac
         values = sub.values  # (T, C_in)
         for start_i in range(0, total - self.chunk_size + 1, self.window_stride):
             win = values[start_i:start_i + self.chunk_size]
@@ -430,6 +444,14 @@ class WeatherIterableDataset(IterableDataset):
             t_frac = t_valid / t_total if t_total > 0 else 0.0
             if t_frac < min_frac:
                 continue
+
+            # Optional: require at least some remote-sensing presence in the window
+            if self.require_rs_present and self._rs_idxs:
+                rs_slice = win[:, self._rs_idxs]
+                # count finite RS observations across the window
+                rs_finite = np.isfinite(rs_slice)
+                if rs_finite.sum() < self.min_rs_count:
+                    continue
 
             chunk = torch.as_tensor(win, dtype=torch.float32)
             if isinstance(self.target_indices[0], tuple):
@@ -444,7 +466,7 @@ class WeatherIterableDataset(IterableDataset):
                 mask = ~torch.isnan(chunk[:, tgt_idxs])
                 target = chunk[:, tgt_idxs]
 
-            yield chunk, target, mask, None, None
+            yield chunk, target, mask, None, None, sidx
 
     def __iter__(self):
         # Choose and optionally shuffle the file sequence for this iterator
@@ -452,6 +474,15 @@ class WeatherIterableDataset(IterableDataset):
         if self._shuffle_files:
             random.Random().shuffle(paths)
         paths = self._worker_file_slice(paths)
+
+        # Build station id map once per worker
+        if not hasattr(self, '_station_id_map'):
+            ids = {}
+            for i, fp in enumerate(paths):
+                staid = os.path.splitext(os.path.basename(fp))[0]
+                if staid not in ids:
+                    ids[staid] = len(ids)
+            self._station_id_map = ids
 
         produced = 0
         for fp in paths:

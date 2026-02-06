@@ -324,12 +324,66 @@ def write_tiered_val_subgraph(
     # membership by bounds
     attr_nodes = set(t_attr.keys()) | set(v_attr.keys())
     in_outer = _stations_in_bounds_from_parquet(parquet_dir, list(attr_nodes), outer_bounds)
-    if _looks_like_polygon(val_bounds):
-        in_val = _stations_in_polygon_from_parquet(parquet_dir, list(in_outer), val_bounds)
+
+    # Determine validation targets
+    explicit_targets = (val_target_ids is not None and len(val_target_ids) > 0)
+    if explicit_targets:
+        val_targets = set(str(s) for s in val_target_ids)
+        val_targets = val_targets & set(in_outer)
+        # preliminary train set excludes targets; neighbors for targets are drawn from this pool
+        prelim_train_set = set(in_outer) - set(val_targets)
+        # compute validation neighbors from preliminary train pool
+        need_latlon = list(prelim_train_set | set(val_targets))
+        ll = _read_latlon(parquet_dir, need_latlon)
+        ctx_ids = [sid for sid in prelim_train_set if sid in ll]
+        if ctx_ids:
+            ctx_lat = np.array([ll[s][0] for s in ctx_ids], dtype=float)
+            ctx_lon = np.array([ll[s][1] for s in ctx_ids], dtype=float)
+        else:
+            ctx_lat = np.zeros((0,), dtype=float)
+            ctx_lon = np.zeros((0,), dtype=float)
+        va_idx_out: Dict[str, List[str]] = {}
+        va_bear_out: Dict[str, List[float]] = {}
+        va_dist_out: Dict[str, List[float]] = {}
+        used_va: Set[str] = set()
+        targets_sorted = [t for t in sorted(list(val_targets)) if t in ll]
+        if targets_sorted and ctx_lat.size > 0:
+            tasks = []
+            for to_id in targets_sorted:
+                tlat, tlon = ll[to_id]
+                tasks.append((to_id, tlat, tlon, ctx_ids, ctx_lat, ctx_lon, k_val, d_bias, d_scale))
+            if int(num_workers) == 1:
+                results = []
+                for t in tqdm(tasks, total=len(tasks), desc='Val: computing neighbor lists'):
+                    results.append(_build_val_edges_for_target(t))
+            else:
+                with ProcessPoolExecutor(max_workers=int(num_workers)) as ex:
+                    results = []
+                    for r in tqdm(ex.map(_build_val_edges_for_target, tasks), total=len(tasks), desc='Val: computing neighbor lists'):
+                        results.append(r)
+            for res in tqdm(results, total=len(results), desc='Val: collating'):
+                if not res:
+                    continue
+                to_id, nbrs, bears, d_scaled = res
+                if not nbrs:
+                    continue
+                va_idx_out[to_id] = nbrs
+                va_bear_out[to_id] = bears
+                va_dist_out[to_id] = d_scaled
+                used_va.add(to_id)
+                used_va.update(nbrs)
+        # derive context from selections and finalize train set excluding context too
+        val_context = used_va - set(val_targets)
+        train_set = set(prelim_train_set) - set(val_context)
+        val_set = set(val_targets) | set(val_context)
     else:
-        in_val = _stations_in_bounds_from_parquet(parquet_dir, list(in_outer), val_bounds)
-    train_set = in_outer - in_val
-    val_set = in_val
+        # polygon/rect bounds path
+        if _looks_like_polygon(val_bounds):
+            in_val = _stations_in_polygon_from_parquet(parquet_dir, list(in_outer), val_bounds)
+        else:
+            in_val = _stations_in_bounds_from_parquet(parquet_dir, list(in_outer), val_bounds)
+        train_set = in_outer - in_val
+        val_set = in_val
 
     # filter train edges strictly to train_set (no border fill)
     tr_idx_out, tr_bear_out, tr_dist_out, used_tr = _filter_neighbors_parallel(
@@ -337,57 +391,58 @@ def write_tiered_val_subgraph(
     )
     tr_attr_out = {k: (t_attr[k] if k in t_attr else v_attr[k]) for k in used_tr if (k in t_attr or k in v_attr)}
 
-    # determine validation target/context sets
-    if val_target_ids is not None and len(val_target_ids) > 0:
-        val_targets = set(str(s) for s in val_target_ids) & set(val_set)
-    else:
-        ids_sorted = sorted(list(val_set))
-        val_targets = set(ids_sorted[::4])  # likely error if too sparse
-    val_context = set(val_set) - set(val_targets)
-
-    # build fresh val->val edges: targets draw neighbors only from val_context
-    need_latlon = list(val_context | set(val_targets))
-    ll = _read_latlon(parquet_dir, need_latlon)
-
-    va_idx_out: Dict[str, List[str]] = {}
-    va_bear_out: Dict[str, List[float]] = {}
-    va_dist_out: Dict[str, List[float]] = {}
-    used_va: Set[str] = set()
-
-    ctx_ids = [sid for sid in val_context if sid in ll]
-    if ctx_ids:
-        ctx_lat = np.array([ll[s][0] for s in ctx_ids], dtype=float)
-        ctx_lon = np.array([ll[s][1] for s in ctx_ids], dtype=float)
-    else:
-        ctx_lat = np.zeros((0,), dtype=float)
-        ctx_lon = np.zeros((0,), dtype=float)
-
-    targets_sorted = [t for t in sorted(list(val_targets)) if t in ll]
-    if targets_sorted and ctx_lat.size > 0:
-        tasks = []
-        for to_id in targets_sorted:
-            tlat, tlon = ll[to_id]
-            tasks.append((to_id, tlat, tlon, ctx_ids, ctx_lat, ctx_lon, k_val, d_bias, d_scale))
-        if int(num_workers) == 1:
-            results = []
-            for t in tqdm(tasks, total=len(tasks), desc='Val: computing neighbor lists'):
-                results.append(_build_val_edges_for_target(t))
+    # determine validation target/context sets and build val edges
+    if not explicit_targets:
+        if val_target_ids is not None and len(val_target_ids) > 0:
+            val_targets = set(str(s) for s in val_target_ids) & set(val_set)
         else:
-            with ProcessPoolExecutor(max_workers=int(num_workers)) as ex:
+            ids_sorted = sorted(list(val_set))
+            val_targets = set(ids_sorted[::4])  # likely error if too sparse
+        val_context = set(val_set) - set(val_targets)
+
+        # build fresh val->val edges: targets draw neighbors only from val_context
+        need_latlon = list(val_context | set(val_targets))
+        ll = _read_latlon(parquet_dir, need_latlon)
+
+        va_idx_out: Dict[str, List[str]] = {}
+        va_bear_out: Dict[str, List[float]] = {}
+        va_dist_out: Dict[str, List[float]] = {}
+        used_va: Set[str] = set()
+
+        ctx_ids = [sid for sid in val_context if sid in ll]
+        if ctx_ids:
+            ctx_lat = np.array([ll[s][0] for s in ctx_ids], dtype=float)
+            ctx_lon = np.array([ll[s][1] for s in ctx_ids], dtype=float)
+        else:
+            ctx_lat = np.zeros((0,), dtype=float)
+            ctx_lon = np.zeros((0,), dtype=float)
+
+        targets_sorted = [t for t in sorted(list(val_targets)) if t in ll]
+        if targets_sorted and ctx_lat.size > 0:
+            tasks = []
+            for to_id in targets_sorted:
+                tlat, tlon = ll[to_id]
+                tasks.append((to_id, tlat, tlon, ctx_ids, ctx_lat, ctx_lon, k_val, d_bias, d_scale))
+            if int(num_workers) == 1:
                 results = []
-                for r in tqdm(ex.map(_build_val_edges_for_target, tasks), total=len(tasks), desc='Val: computing neighbor lists'):
-                    results.append(r)
-        for res in tqdm(results, total=len(results), desc='Val: collating'):
-            if not res:
-                continue
-            to_id, nbrs, bears, d_scaled = res
-            if not nbrs:
-                continue
-            va_idx_out[to_id] = nbrs
-            va_bear_out[to_id] = bears
-            va_dist_out[to_id] = d_scaled
-            used_va.add(to_id)
-            used_va.update(nbrs)
+                for t in tqdm(tasks, total=len(tasks), desc='Val: computing neighbor lists'):
+                    results.append(_build_val_edges_for_target(t))
+            else:
+                with ProcessPoolExecutor(max_workers=int(num_workers)) as ex:
+                    results = []
+                    for r in tqdm(ex.map(_build_val_edges_for_target, tasks), total=len(tasks), desc='Val: computing neighbor lists'):
+                        results.append(r)
+            for res in tqdm(results, total=len(results), desc='Val: collating'):
+                if not res:
+                    continue
+                to_id, nbrs, bears, d_scaled = res
+                if not nbrs:
+                    continue
+                va_idx_out[to_id] = nbrs
+                va_bear_out[to_id] = bears
+                va_dist_out[to_id] = d_scaled
+                used_va.add(to_id)
+                used_va.update(nbrs)
 
     # assemble attribute dicts and id lists
     attr_map = dict(t_attr)
@@ -459,6 +514,37 @@ def write_tiered_val_subgraph(
         gdf_edges.crs = CRS.from_epsg(4326)
         gdf_edges.to_file(os.path.join(output_dir, 'edges.shp'), epsg='EPSG:4326', engine='fiona')
 
+    # nodes shapefile to aid inspection
+    all_nodes = list(set(used_tr) | set(used_va))
+    if all_nodes:
+        ll_nodes = _read_latlon(parquet_dir, all_nodes)
+        pts = []
+        ids = []
+        roles = []
+        # derive roles from outputs to avoid relying on earlier branch vars
+        val_targets_set = set(val_target_ids_out)
+        val_context_set = set(used_va) - val_targets_set
+        for sid in tqdm(all_nodes, total=len(all_nodes), desc='Nodes: building geometries'):
+            if sid not in ll_nodes:
+                continue
+            lat, lon = ll_nodes[sid]
+            pts.append(Point(float(lon), float(lat)))
+            ids.append(str(sid))
+            if sid in val_targets_set:
+                roles.append('val_tgt')
+            elif sid in val_context_set:
+                roles.append('val_ctx')
+            elif sid in used_tr:
+                roles.append('train')
+            else:
+                roles.append('other')  # likely error if surfaced
+        if pts:
+            gdf_nodes = gpd.GeoDataFrame({'geometry': pts})
+            gdf_nodes['id'] = ids
+            gdf_nodes['role'] = roles
+            gdf_nodes.crs = CRS.from_epsg(4326)
+            gdf_nodes.to_file(os.path.join(output_dir, 'nodes.shp'), epsg='EPSG:4326', engine='fiona')
+
     meta_out = dict(meta) if isinstance(meta, dict) else {}
     three = {
         'outer_bounds': {'west': outer_bounds[0], 'south': outer_bounds[1], 'east': outer_bounds[2], 'north': outer_bounds[3]},
@@ -468,10 +554,13 @@ def write_tiered_val_subgraph(
         'source_graph_dir': os.path.abspath(source_graph_dir),
         'parquet_dir': os.path.abspath(parquet_dir),
     }
-    if _looks_like_polygon(val_bounds):
-        three['val_polygon'] = [(float(lat), float(lon)) for (lat, lon) in val_bounds]
+    if val_bounds is not None:
+        if _looks_like_polygon(val_bounds):
+            three['val_polygon'] = [(float(lat), float(lon)) for (lat, lon) in val_bounds]
+        else:
+            three['val_bounds'] = {'west': val_bounds[0], 'south': val_bounds[1], 'east': val_bounds[2], 'north': val_bounds[3]}
     else:
-        three['val_bounds'] = {'west': val_bounds[0], 'south': val_bounds[1], 'east': val_bounds[2], 'north': val_bounds[3]}
+        three['val_selection'] = 'explicit_targets'
     meta_out['three_tier_subgraph'] = three
     _write_json(os.path.join(output_dir, 'graph_meta.json'), meta_out)
 
@@ -506,7 +595,7 @@ if __name__ == '__main__':
         parquet_dir=parquet_dir_,
         output_dir=sub_graph_dir_,
         outer_bounds=(west, south, east, north),
-        val_bounds=val_poly_,
+        val_bounds=None,
         k_val=k_val_,
         ensure_min_k_train=ensure_min_k_train_,
         val_target_ids=val_target_ids_,

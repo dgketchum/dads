@@ -2,7 +2,7 @@ CDR_FEATURES = ['SR1', 'SR2', 'SR3', 'BT1', 'BT2', 'BT3']
 LANDSAT_FEATURES = ['B10', 'B2', 'B3', 'B4', 'B5', 'B6', 'B7']
 TERRAIN_FEATURES = ['aspect', 'elevation', 'slope', 'tpi_10000', 'tpi_22500', 'tpi_2500', 'tpi_500']
 
-GEO_FEATURES = ['lat', 'lon', 'rsun', 'doy'] + LANDSAT_FEATURES + CDR_FEATURES + TERRAIN_FEATURES
+GEO_FEATURES = ['lat', 'lon', 'rsun', 'doy_sin', 'doy_cos'] + LANDSAT_FEATURES + CDR_FEATURES + TERRAIN_FEATURES
 
 # Binary missingness flags for RS features (1 if missing, 0 if present)
 LANDSAT_MISS_FEATURES = [f'{b}_miss' for b in LANDSAT_FEATURES]
