@@ -24,6 +24,18 @@ def train_model(dirpath, parquet_dir, embeddings, edge_info, scaler_json, nodes=
     model instantiation.
     """
 
+    # Sanity check: graph artifacts must exist (three-tier subgraph expected)
+    if not os.path.isdir(edge_info):
+        raise FileNotFoundError('edge_info directory not found: {}'.format(edge_info))
+    _req = [
+        'train_edge_index.json', 'train_edge_attr.json',
+        'val_edge_index.json', 'val_edge_attr.json',
+    ]
+    for _f in _req:
+        _p = os.path.join(edge_info, _f)
+        if not os.path.exists(_p):
+            raise FileNotFoundError('required graph file missing: {}'.format(_p))
+
     # Debug/sample handling: subset stations to a small sample for quick checks
     if n_samples is not None:
         sample = (int(n_samples), int(n_samples))
@@ -53,8 +65,15 @@ def train_model(dirpath, parquet_dir, embeddings, edge_info, scaler_json, nodes=
         t_files = t_files[:n_samples]
         v_files = v_files[:max(1, min(n_samples, len(v_files)))]
 
+    # Ensure variable-specific scaler is built from train-only stations to avoid leakage
+    var_name = os.path.basename(parquet_dir).replace('_obs', '')
+    parquet_root = os.path.dirname(parquet_dir)
+    scaler_obj_loaded, scaler_json_path, _ = load_variable_scaler(
+        parquet_root, var_name, station_ids=sorted(list(train_stations)), rebuild=True
+    )
+
     train_dataset = DadsDataset(nodes, t_files, meta, embeddings, train_edges, train_attr,
-                                scaler=scaler_json, sample=sample[0], lstm_workers=n_workers,
+                                scaler=scaler_json_path, sample=sample[0], lstm_workers=n_workers,
                                 normalize_keys=train_stations,
                                 windows_per_station=(64 if debug and n_samples is not None else windows_per_station),
                                 neighbor_file_map=all_files)
@@ -62,12 +81,14 @@ def train_model(dirpath, parquet_dir, embeddings, edge_info, scaler_json, nodes=
     def _collate(batch):
         import torch
         from torch_geometric.data import Batch
-        graphs, y_list, seq_list, mask_list = zip(*batch)
+        # graph, y, neighbor_seq, neighbor_mask, target_seq
+        graphs, y_list, seq_list, mask_list, tgt_seq_list = zip(*batch)
         b_graph = Batch.from_data_list(list(graphs))
         y = torch.stack(list(y_list), dim=0)
         neighbor_seq = torch.stack(seq_list, dim=0)  # [B, n_nodes, T, C]
         neighbor_mask = torch.stack(mask_list, dim=0)  # [B, n_nodes]
-        return b_graph, y, neighbor_seq, neighbor_mask
+        target_seq = torch.stack(tgt_seq_list, dim=0)  # [B, T, C]
+        return b_graph, y, neighbor_seq, neighbor_mask, target_seq
 
     train_dataloader = DataLoader(
         train_dataset,
@@ -86,7 +107,7 @@ def train_model(dirpath, parquet_dir, embeddings, edge_info, scaler_json, nodes=
     val_attr = os.path.join(edge_info, 'val_edge_attr.json')
 
     val_dataset = DadsDataset(nodes, v_files, meta, embeddings, val_edges, val_attr,
-                              scaler=scaler_json, sample=sample[1], lstm_workers=n_workers,
+                              scaler=scaler_json_path, sample=sample[1], lstm_workers=n_workers,
                               normalize_keys=train_stations,
                               windows_per_station=(16 if debug and n_samples is not None else windows_per_station),
                               neighbor_file_map=all_files)
@@ -133,7 +154,7 @@ def train_model(dirpath, parquet_dir, embeddings, edge_info, scaler_json, nodes=
     emb_dim = getattr(train_dataset, 'emb_dim', None)
     edge_dim = int(getattr(train_dataset, 'edge_dim', next(iter(train_dataset.edge_attr.values())).shape[-1]))
     tcn_in_channels = int(train_dataset.seq_in_channels)
-    model = DadsMetGNN(output_dim=1, n_nodes=nodes, hidden_dim=1024,
+    model = DadsMetGNN(output_dim=1, n_nodes=nodes, hidden_dim=256,
                        edge_attr_dim=edge_dim, dropout=dropout, learning_rate=learning_rate,
                        log_csv=logging_csv, use_target_exog_branch=True,
                        emb_dim=emb_dim, exog_dim=exog_dim, scaler=scaler_obj, column_indices=column_indices,
@@ -165,8 +186,8 @@ def train_model(dirpath, parquet_dir, embeddings, edge_info, scaler_json, nodes=
     trainer = pl.Trainer(max_epochs=max_epochs,
                          callbacks=callbacks,
                          accelerator=device, devices=1,
-                         # Use BF16 mixed precision: wider dynamic range than FP16, similar speed
-                         precision='bf16-mixed',
+                         # Start in full precision for numerical stability
+                         precision='32-true',
                          # Clip gradients to avoid explosive updates early in training
                          gradient_clip_val=1.0,
                          enable_checkpointing=not debug)
@@ -190,7 +211,8 @@ if __name__ == '__main__':
     parquet_dir_ = os.path.join(training, 'parquet', f'{target_var}_obs')
 
     # graph (per target)
-    edges = os.path.join(training, 'graph', f'{target_var}_obs')
+    # edges = os.path.join(training, 'graph', f'{target_var}_obs')
+    edges = os.path.join(training, 'subgraph', f'{target_var}_obs')
 
     # climate embedding
     encoder_dir = os.path.join(training, 'autoencoder', 'checkpoints', '10211323')
@@ -214,7 +236,7 @@ if __name__ == '__main__':
 
     scaler_json_ = os.path.join(training, 'scalers', f'{target_var}.json')
 
-    train_model(chk, parquet_dir_, encoder_dir, edges, scaler_json_, batch_size=4096, nodes=5, dropout=0.5,
+    train_model(chk, parquet_dir_, encoder_dir, edges, scaler_json_, batch_size=512, nodes=10, dropout=0.1,
                 learning_rate=0.001, n_workers=workers, logging_csv=logger_csv, device=device_,
                 n_samples=(N_SAMPLES if DEBUG else None), debug=DEBUG,
                 windows_per_station=WINDOWS_PER_STATION)

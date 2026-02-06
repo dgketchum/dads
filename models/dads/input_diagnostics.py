@@ -109,7 +109,7 @@ def diagnose_inputs(training_root, variable, num_workers=12):
         r05, r50, r95 = _nan_q(raw)
         sc = (raw - bias[j]) / scale[j] + 5e-8
         s05, s50, s95 = _nan_q(sc)
-        inv = sc * (scale[j] + 5e-8) + bias[j]
+        inv = (sc - 5e-8) * scale[j] + bias[j]
         mad = float(np.nanmax(np.abs(inv - raw))) if inv.size else 0.0
         print(f'- {c}: raw=({r05:.3f},{r50:.3f},{r95:.3f}) scaled=({s05:.3f},{s50:.3f},{s95:.3f}) inv_err={mad:.6f}')
 
@@ -138,5 +138,5 @@ def diagnose_inputs(training_root, variable, num_workers=12):
 if __name__ == '__main__':
     training = '/data/ssd2/dads/training'
     var = 'tmax'
-    diagnose_inputs(training, var, num_workers=32)
+    diagnose_inputs(training, var, num_workers=8)
 # ========================= EOF ====================================================================
