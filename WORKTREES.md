@@ -9,7 +9,7 @@ Use two git worktrees so the RTMA humidity MVP can iterate quickly without getti
 - `/home/dgketchum/code/dads-mvp` → branch `mvp/rtma-humidity`
   - RTMA humidity MVP (ship-focused).
 
-Confirm at any time:
+Confirm at any time (run from the canonical worktree):
 
 ```bash
 git -C /home/dgketchum/code/dads worktree list
@@ -32,4 +32,3 @@ cd /home/dgketchum/code/dads
 git worktree remove ../dads-mvp
 git worktree prune
 ```
-

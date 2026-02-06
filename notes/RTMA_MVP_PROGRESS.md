@@ -6,8 +6,9 @@ We split MVP work from cube/spatial refactor:
 - `cube` branch remains for Phase 0 cube/spatial work.
 - Humidity MVP is now based on `main` in a clean worktree (`mvp/rtma-humidity`) at `/home/dgketchum/code/dads-mvp`.
 
-During agent/sandbox sessions, a temporary worktree may be used under `/tmp/dads-mvp-codex` to develop changes
-and then cherry-pick them into `/home/dgketchum/code/dads-mvp`.
+During agent/sandbox sessions, a temporary worktree may be used under `/tmp` to develop changes and then
+cherry-pick them into `/home/dgketchum/code/dads-mvp`. This is non-canonical; assume the canonical starting point
+is always `/home/dgketchum/code/dads`.
 
 Worktree details: see `notes/WORKTREE_SETUP.md`.
 
