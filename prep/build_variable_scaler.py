@@ -105,6 +105,7 @@ def fit_and_save_scaler(file_paths, feature_names, scaler_path, num_workers=None
     dct = {'bias': bias_, 'scale': scale_, 'feature_names': feature_names}
     with open(scaler_path, 'w') as fp:
         json.dump(dct, fp, indent=4)
+    print(f'[Scaler] wrote new scaler with {len(feature_names)} features: {feature_names}')
     return scaler
 
 

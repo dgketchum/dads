@@ -14,7 +14,7 @@ from prep.stations import merge_shapefiles, get_station_observation_metadata
 from sklearn.neighbors import BallTree
 from concurrent.futures import ProcessPoolExecutor
 from tqdm import tqdm
-from prep.build_variable_scaler import load_variable_scaler, build_variable_scaler
+from prep.build_variable_scaler import build_variable_scaler
 
 
 def _read_geo_from_parquet(args):
@@ -54,11 +54,14 @@ class Graph:
     (graph split) and recorded in graph_meta.json to avoid information leakage.
     """
 
-    def __init__(self, stations, output_dir, k_nearest=2, bounds=None, index_col='fid',
+    def __init__(self, stations, output_dir, k_nearest=10, bounds=None, index_col='fid',
                  split_percent=0.8, random_state=None,
                  parquet_dir=None, scaler_json=None, use_parquet_features=False, num_workers=1,
-                 neighbor_pool_factor=5,
-                 record_holders: int = 3, features=None):
+                 neighbor_pool_factor=5, rebuild_scaler=False,
+                 record_holders: int = 3, features=None,
+                 n_diverse: int = 3):
+
+        self.rebuild_scaler = rebuild_scaler
         self.fields = stations
         self.output_dir = output_dir
         self.k_nearest = k_nearest
@@ -73,6 +76,7 @@ class Graph:
         self.num_workers = int(num_workers) if num_workers is not None else 1
         self.neighbor_pool_factor = int(neighbor_pool_factor)
         self.record_holders = int(record_holders)
+        self.n_diverse = int(n_diverse)
         # feature selection (optional)
         if features is None:
             self.features = list(GEO_FEATURES)
@@ -100,7 +104,7 @@ class Graph:
             # require explicit scaler_json when using parquet_dir (single-writer policy)
             assert self.scaler_path is not None, "scaler_json required when parquet_dir is provided"
             # honor explicit scaler_json: load if present; else build once under its directory
-            if os.path.exists(self.scaler_path):
+            if os.path.exists(self.scaler_path) and not self.rebuild_scaler:
                 with open(self.scaler_path, 'r') as f:
                     params = json.load(f)
                 self.scaler_feature_names = params.get('feature_names')
@@ -283,8 +287,11 @@ class Graph:
         return gdf, train_gdf, val_gdf
 
     def _build_edges(self, train_gdf, val_gdf, feats_scaled):
-        # Unified: spatial candidate pool, then half similar/half dissimilar by features
+        # Unified: spatial candidate pool, then select mostly similar with a small diverse set
         k = int(self.k_nearest) if self.k_nearest and self.k_nearest > 0 else 1
+        k = max(1, k)
+        k_diverse = min(max(0, self.n_diverse), k)
+        k_sim = max(0, k - k_diverse)
         parts = []
         # features by station id
         feats_scaled.index = feats_scaled.index.astype(str)
@@ -316,18 +323,20 @@ class Graph:
                     fd = np.linalg.norm(train_feat[cand_local] - v, axis=1)
                     sim_order = np.argsort(fd)
                     dissim_order = np.argsort(-fd)
-                    k_sim = k // 2
                     chosen = []
+                    # take k_sim most similar
                     for idx in sim_order:
                         if len(chosen) >= k_sim:
                             break
                         chosen.append(cand_local[idx])
+                    # add up to k_diverse most dissimilar (diversity)
                     for idx in dissim_order:
                         if len(chosen) >= k:
                             break
                         j = cand_local[idx]
                         if j not in chosen:
                             chosen.append(j)
+                    # fill remaining with similar order to reach k
                     if len(chosen) < k:
                         for idx in sim_order:
                             if len(chosen) >= k:
@@ -360,18 +369,20 @@ class Graph:
                     fd = np.linalg.norm(train_feat[cand_local] - v, axis=1)
                     sim_order = np.argsort(fd)
                     dissim_order = np.argsort(-fd)
-                    k_sim = k // 2
                     chosen = []
+                    # take k_sim most similar
                     for idx in sim_order:
                         if len(chosen) >= k_sim:
                             break
                         chosen.append(cand_local[idx])
+                    # add up to k_diverse most dissimilar
                     for idx in dissim_order:
                         if len(chosen) >= k:
                             break
                         j = cand_local[idx]
                         if j not in chosen:
                             chosen.append(j)
+                    # fill remaining with similar order to reach k
                     if len(chosen) < k:
                         for idx in sim_order:
                             if len(chosen) >= k:
@@ -459,6 +470,7 @@ class Graph:
             for k, nbrs in train_edges.items():
                 base = list(nbrs)
                 blist = list(train_bearing.get(k, []))
+                dlist = list(train_distance.get(k, []))
                 for fid in top_fids:
                     if fid != k and fid not in base:
                         base.append(fid)
@@ -470,15 +482,24 @@ class Graph:
                             lat_nb = np.radians(p_nb.y)
                             lon_nb = np.radians(p_nb.x)
                             dlon = lon_nb - lon_to
+                            # bearing
                             x = np.sin(dlon) * np.cos(lat_nb)
                             y = np.cos(lat_to) * np.sin(lat_nb) - np.sin(lat_to) * np.cos(lat_nb) * np.cos(dlon)
                             b = np.degrees(np.arctan2(x, y))
                             b = (b + 360.0) % 360.0
                             blist.append(float(b))
+                            # distance (km), then scaled using train-only d_min/d_scale
+                            dlat = lat_nb - lat_to
+                            a = np.sin(dlat / 2.0) ** 2 + np.cos(lat_to) * np.cos(lat_nb) * np.sin(dlon / 2.0) ** 2
+                            c = 2.0 * np.arctan2(np.sqrt(a), np.sqrt(1.0 - a))
+                            dist_km = 6371.0088 * c
+                            d_scaled = (dist_km - d_min) / d_scale + 5e-8
+                            dlist.append(float(d_scaled))
                 train_edges[k] = base
                 if blist:
                     train_bearing[k] = blist
-                # NOTE: distance list is not extended to match appended record holders  # likely error
+                if dlist:
+                    train_distance[k] = dlist
         with open(os.path.join(self.output_dir, 'train_edge_index.json'), 'w') as f:
             json.dump(train_edges, f)
         with open(os.path.join(self.output_dir, 'train_edge_bearing.json'), 'w') as f:
@@ -498,6 +519,7 @@ class Graph:
             for k, nbrs in val_edges.items():
                 base = list(nbrs)
                 blist = list(val_bearing.get(k, []))
+                dlist = list(val_distance.get(k, []))
                 for fid in top_fids:
                     if fid != k and fid not in base:
                         base.append(fid)
@@ -509,15 +531,24 @@ class Graph:
                             lat_nb = np.radians(p_nb.y)
                             lon_nb = np.radians(p_nb.x)
                             dlon = lon_nb - lon_to
+                            # bearing
                             x = np.sin(dlon) * np.cos(lat_nb)
                             y = np.cos(lat_to) * np.sin(lat_nb) - np.sin(lat_to) * np.cos(lat_nb) * np.cos(dlon)
                             b = np.degrees(np.arctan2(x, y))
                             b = (b + 360.0) % 360.0
                             blist.append(float(b))
+                            # distance (km), then scaled using train-only d_min/d_scale
+                            dlat = lat_nb - lat_to
+                            a = np.sin(dlat / 2.0) ** 2 + np.cos(lat_to) * np.cos(lat_nb) * np.sin(dlon / 2.0) ** 2
+                            c = 2.0 * np.arctan2(np.sqrt(a), np.sqrt(1.0 - a))
+                            dist_km = 6371.0088 * c
+                            d_scaled = (dist_km - d_min) / d_scale + 5e-8
+                            dlist.append(float(d_scaled))
                 val_edges[k] = base
                 if blist:
                     val_bearing[k] = blist
-                # NOTE: distance list is not extended to match appended record holders  # likely error
+                if dlist:
+                    val_distance[k] = dlist
         with open(os.path.join(self.output_dir, 'val_edge_index.json'), 'w') as f:
             json.dump(val_edges, f)
         with open(os.path.join(self.output_dir, 'val_edge_bearing.json'), 'w') as f:
@@ -624,7 +655,7 @@ if __name__ == '__main__':
 
         node_prep = Graph(stations_obs, output_dir_, k_nearest=10, index_col='fid',
                           parquet_dir=sequence_parq, scaler_json=scaler_json_, use_parquet_features=True,
-                          num_workers=16, bounds=None,
+                          num_workers=16, bounds=None, rebuild_scaler=True,
                           split_percent=0.8, random_state=42, features=select_feats)
         node_prep.generate_edge_index()
 

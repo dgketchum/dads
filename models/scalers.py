@@ -105,7 +105,7 @@ class Scaler:
         return (x - self.bias) / self.scale + 5e-8
 
     def inverse_transform(self, x):
-        return x * (self.scale + 5e-8) + self.bias
+        return (x - 5e-8) * self.scale + self.bias
 
     def fit_transform(self, x, *args, **kwargs):
         """Fit scaler's parameters using input :obj:`x` and then transform
@@ -182,4 +182,3 @@ class MinMaxScaler(Scaler):
         bias = x_min - out_min * scale
         self.bias, self.scale = bias, scale
         return self
-

@@ -164,3 +164,8 @@ cython_debug/
 /model/lightning_logs/
 /extract/met_data/obs/madis_credentials.json
 /extract/met_data/synoptic_key.json
+
+# Project artifacts / run outputs
+CLAUDE.md
+lightning_logs/
+logs/
