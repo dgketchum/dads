@@ -2,9 +2,9 @@ import json
 import os
 from datetime import datetime
 
-import pytorch_lightning as pl
+import lightning.pytorch as pl
 import numpy as np
-from pytorch_lightning.callbacks import ModelCheckpoint, EarlyStopping
+from lightning.pytorch.callbacks import ModelCheckpoint, EarlyStopping
 from torch_geometric.loader import DataLoader
 import torch  # set matmul precision for Tensor Cores
 import torch.multiprocessing as mp  # control sharing strategy for large batches

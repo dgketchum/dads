@@ -3,13 +3,13 @@ import os
 import resource
 from datetime import datetime
 
-import pytorch_lightning as pl
+import lightning.pytorch as pl
 import torch
-from pytorch_lightning.callbacks import ModelCheckpoint, EarlyStopping
+from lightning.pytorch.callbacks import ModelCheckpoint, EarlyStopping
 from torch.utils.data import DataLoader
-from pytorch_lightning.loggers import CSVLogger
+from lightning.pytorch.loggers import CSVLogger
 
-from models.autoencoder.dataset import WeatherDataset, WeatherIterableDataset
+from models.autoencoder.dataset import WeatherIterableDataset
 from models.autoencoder.weather_encoder import WeatherAutoencoder
 from models.scalers import MinMaxScaler
 
@@ -363,7 +363,7 @@ def train_model(dirpath, parquet, target_var, columns, chunk_size, meta_path,
 
     # Optional warmup: toggle zero_target_in_encoder to True after N epochs
     if warmup_toggle_epochs is not None and int(warmup_toggle_epochs) > 0:
-        import pytorch_lightning as _pl
+        import lightning.pytorch as _pl
         class ZeroTargetToggle(_pl.Callback):
             def __init__(self, toggle_epoch: int):
                 self.toggle_epoch = int(toggle_epoch)
