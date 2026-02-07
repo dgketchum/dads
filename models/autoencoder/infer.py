@@ -217,7 +217,7 @@ def infer_embeddings(model_dir, data_dir, metadata_path, embedding_path, scaler_
 if __name__ == '__main__':
     d = '/media/research/IrrigationGIS/dads'
     if not os.path.exists(d):
-        d = '/home/dgketchum/data/IrrigationGIS/dads'
+        d = '/nas/dads'
 
     variable_ = 'tmax'
     target_var_ = f'{variable_}_obs'

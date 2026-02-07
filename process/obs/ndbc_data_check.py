@@ -230,7 +230,7 @@ def assess_downloaded_ndbc(records_dir, out_csv=None, joined_dir=None, training_
 if __name__ == '__main__':
     d = '/media/research/IrrigationGIS'
     if not os.path.exists(d):
-        d = '/home/dgketchum/data/IrrigationGIS'
+        d = '/nas'
 
     ndbc = os.path.join(d, 'climate', 'ndbc')
     ndbc_daily = os.path.join(ndbc, 'ndbc_daily')

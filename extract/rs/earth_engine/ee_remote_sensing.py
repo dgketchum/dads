@@ -229,7 +229,7 @@ if __name__ == '__main__':
 
     d = '/media/research/IrrigationGIS'
     if not os.path.exists(d):
-        d = '/home/dgketchum/data/IrrigationGIS'
+        d = '/nas'
 
     _bucket = 'gs://wudr'
     station_set = 'ndbc'

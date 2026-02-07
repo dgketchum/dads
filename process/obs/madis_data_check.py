@@ -234,7 +234,7 @@ def assess_downloaded_madis(records_dir, out_csv, joined_dir, training_dir,
 if __name__ == '__main__':
     d = '/media/research/IrrigationGIS'
     if not os.path.exists(d):
-        d = '/home/dgketchum/data/IrrigationGIS'
+        d = '/nas'
 
     madis_daily = '/data/ssd2/madis/daily'
 

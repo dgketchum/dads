@@ -224,7 +224,7 @@ def write_ndbc_hourly(ndbc_src, out_root, stations_meta_csv, station_ids=None):
 if __name__ == '__main__':
     d = '/media/research/IrrigationGIS'
     if not os.path.exists(d):
-        d = '/home/dgketchum/data/IrrigationGIS'
+        d = '/nas'
 
     ndbc = os.path.join(d, 'climate', 'ndbc')
     ndbc_meta_csv = os.path.join(ndbc, 'ndbc_meta', 'ndbc_stations.csv')

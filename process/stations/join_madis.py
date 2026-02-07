@@ -345,7 +345,7 @@ def write_missing(madis, dads, missing):
 if __name__ == '__main__':
     d = '/media/research/IrrigationGIS'
     if not os.path.exists(d):
-        d = '/home/dgketchum/data/IrrigationGIS'
+        d = '/nas'
 
     madis = os.path.join(d, 'climate', 'madis')
     dads = os.path.join(d, 'dads')

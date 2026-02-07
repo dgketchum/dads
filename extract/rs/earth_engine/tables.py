@@ -53,7 +53,7 @@ if __name__ == '__main__':
 
     d = '/media/research/IrrigationGIS'
     if not os.path.exists(d):
-        d = '/home/dgketchum/data/IrrigationGIS'
+        d = '/nas'
 
     fields = os.path.join(d, 'dads', 'met', 'stations', 'openet_gridwxcomp_input.csv')
     extracts = os.path.join(d, 'dads', 'rs', 'gwx_stations', 'ee_extracts')

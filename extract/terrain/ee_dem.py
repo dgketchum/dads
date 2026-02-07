@@ -73,7 +73,7 @@ if __name__ == '__main__':
     is_authorized()
 
     dem_d = '/data/ssd2/dads/dem'
-    d = '/home/dgketchum/data/IrrigationGIS'
+    d = '/nas'
 
     _bucket = 'gs://wudr'
     station_set = 'ghcn'

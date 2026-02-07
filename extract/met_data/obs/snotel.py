@@ -92,7 +92,7 @@ def snotel_meteorology(csv, out_dir, overwrite=False):
 if __name__ == '__main__':
     d = '/media/research/IrrigationGIS/climate/snotel'
     if not os.path.exists(d):
-        d = '/home/dgketchum/data/IrrigationGIS/climate/snotel'
+        d = '/nas/climate/snotel'
     sno_list = os.path.join(d, 'snotel_list.csv')
     rec_dir = os.path.join(d, 'snotel_records')
     snotel_meteorology(sno_list, rec_dir, overwrite=True)

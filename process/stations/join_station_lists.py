@@ -134,7 +134,7 @@ def add_records(d, n, l):
 if __name__ == '__main__':
     d = '/media/research/IrrigationGIS'
     if not os.path.exists(d):
-        d = '/home/dgketchum/data/IrrigationGIS'
+        d = '/nas'
 
     sno_list = os.path.join(d, 'climate', 'snotel', 'snotel_list.csv')
     meso_list = os.path.join(d, 'dads', 'met', 'stations', 'madis_mgrs_28OCT2024.csv')

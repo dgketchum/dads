@@ -469,7 +469,7 @@ if __name__ == '__main__':
         cdr_dir = sys.argv[1]
         cube_path = sys.argv[2]
     else:
-        cdr_dir = '/home/dgketchum/data/IrrigationGIS/dads/rs/cdr/nc'
+        cdr_dir = '/nas/dads/rs/cdr/nc'
         cube_path = '/data/ssd2/dads_cube/cube.zarr'
 
     if Path(cdr_dir).exists():

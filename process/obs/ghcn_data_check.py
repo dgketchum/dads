@@ -225,7 +225,7 @@ def assess_downloaded_data(records_dir, out_csv=None, inventory=None, out_shp=No
 if __name__ == '__main__':
     d = '/media/research/IrrigationGIS'
     if not os.path.exists(d):
-        d = '/home/dgketchum/data/IrrigationGIS'
+        d = '/nas'
 
     ghcn = os.path.join(d, 'climate', 'ghcn')
     inventroy_ = os.path.join(ghcn, 'ghcnd-inventory.txt')

@@ -1,3 +1,3 @@
-/home/dgketchum/data/IrrigationGIS/dads/met/gridded/gridmet_raw/LCFW1.csv/media/research/IrrigationGIS/dads/met/gridded/raw_parquet/nldas2_parquet/COVM.parquet.gzip
+/nas/dads/met/gridded/gridmet_raw/LCFW1.csv/media/research/IrrigationGIS/dads/met/gridded/raw_parquet/nldas2_parquet/COVM.parquet.gzip
 /media/research/IrrigationGIS/dads/met/gridded/raw_parquet/nldas2_parquet/COVM.parquet.gzip
 /media/research/IrrigationGIS/dads/met/gridded/raw_parquet/prism/COVM.parquet.gzip

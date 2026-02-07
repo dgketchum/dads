@@ -96,7 +96,7 @@ def transfer_list(src, dst, workers=2):
 if __name__ == '__main__':
     d = '/media/research/IrrigationGIS'
     if not os.path.exists(d):
-        d = '/home/dgketchum/data/IrrigationGIS'
+        d = '/nas'
 
     mesonet_dir = os.path.join(d, 'climate', 'madis', 'LDAD', 'mesonet')
     src_dir_ = os.path.join('/data/ssd1/madis', 'inclusive_csv')

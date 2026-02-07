@@ -198,7 +198,7 @@ if __name__ == '__main__':
 
     target_var = 'tmax'
 
-    d = '/home/dgketchum/data/IrrigationGIS/dads'
+    d = '/nas/dads'
     training = '/data/ssd2/dads/training'
 
     # Improve Tensor Core matmul stability/perf under mixed precision

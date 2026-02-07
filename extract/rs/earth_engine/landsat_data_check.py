@@ -113,7 +113,7 @@ def process_missing_landsat_data(table_dir, test_year=2023, num_workers=1, out_c
 if __name__ == '__main__':
     d = '/media/research/IrrigationGIS'
     if not os.path.exists(d):
-        d = '/home/dgketchum/data/IrrigationGIS'
+        d = '/nas'
 
     table_dir = os.path.join(d, 'dads', 'rs', 'landsat', 'station_data')
     test_year = 2023

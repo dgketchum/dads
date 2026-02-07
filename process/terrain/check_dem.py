@@ -177,7 +177,7 @@ def reproject_dems(in_dir, tiles, output_dir, in_epsg, out_epsg):
 
 if __name__ == '__main__':
 
-    d = '/home/dgketchum/data/IrrigationGIS'
+    d = '/nas'
     dem_d = '/data/ssd2/dads/dem'
 
     _bucket = 'gs://wudr'

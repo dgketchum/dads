@@ -222,7 +222,7 @@ if __name__ == '__main__':
     data = '/data/ssd2'
     root = '/media/research/IrrigationGIS'
     if not os.path.exists(root):
-        root = '/home/dgketchum/data/IrrigationGIS'
+        root = '/nas'
 
     # sites = os.path.join(root, 'dads', 'met', 'stations', 'madis_02JULY2025_mgrs.csv')
     # obs = os.path.join(data, 'madis', 'daily')

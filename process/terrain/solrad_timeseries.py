@@ -149,7 +149,7 @@ def extract_raster_values_by_tile(shapefile_path, raster_dir, table_out, shuffle
 if __name__ == '__main__':
     root = '/media/research/IrrigationGIS'
     if not os.path.exists(root):
-        root = '/home/dgketchum/data/IrrigationGIS'
+        root = '/nas'
 
     raster_dir_ = os.path.join(root, 'dads', 'dem', 'rsun_irradiance')
     solrad_out = os.path.join(root, 'dads', 'dem', 'rsun_stations')

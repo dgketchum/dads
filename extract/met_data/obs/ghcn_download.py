@@ -83,7 +83,7 @@ def get_station_data(inventory, out_dir, bounds=(-125., 25., -60., 49.), overwri
 if __name__ == '__main__':
     d = '/media/research/IrrigationGIS'
     if not os.path.exists(d):
-        d = '/home/dgketchum/data/IrrigationGIS'
+        d = '/nas'
 
     ghcn = os.path.join(d, 'climate', 'ghcn')
     inventroy_ = os.path.join(ghcn, 'ghcnd-inventory.txt')

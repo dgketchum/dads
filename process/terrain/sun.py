@@ -179,7 +179,7 @@ def export_rasters(terrain_dir, rsun_out, mapset='PERMANENT', overwrite=False, m
 
 if __name__ == '__main__':
 
-    root = '/home/dgketchum/data/IrrigationGIS'
+    root = '/nas'
     dem_d = '/data/ssd2/dads/dem'
 
     _bucket = 'gs://wudr'

@@ -384,7 +384,7 @@ if __name__ == '__main__':
         rsun_dir = sys.argv[1]
         cube_path = sys.argv[2]
     else:
-        rsun_dir = '/home/dgketchum/data/IrrigationGIS/dads/dem/rsun_irradiance'
+        rsun_dir = '/nas/dads/dem/rsun_irradiance'
         cube_path = '/data/ssd2/dads_cube/cube.zarr'
 
     if Path(rsun_dir).exists():

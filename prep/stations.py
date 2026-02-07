@@ -153,7 +153,7 @@ if __name__ == '__main__':
 
     d = '/media/research/IrrigationGIS'
     if not os.path.exists(d):
-        d = '/home/dgketchum/data/IrrigationGIS'
+        d = '/nas'
 
     target_var = 'tmax_obs'
 

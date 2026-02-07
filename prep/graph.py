@@ -596,7 +596,7 @@ class Graph:
 
 if __name__ == '__main__':
 
-    d = '/home/dgketchum/data/IrrigationGIS'
+    d = '/nas'
 
     training = '/data/ssd2/dads/training'
 

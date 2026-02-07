@@ -187,7 +187,7 @@ def join_aq_data(data_src, data_dst, out_csv):
 if __name__ == '__main__':
     root = '/media/research/IrrigationGIS/dads'
     if not os.path.exists(root):
-        root = '/home/dgketchum/data/IrrigationGIS/dads'
+        root = '/nas/dads'
 
     aq_d = os.path.join(root, 'aq')
     aq_data_src = os.path.join(root, 'aq', 'data')
