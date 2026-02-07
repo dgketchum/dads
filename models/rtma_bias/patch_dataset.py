@@ -45,6 +45,16 @@ class PatchDatasetConfig:
     add_doy: bool = True
     patch_size: int = 64
     preload: bool = True
+    terrain_tif: str | None = None
+    terrain_channels: tuple[str, ...] = (
+        "elevation",
+        "slope",
+        "aspect_sin",
+        "aspect_cos",
+        "tpi_4",
+        "tpi_10",
+    )
+    rsun_tif: str | None = None
 
 
 def _preload_cogs(
@@ -110,6 +120,190 @@ def _compute_channel_stats(
     return mean.astype("float32"), std.astype("float32")
 
 
+# ---------------------------------------------------------------------------
+# Terrain / RSUN helpers
+# ---------------------------------------------------------------------------
+
+_TERRAIN_BAND_NAMES = (
+    "elevation",
+    "slope",
+    "aspect_sin",
+    "aspect_cos",
+    "tpi_4",
+    "tpi_10",
+)
+
+
+def _load_terrain(tif_path: str, channels: tuple[str, ...]) -> dict[str, np.ndarray]:
+    """Load terrain GeoTIFF bands into ``{name: (H, W) float32}``."""
+    cache: dict[str, np.ndarray] = {}
+    with rasterio.open(tif_path) as src:
+        descs = [src.descriptions[i] for i in range(src.count)]
+        for ch in channels:
+            if ch in descs:
+                band_idx = descs.index(ch) + 1
+            elif ch in _TERRAIN_BAND_NAMES:
+                band_idx = _TERRAIN_BAND_NAMES.index(ch) + 1
+            else:
+                raise ValueError(f"terrain channel '{ch}' not found in {tif_path}")
+            cache[ch] = src.read(band_idx).astype("float32", copy=False)
+        cache["__transform__"] = np.array(src.transform, dtype="float64")
+        cache["__shape__"] = np.array([src.height, src.width], dtype="int64")
+    mem = sum(v.nbytes for v in cache.values()) / 1e6
+    print(
+        f"Terrain loaded: {len(channels)} channels from {tif_path} ({mem:.0f} MB)",
+        flush=True,
+    )
+    return cache
+
+
+def _load_rsun(tif_path: str) -> dict[str, np.ndarray]:
+    """Load 365-band RSUN GeoTIFF. Returns dict with 'data' and '__transform__'."""
+    with rasterio.open(tif_path) as src:
+        arr = src.read().astype("float32", copy=False)  # (365, H, W)
+        tf = np.array(src.transform, dtype="float64")
+    mem = arr.nbytes / 1e6
+    print(
+        f"RSUN loaded: {arr.shape[0]} bands from {tif_path} ({mem:.0f} MB)", flush=True
+    )
+    return {"data": arr, "__transform__": tf}
+
+
+def _terrain_channel_stats(
+    cache: dict[str, np.ndarray], channels: tuple[str, ...]
+) -> tuple[np.ndarray, np.ndarray]:
+    """Per-channel (mean, std) from terrain cache."""
+    means, stds = [], []
+    for ch in channels:
+        arr = cache[ch]
+        valid = arr[np.isfinite(arr)]
+        if valid.size > 0:
+            means.append(float(valid.mean()))
+            s = float(valid.std())
+            stds.append(s if s > 1e-8 else 1.0)
+        else:
+            means.append(0.0)
+            stds.append(1.0)
+    return np.array(means, dtype="float32"), np.array(stds, dtype="float32")
+
+
+def _rsun_channel_stats(rsun: dict[str, np.ndarray]) -> tuple[np.ndarray, np.ndarray]:
+    """Mean/std across all 365 bands (single channel)."""
+    valid = rsun["data"][np.isfinite(rsun["data"])]
+    if valid.size > 0:
+        m = float(valid.mean())
+        s = float(valid.std())
+        if s < 1e-8:
+            s = 1.0
+    else:
+        m, s = 0.0, 1.0
+    return np.array([m], dtype="float32"), np.array([s], dtype="float32")
+
+
+def _rtma_to_aux_pixel(
+    rtma_row: int,
+    rtma_col: int,
+    rtma_tf: np.ndarray,
+    aux_tf: np.ndarray,
+) -> tuple[int, int]:
+    """Convert RTMA pixel (row, col) to auxiliary grid pixel coords."""
+    # RTMA pixel center → lon/lat
+    a, _b, c, _d, e, f = (
+        rtma_tf[0],
+        rtma_tf[1],
+        rtma_tf[2],
+        rtma_tf[3],
+        rtma_tf[4],
+        rtma_tf[5],
+    )
+    lon = c + (rtma_col + 0.5) * a
+    lat = f + (rtma_row + 0.5) * e
+    # lon/lat → auxiliary pixel
+    aa, _bb, cc, _dd, ee, ff = (
+        aux_tf[0],
+        aux_tf[1],
+        aux_tf[2],
+        aux_tf[3],
+        aux_tf[4],
+        aux_tf[5],
+    )
+    ac = (lon - cc) / aa
+    ar = (lat - ff) / ee
+    return int(ar), int(ac)
+
+
+def _extract_aux_patch(
+    full_grid: np.ndarray,
+    rtma_r0: int,
+    rtma_c0: int,
+    ps: int,
+    rtma_tf: np.ndarray,
+    aux_tf: np.ndarray,
+) -> np.ndarray:
+    """Extract a (ps, ps) patch from an auxiliary grid aligned to an RTMA window."""
+    aH, aW = full_grid.shape[-2], full_grid.shape[-1]
+    # Map top-left RTMA pixel to aux grid
+    ar0, ac0 = _rtma_to_aux_pixel(rtma_r0, rtma_c0, rtma_tf, aux_tf)
+
+    ndim = full_grid.ndim
+    if ndim == 2:
+        patch = np.zeros((ps, ps), dtype="float32")
+    else:
+        patch = np.zeros((full_grid.shape[0], ps, ps), dtype="float32")
+
+    sr = max(0, ar0)
+    er = min(aH, ar0 + ps)
+    sc = max(0, ac0)
+    ec = min(aW, ac0 + ps)
+    if sr < er and sc < ec:
+        pr = sr - ar0
+        pc = sc - ac0
+        if ndim == 2:
+            patch[pr : pr + (er - sr), pc : pc + (ec - sc)] = full_grid[sr:er, sc:ec]
+        else:
+            patch[:, pr : pr + (er - sr), pc : pc + (ec - sc)] = full_grid[
+                :, sr:er, sc:ec
+            ]
+    return patch
+
+
+def _extract_terrain_patch(
+    cache: dict[str, np.ndarray],
+    channels: tuple[str, ...],
+    r0: int,
+    c0: int,
+    ps: int,
+    rtma_tf: np.ndarray,
+    rtma_H: int,
+    rtma_W: int,
+) -> np.ndarray:
+    """Extract terrain patch for given RTMA window coords. Returns (C, ps, ps)."""
+    aux_tf = cache["__transform__"]
+    stack = []
+    for ch in channels:
+        patch = _extract_aux_patch(cache[ch], r0, c0, ps, rtma_tf, aux_tf)
+        stack.append(patch)
+    return np.stack(stack, axis=0)
+
+
+def _extract_rsun_patch(
+    rsun: dict[str, np.ndarray],
+    day: pd.Timestamp,
+    r0: int,
+    c0: int,
+    ps: int,
+    rtma_tf: np.ndarray,
+    rtma_H: int,
+    rtma_W: int,
+) -> np.ndarray:
+    """Extract RSUN patch for the given DOY. Returns (1, ps, ps)."""
+    doy_idx = day.dayofyear - 1  # 0-based band index
+    band = rsun["data"][doy_idx]  # (H, W)
+    aux_tf = rsun["__transform__"]
+    patch = _extract_aux_patch(band, r0, c0, ps, rtma_tf, aux_tf)
+    return patch[None]  # (1, ps, ps)
+
+
 class RtmaHumidityPatchDataset(Dataset):
     """
     Station-day patch dataset for humidity correction.
@@ -153,6 +347,20 @@ class RtmaHumidityPatchDataset(Dataset):
                 f"Pre-load complete: {len(self._cog_cache)} COGs in memory.", flush=True
             )
 
+        # ---- Terrain (static 6-band grid) ----
+        self._terrain_cache: dict[str, np.ndarray] | None = None
+        if config.terrain_tif:
+            self._terrain_cache = _load_terrain(
+                config.terrain_tif, config.terrain_channels
+            )
+            self._in_channels += len(config.terrain_channels)
+
+        # ---- RSUN (365-band DOY-indexed grid) ----
+        self._rsun_cache: dict[str, np.ndarray] | None = None
+        if config.rsun_tif:
+            self._rsun_cache = _load_rsun(config.rsun_tif)
+            self._in_channels += 1
+
         # Per-channel normalisation (mean, std).
         self._norm_mean: np.ndarray | None = None  # (C, 1, 1) float32
         self._norm_std: np.ndarray | None = None  # (C, 1, 1) float32
@@ -164,6 +372,21 @@ class RtmaHumidityPatchDataset(Dataset):
             if config.add_doy:
                 rtma_mean = np.concatenate([rtma_mean, [0.0, 0.0]])
                 rtma_std = np.concatenate([rtma_std, [1.0, 1.0]])
+
+            # Terrain channel stats
+            if self._terrain_cache is not None:
+                t_mean, t_std = _terrain_channel_stats(
+                    self._terrain_cache, config.terrain_channels
+                )
+                rtma_mean = np.concatenate([rtma_mean, t_mean])
+                rtma_std = np.concatenate([rtma_std, t_std])
+
+            # RSUN channel stats
+            if self._rsun_cache is not None:
+                r_mean, r_std = _rsun_channel_stats(self._rsun_cache)
+                rtma_mean = np.concatenate([rtma_mean, r_mean])
+                rtma_std = np.concatenate([rtma_std, r_std])
+
             self._norm_mean = rtma_mean[:, None, None]
             self._norm_std = rtma_std[:, None, None]
             print(
@@ -181,6 +404,10 @@ class RtmaHumidityPatchDataset(Dataset):
         channels = list(self.config.rtma_channels)
         if self.config.add_doy:
             channels += ["doy_sin", "doy_cos"]
+        if self._terrain_cache is not None:
+            channels += list(self.config.terrain_channels)
+        if self._rsun_cache is not None:
+            channels += ["rsun"]
         return {
             "channels": channels,
             "mean": self._norm_mean[:, 0, 0].tolist()
@@ -268,6 +495,32 @@ class RtmaHumidityPatchDataset(Dataset):
             doy_c = np.full((ps, ps), dc, dtype="float32")
             x = np.concatenate([x, doy_s[None], doy_c[None]], axis=0)
 
+        # Terrain channels (static)
+        if self._terrain_cache is not None:
+            x = np.concatenate(
+                [
+                    x,
+                    _extract_terrain_patch(
+                        self._terrain_cache,
+                        self.config.terrain_channels,
+                        r0,
+                        c0,
+                        ps,
+                        tf,
+                        H,
+                        W,
+                    ),
+                ],
+                axis=0,
+            )
+
+        # RSUN channel (DOY-indexed)
+        if self._rsun_cache is not None:
+            x = np.concatenate(
+                [x, _extract_rsun_patch(self._rsun_cache, day, r0, c0, ps, tf, H, W)],
+                axis=0,
+            )
+
         x = np.nan_to_num(x, nan=0.0, posinf=0.0, neginf=0.0).astype(
             "float32", copy=False
         )
@@ -307,6 +560,44 @@ class RtmaHumidityPatchDataset(Dataset):
             doy_s = np.full((h, w), ds, dtype="float32")
             doy_c = np.full((h, w), dc, dtype="float32")
             x = np.concatenate([x, doy_s[None, :, :], doy_c[None, :, :]], axis=0)
+
+        # Terrain / RSUN for on-disk path: use RTMA file transform for coord mapping
+        if self._terrain_cache is not None or self._rsun_cache is not None:
+            ps = int(self.config.patch_size)
+            half = ps // 2
+            row_px, col_px = src.index(float(lon), float(lat))
+            r0 = int(row_px) - half
+            c0 = int(col_px) - half
+            tf_arr = np.array(src.transform, dtype="float64")
+            sH, sW = src.height, src.width
+
+            if self._terrain_cache is not None:
+                x = np.concatenate(
+                    [
+                        x,
+                        _extract_terrain_patch(
+                            self._terrain_cache,
+                            self.config.terrain_channels,
+                            r0,
+                            c0,
+                            ps,
+                            tf_arr,
+                            sH,
+                            sW,
+                        ),
+                    ],
+                    axis=0,
+                )
+            if self._rsun_cache is not None:
+                x = np.concatenate(
+                    [
+                        x,
+                        _extract_rsun_patch(
+                            self._rsun_cache, day, r0, c0, ps, tf_arr, sH, sW
+                        ),
+                    ],
+                    axis=0,
+                )
 
         x = np.nan_to_num(x, nan=0.0, posinf=0.0, neginf=0.0).astype(
             "float32", copy=False

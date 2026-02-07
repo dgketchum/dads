@@ -47,6 +47,16 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument(
         "--seed", type=int, default=42, help="Random seed for reproducibility"
     )
+    p.add_argument(
+        "--terrain-tif",
+        default=None,
+        help="6-band terrain GeoTIFF (from prep/build_terrain_grid.py)",
+    )
+    p.add_argument(
+        "--rsun-tif",
+        default=None,
+        help="365-band RSUN GeoTIFF (from prep/build_terrain_grid.py)",
+    )
     return p.parse_args()
 
 
@@ -66,6 +76,8 @@ def main() -> None:
         val_frac=a.val_frac,
         seed=a.seed,
         preload=a.preload,
+        terrain_tif=a.terrain_tif,
+        rsun_tif=a.rsun_tif,
     )
     dm.setup()
 

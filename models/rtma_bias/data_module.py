@@ -23,6 +23,8 @@ class RtmaPatchDataModule(L.LightningDataModule):
         val_frac: float = 0.2,
         seed: int = 42,
         preload: bool = True,
+        terrain_tif: str | None = None,
+        rsun_tif: str | None = None,
     ):
         super().__init__()
         self.save_hyperparameters()
@@ -34,6 +36,8 @@ class RtmaPatchDataModule(L.LightningDataModule):
         self.val_frac = val_frac
         self.seed = seed
         self.preload = preload
+        self.terrain_tif = terrain_tif
+        self.rsun_tif = rsun_tif
 
         self._in_channels: int | None = None
         self.train_ds: Subset | None = None
@@ -50,6 +54,8 @@ class RtmaPatchDataModule(L.LightningDataModule):
             tif_root=self.tif_root,
             patch_size=self.patch_size,
             preload=self.preload,
+            terrain_tif=self.terrain_tif,
+            rsun_tif=self.rsun_tif,
         )
         full_ds = RtmaHumidityPatchDataset(self.patch_index, cfg)
         self._in_channels = full_ds.in_channels
