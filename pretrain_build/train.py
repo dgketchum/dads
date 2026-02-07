@@ -11,15 +11,19 @@ The pre-training objective is to learn spatial meteorological transfer
 patterns from dense gridded data that can later be fine-tuned on sparse
 observational data.
 """
+
 import json
-import os
 from pathlib import Path
 from typing import Optional, Dict, Any
 
 import numpy as np
 import torch
-import pytorch_lightning as pl
-from pytorch_lightning.callbacks import ModelCheckpoint, EarlyStopping, LearningRateMonitor
+import lightning.pytorch as pl
+from lightning.pytorch.callbacks import (
+    ModelCheckpoint,
+    EarlyStopping,
+    LearningRateMonitor,
+)
 from torch.utils.data import DataLoader
 
 from models.dads.dads_gnn import DadsMetGNN
@@ -34,7 +38,7 @@ from pretrain_build.dataset import PretrainDataset, pretrain_collate_fn
 def pretrain(
     config: PretrainConfig,
     output_dir: Path,
-    variable: str = 'tmax',
+    variable: str = "tmax",
     max_epochs: int = 50,
     batch_size: int = 512,
     num_workers: int = 8,
@@ -86,7 +90,7 @@ def pretrain(
     pl.seed_everything(seed)
 
     # Load or build spatial index
-    index_path = output_dir / 'grid_index.zarr'
+    index_path = output_dir / "grid_index.zarr"
     if not index_path.exists():
         if not config.sources:
             raise ValueError("No grid sources configured")
@@ -109,25 +113,25 @@ def pretrain(
     seq_extractor = CachedSequenceExtractor(sources, config, cache_size=10000)
 
     # Build or load scaler from gridded data
-    scaler_path = output_dir / f'{variable}_scaler.json'
+    scaler_path = output_dir / f"{variable}_scaler.json"
     if scaler_path.exists():
         print(f"[Pretrain] Loading scaler from {scaler_path}")
-        with open(scaler_path, 'r') as f:
+        with open(scaler_path, "r") as f:
             scaler_params = json.load(f)
         scaler = MinMaxScaler()
-        scaler.bias = np.array(scaler_params['bias']).reshape(1, -1)
-        scaler.scale = np.array(scaler_params['scale']).reshape(1, -1)
+        scaler.bias = np.array(scaler_params["bias"]).reshape(1, -1)
+        scaler.scale = np.array(scaler_params["scale"]).reshape(1, -1)
     else:
-        print(f"[Pretrain] Building scaler from gridded data")
+        print("[Pretrain] Building scaler from gridded data")
         scaler = _build_scaler_from_grid(
             grid_index, seq_extractor, config, variable, seed=seed
         )
         # Save scaler
         scaler_params = {
-            'bias': scaler.bias.tolist(),
-            'scale': scaler.scale.tolist(),
+            "bias": scaler.bias.tolist(),
+            "scale": scaler.scale.tolist(),
         }
-        with open(scaler_path, 'w') as f:
+        with open(scaler_path, "w") as f:
             json.dump(scaler_params, f)
 
     # Initialize sampler
@@ -161,8 +165,10 @@ def pretrain(
     seq_in_channels = temp_dataset.seq_in_channels
     edge_dim = temp_dataset.edge_dim
 
-    print(f"[Pretrain] Dimensions: terrain={terrain_dim}, emb={emb_dim}, "
-          f"exog={exog_dim}, seq_channels={seq_in_channels}, edge={edge_dim}")
+    print(
+        f"[Pretrain] Dimensions: terrain={terrain_dim}, emb={emb_dim}, "
+        f"exog={exog_dim}, seq_channels={seq_in_channels}, edge={edge_dim}"
+    )
 
     # Initialize model
     model = DadsMetGNN(
@@ -177,38 +183,43 @@ def pretrain(
         tcn_channels=tcn_channels,
         learning_rate=learning_rate,
         scaler=scaler,
-        column_indices=(0, 1, 2, seq_in_channels),  # (y_idx, comparator_idx, feat_start, tensor_width)
+        column_indices=(
+            0,
+            1,
+            2,
+            seq_in_channels,
+        ),  # (y_idx, comparator_idx, feat_start, tensor_width)
     )
 
     if resume_checkpoint:
         print(f"[Pretrain] Resuming from {resume_checkpoint}")
         checkpoint = torch.load(resume_checkpoint)
-        model.load_state_dict(checkpoint['state_dict'], strict=False)
+        model.load_state_dict(checkpoint["state_dict"], strict=False)
 
     # Callbacks
     checkpoint_callback = ModelCheckpoint(
-        dirpath=output_dir / 'checkpoints',
-        filename='pretrain-{epoch:02d}-{val_loss:.4f}',
+        dirpath=output_dir / "checkpoints",
+        filename="pretrain-{epoch:02d}-{val_loss:.4f}",
         save_top_k=3,
-        monitor='val_loss',
-        mode='min',
+        monitor="val_loss",
+        mode="min",
         save_last=True,
     )
 
     early_stop_callback = EarlyStopping(
-        monitor='val_loss',
+        monitor="val_loss",
         patience=10,
-        mode='min',
+        mode="min",
     )
 
-    lr_monitor = LearningRateMonitor(logging_interval='epoch')
+    lr_monitor = LearningRateMonitor(logging_interval="epoch")
 
     # Trainer
     trainer = pl.Trainer(
         max_epochs=max_epochs,
-        accelerator='gpu' if torch.cuda.is_available() else 'cpu',
+        accelerator="gpu" if torch.cuda.is_available() else "cpu",
         devices=1,
-        precision='16-mixed' if torch.cuda.is_available() else 32,
+        precision="16-mixed" if torch.cuda.is_available() else 32,
         callbacks=[checkpoint_callback, early_stop_callback, lr_monitor],
         gradient_clip_val=1.0,
         log_every_n_steps=50,
@@ -293,27 +304,27 @@ def pretrain(
             break
 
     # Save final checkpoint with metadata
-    final_ckpt = output_dir / 'pretrain_final.ckpt'
+    final_ckpt = output_dir / "pretrain_final.ckpt"
     trainer.save_checkpoint(final_ckpt)
     print(f"[Pretrain] Saved final checkpoint to {final_ckpt}")
 
     # Save config for reproducibility
     config_dict = {
-        'bounds': config.bounds,
-        'n_cells_per_epoch': config.n_cells_per_epoch,
-        'sampling_strategy': config.sampling_strategy,
-        'n_neighbors': config.n_neighbors,
-        'seq_len': config.seq_len,
-        'date_range': config.date_range,
-        'variable': variable,
-        'hidden_dim': hidden_dim,
-        'tcn_channels': tcn_channels,
-        'tcn_out_dim': tcn_out_dim,
-        'learning_rate': learning_rate,
-        'max_epochs': max_epochs,
-        'seed': seed,
+        "bounds": config.bounds,
+        "n_cells_per_epoch": config.n_cells_per_epoch,
+        "sampling_strategy": config.sampling_strategy,
+        "n_neighbors": config.n_neighbors,
+        "seq_len": config.seq_len,
+        "date_range": config.date_range,
+        "variable": variable,
+        "hidden_dim": hidden_dim,
+        "tcn_channels": tcn_channels,
+        "tcn_out_dim": tcn_out_dim,
+        "learning_rate": learning_rate,
+        "max_epochs": max_epochs,
+        "seed": seed,
     }
-    with open(output_dir / 'pretrain_config.json', 'w') as f:
+    with open(output_dir / "pretrain_config.json", "w") as f:
         json.dump(config_dict, f, indent=2)
 
     # Clean up
@@ -352,8 +363,8 @@ def _build_scaler_from_grid(
 
     # Sample dates
     start_str, end_str = config.date_range
-    start_ord = np.datetime64(start_str, 'D').astype(int) + config.seq_len
-    end_ord = np.datetime64(end_str, 'D').astype(int)
+    start_ord = np.datetime64(start_str, "D").astype(int) + config.seq_len
+    end_ord = np.datetime64(end_str, "D").astype(int)
 
     sequences = []
     samples_collected = 0
@@ -371,10 +382,15 @@ def _build_scaler_from_grid(
         end_dates = rng.integers(start_ord, end_ord, size=n_dates)
 
         for ed in end_dates:
-            end_date = np.datetime64(ed, 'D')
+            end_date = np.datetime64(ed, "D")
             seq, valid = seq_extractor.extract_sequence(
-                lat, lon, end_date, variable, terrain,
-                row=int(row), col=int(col),
+                lat,
+                lon,
+                end_date,
+                variable,
+                terrain,
+                row=int(row),
+                col=int(col),
             )
             if valid:
                 sequences.append(seq)
@@ -409,34 +425,27 @@ def load_pretrained_model(
     Returns:
         Loaded DadsMetGNN model
     """
-    checkpoint = torch.load(checkpoint_path, map_location='cpu')
-
-    # Load config if available
-    if config_path and os.path.exists(config_path):
-        with open(config_path, 'r') as f:
-            config = json.load(f)
-    else:
-        config = {}
+    checkpoint = torch.load(checkpoint_path, map_location="cpu")
 
     # Extract model hyperparameters from checkpoint
-    hparams = checkpoint.get('hyper_parameters', {})
+    hparams = checkpoint.get("hyper_parameters", {})
 
     # Create model
     model = DadsMetGNN(
-        hidden_dim=hparams.get('hidden_dim', 256),
-        n_nodes=hparams.get('n_nodes', 10),
-        output_dim=hparams.get('output_dim', 1),
-        edge_attr_dim=hparams.get('edge_attr_dim', 20),
-        emb_dim=hparams.get('emb_dim', 7),
-        exog_dim=hparams.get('exog_dim', 10),
-        tcn_in_channels=hparams.get('tcn_in_channels', 11),
-        tcn_out_dim=hparams.get('tcn_out_dim', 256),
-        tcn_channels=hparams.get('tcn_channels', 128),
-        learning_rate=hparams.get('learning_rate', 1e-3),
+        hidden_dim=hparams.get("hidden_dim", 256),
+        n_nodes=hparams.get("n_nodes", 10),
+        output_dim=hparams.get("output_dim", 1),
+        edge_attr_dim=hparams.get("edge_attr_dim", 20),
+        emb_dim=hparams.get("emb_dim", 7),
+        exog_dim=hparams.get("exog_dim", 10),
+        tcn_in_channels=hparams.get("tcn_in_channels", 11),
+        tcn_out_dim=hparams.get("tcn_out_dim", 256),
+        tcn_channels=hparams.get("tcn_channels", 128),
+        learning_rate=hparams.get("learning_rate", 1e-3),
     )
 
     # Load weights
-    model.load_state_dict(checkpoint['state_dict'], strict=False)
+    model.load_state_dict(checkpoint["state_dict"], strict=False)
 
     return model
 
@@ -476,8 +485,7 @@ def prepare_for_finetuning(
         pretrained_params = []
         new_params = []
 
-        pretrained_names = {'tcn', 'gnn_layer', 'node_proj', 'pre_norm'}
-        new_names = {'gnn_layer2', 'fc', 'edge_gate'}
+        pretrained_names = {"tcn", "gnn_layer", "node_proj", "pre_norm"}
 
         for name, param in pretrained_model.named_parameters():
             if not param.requires_grad:
@@ -490,63 +498,68 @@ def prepare_for_finetuning(
                 new_params.append(param)
 
         optimizer_groups = [
-            {'params': pretrained_params, 'lr': base_lr * 0.1},
-            {'params': new_params, 'lr': base_lr},
+            {"params": pretrained_params, "lr": base_lr * 0.1},
+            {"params": new_params, "lr": base_lr},
         ]
     else:
         optimizer_groups = pretrained_model.parameters()
 
     return {
-        'model': pretrained_model,
-        'optimizer_groups': optimizer_groups,
-        'base_lr': base_lr,
+        "model": pretrained_model,
+        "optimizer_groups": optimizer_groups,
+        "base_lr": base_lr,
     }
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     import argparse
 
-    parser = argparse.ArgumentParser(description='Pre-train DADS on gridded data')
-    parser.add_argument('--output_dir', type=str, required=True,
-                        help='Output directory for checkpoints')
-    parser.add_argument('--prism_zarr', type=str, default=None,
-                        help='Path to PRISM Zarr store')
-    parser.add_argument('--gridmet_zarr', type=str, default=None,
-                        help='Path to GridMET Zarr store')
-    parser.add_argument('--dem_path', type=str, default=None,
-                        help='Path to DEM raster')
-    parser.add_argument('--variable', type=str, default='tmax',
-                        help='Target variable')
-    parser.add_argument('--max_epochs', type=int, default=50,
-                        help='Maximum epochs')
-    parser.add_argument('--batch_size', type=int, default=512,
-                        help='Batch size')
-    parser.add_argument('--learning_rate', type=float, default=1e-3,
-                        help='Learning rate')
-    parser.add_argument('--seed', type=int, default=42,
-                        help='Random seed')
+    parser = argparse.ArgumentParser(description="Pre-train DADS on gridded data")
+    parser.add_argument(
+        "--output_dir", type=str, required=True, help="Output directory for checkpoints"
+    )
+    parser.add_argument(
+        "--prism_zarr", type=str, default=None, help="Path to PRISM Zarr store"
+    )
+    parser.add_argument(
+        "--gridmet_zarr", type=str, default=None, help="Path to GridMET Zarr store"
+    )
+    parser.add_argument("--dem_path", type=str, default=None, help="Path to DEM raster")
+    parser.add_argument("--variable", type=str, default="tmax", help="Target variable")
+    parser.add_argument("--max_epochs", type=int, default=50, help="Maximum epochs")
+    parser.add_argument("--batch_size", type=int, default=512, help="Batch size")
+    parser.add_argument(
+        "--learning_rate", type=float, default=1e-3, help="Learning rate"
+    )
+    parser.add_argument("--seed", type=int, default=42, help="Random seed")
 
     args = parser.parse_args()
 
     # Build config
     sources = []
     if args.prism_zarr:
-        sources.append(GridSource(
-            name='prism',
-            zarr_path=Path(args.prism_zarr),
-            variables=['tmax', 'tmin', 'ppt'],
-            resolution_deg=0.04166667,
-        ))
+        sources.append(
+            GridSource(
+                name="prism",
+                zarr_path=Path(args.prism_zarr),
+                variables=["tmax", "tmin", "ppt"],
+                resolution_deg=0.04166667,
+            )
+        )
     if args.gridmet_zarr:
-        sources.append(GridSource(
-            name='gridmet',
-            zarr_path=Path(args.gridmet_zarr),
-            variables=['srad', 'vpd', 'vs'],
-            resolution_deg=0.04166667,
-        ))
+        sources.append(
+            GridSource(
+                name="gridmet",
+                zarr_path=Path(args.gridmet_zarr),
+                variables=["srad", "vpd", "vs"],
+                resolution_deg=0.04166667,
+            )
+        )
 
     if not sources:
-        print("Error: At least one data source (--prism_zarr or --gridmet_zarr) required")
+        print(
+            "Error: At least one data source (--prism_zarr or --gridmet_zarr) required"
+        )
         exit(1)
 
     config = PretrainConfig(

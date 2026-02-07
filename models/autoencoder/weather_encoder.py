@@ -1,8 +1,5 @@
-import csv
-
-import pytorch_lightning as pl
+import lightning.pytorch as pl
 import torch
-from sklearn.metrics import r2_score, root_mean_squared_error
 from torch import nn
 from torch import optim
 from torch.nn import functional as F
@@ -14,10 +11,13 @@ class PositionalEncoding(nn.Module):
         super().__init__()
         pe = torch.zeros(max_len, d_model)
         position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
-        div_term = torch.exp(torch.arange(0, d_model, 2).float() * (-torch.log(torch.tensor(10000.0)) / d_model))
+        div_term = torch.exp(
+            torch.arange(0, d_model, 2).float()
+            * (-torch.log(torch.tensor(10000.0)) / d_model)
+        )
         pe[:, 0::2] = torch.sin(position * div_term)
         pe[:, 1::2] = torch.cos(position * div_term)
-        self.register_buffer('pe', pe)
+        self.register_buffer("pe", pe)
 
     def forward(self, x):
         seq_len = x.size(1)
@@ -33,16 +33,29 @@ class AttentionPooling(nn.Module):
     def forward(self, x):
         w = self.score(x).squeeze(-1)
         a = torch.softmax(w, dim=1)
-        z = torch.einsum('btd,bt->bd', x, a)
+        z = torch.einsum("btd,bt->bd", x, a)
         return z
 
 
 class TransformerEncoder(nn.Module):
-    def __init__(self, input_dim, hidden_size, num_heads, num_layers, latent_size, dropout=0.1, max_len=1024):
+    def __init__(
+        self,
+        input_dim,
+        hidden_size,
+        num_heads,
+        num_layers,
+        latent_size,
+        dropout=0.1,
+        max_len=1024,
+    ):
         super(TransformerEncoder, self).__init__()
         self.embedding = nn.Linear(input_dim, hidden_size)
-        encoder_layer = nn.TransformerEncoderLayer(d_model=hidden_size, nhead=num_heads, dropout=dropout)
-        self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
+        encoder_layer = nn.TransformerEncoderLayer(
+            d_model=hidden_size, nhead=num_heads, dropout=dropout
+        )
+        self.transformer_encoder = nn.TransformerEncoder(
+            encoder_layer, num_layers=num_layers
+        )
         self.fc_latent = nn.Linear(hidden_size, latent_size)
         self.pos_enc = PositionalEncoding(hidden_size, max_len=max_len)
 
@@ -58,11 +71,24 @@ class TransformerEncoder(nn.Module):
 
 
 class TransformerDecoder(nn.Module):
-    def __init__(self, latent_size, hidden_size, output_dim, num_heads, num_layers, seq_length, dropout=0.1):
+    def __init__(
+        self,
+        latent_size,
+        hidden_size,
+        output_dim,
+        num_heads,
+        num_layers,
+        seq_length,
+        dropout=0.1,
+    ):
         super(TransformerDecoder, self).__init__()
         self.latent_to_hidden = nn.Linear(latent_size, hidden_size)
-        decoder_layer = nn.TransformerDecoderLayer(d_model=hidden_size, nhead=num_heads, dropout=dropout)
-        self.transformer_decoder = nn.TransformerDecoder(decoder_layer, num_layers=num_layers)
+        decoder_layer = nn.TransformerDecoderLayer(
+            d_model=hidden_size, nhead=num_heads, dropout=dropout
+        )
+        self.transformer_decoder = nn.TransformerDecoder(
+            decoder_layer, num_layers=num_layers
+        )
         self.fc_out = nn.Linear(hidden_size, output_dim)
         self.seq_length = seq_length
         self.pos_queries = nn.Parameter(torch.randn(seq_length, 1, hidden_size))
@@ -106,20 +132,40 @@ class WeatherAutoencoder(pl.LightningModule):
       input channel is zeroed before encoding so embeddings reflect exogenous drivers
       rather than the target itself.
     """
-    def __init__(self, input_dim, output_dim, learning_rate, latent_size, hidden_size,
-                 dropout=0.1, margin=1.0, sequence_length=365, log_csv=None, scaler=None,
-                 scaler_bias=None, scaler_scale=None,
-                 target_channel_dropout_p=0.3, span_mask_frac=0.5,
-                 contrastive_weight=0.05, contrastive_temperature=0.1,
-                 span_mask_warmup_epochs=4, target_dropout_warmup_epochs=2,
-                 **kwargs):
+
+    def __init__(
+        self,
+        input_dim,
+        output_dim,
+        learning_rate,
+        latent_size,
+        hidden_size,
+        dropout=0.1,
+        margin=1.0,
+        sequence_length=365,
+        log_csv=None,
+        scaler=None,
+        scaler_bias=None,
+        scaler_scale=None,
+        target_channel_dropout_p=0.3,
+        span_mask_frac=0.5,
+        contrastive_weight=0.05,
+        contrastive_temperature=0.1,
+        span_mask_warmup_epochs=4,
+        target_dropout_warmup_epochs=2,
+        **kwargs,
+    ):
 
         super(WeatherAutoencoder, self).__init__()
         self.latent_size = latent_size
         self.hidden_size = hidden_size
 
-        self.encoder = TransformerEncoder(input_dim, hidden_size, 1, 2, latent_size, dropout, max_len=sequence_length)
-        self.decoder = TransformerDecoder(latent_size, hidden_size, output_dim, 1, 2, sequence_length, dropout)
+        self.encoder = TransformerEncoder(
+            input_dim, hidden_size, 1, 2, latent_size, dropout, max_len=sequence_length
+        )
+        self.decoder = TransformerDecoder(
+            latent_size, hidden_size, output_dim, 1, 2, sequence_length, dropout
+        )
         self.attn_pool = AttentionPooling(latent_size)
 
         self.input_dim = input_dim
@@ -162,26 +208,24 @@ class WeatherAutoencoder(pl.LightningModule):
             elif sb.ndim == 2:
                 sb = sb.view(1, *sb.shape)
                 ss = ss.view(1, *ss.shape)
-            self.register_buffer('x_bias', sb)
-            self.register_buffer('x_scale', ss)
+            self.register_buffer("x_bias", sb)
+            self.register_buffer("x_scale", ss)
             # Derive target scaler slices assuming target indices map into inputs.
-            tgt_idx = int(getattr(self, 'target_input_idx', 0))
-            t_bias = sb[..., tgt_idx:tgt_idx + self.output_dim]
-            t_scale = ss[..., tgt_idx:tgt_idx + self.output_dim]
-            self.register_buffer('y_bias', t_bias)
-            self.register_buffer('y_scale', t_scale)
+            tgt_idx = int(getattr(self, "target_input_idx", 0))
+            t_bias = sb[..., tgt_idx : tgt_idx + self.output_dim]
+            t_scale = ss[..., tgt_idx : tgt_idx + self.output_dim]
+            self.register_buffer("y_bias", t_bias)
+            self.register_buffer("y_scale", t_scale)
 
     def _scale_inputs(self, x):
-        if hasattr(self, 'x_bias') and hasattr(self, 'x_scale'):
+        if hasattr(self, "x_bias") and hasattr(self, "x_scale"):
             return (x - self.x_bias) / self.x_scale + 5e-8
         return x
 
     def _scale_targets(self, y):
-        if hasattr(self, 'y_bias') and hasattr(self, 'y_scale'):
+        if hasattr(self, "y_bias") and hasattr(self, "y_scale"):
             return (y - self.y_bias) / self.y_scale + 5e-8
         return y
-
-        self.margin = margin  # likely error: unreachable earlier if placed after a return in prior revisions
 
     def forward(self, x):
         # Optional ablation: zero out target input channel to force exogenous-only encoding
@@ -189,8 +233,8 @@ class WeatherAutoencoder(pl.LightningModule):
         x = self._scale_inputs(x)
         x = torch.nan_to_num(x)
 
-        if hasattr(self, 'zero_target_in_encoder') and self.zero_target_in_encoder:
-            idx = int(getattr(self, 'target_input_idx', 0))
+        if hasattr(self, "zero_target_in_encoder") and self.zero_target_in_encoder:
+            idx = int(getattr(self, "target_input_idx", 0))
             x = x.clone()
             x[:, :, idx] = 0.0
         latent_seq = self.encoder(x)
@@ -200,8 +244,10 @@ class WeatherAutoencoder(pl.LightningModule):
         return x_hat, z
 
     @staticmethod
-    def _make_span_mask(batch_size, seq_len, frac=0.6, min_span=5, max_span=30, device=None):
-        device = device or 'cpu'
+    def _make_span_mask(
+        batch_size, seq_len, frac=0.6, min_span=5, max_span=30, device=None
+    ):
+        device = device or "cpu"
         mask = torch.zeros((batch_size, seq_len), dtype=torch.bool, device=device)
         target_cov = int(frac * seq_len)
         for b in range(batch_size):
@@ -211,9 +257,16 @@ class WeatherAutoencoder(pl.LightningModule):
                 mask[b, :] = True
                 continue
             while covered < target_cov:
-                L = torch.randint(low=min_span, high=max(min_span+1, max_span+1), size=(1,), device=device).item()
-                start = torch.randint(low=0, high=max(1, seq_len - L + 1), size=(1,), device=device).item()
-                mask[b, start:start+L] = True
+                L = torch.randint(
+                    low=min_span,
+                    high=max(min_span + 1, max_span + 1),
+                    size=(1,),
+                    device=device,
+                ).item()
+                start = torch.randint(
+                    low=0, high=max(1, seq_len - L + 1), size=(1,), device=device
+                ).item()
+                mask[b, start : start + L] = True
                 covered = int(mask[b].sum().item())
         return mask
 
@@ -229,10 +282,13 @@ class WeatherAutoencoder(pl.LightningModule):
         logits = sim / max(1e-8, self.contrastive_temperature)
         labels = station_ids.view(-1, 1)
         # positives where labels equal and not same index
-        pos_mask = (labels == labels.t()) & (~torch.eye(B, dtype=torch.bool, device=z.device))
-        neg_mask = ~pos_mask & (~torch.eye(B, dtype=torch.bool, device=z.device))
+        pos_mask = (labels == labels.t()) & (
+            ~torch.eye(B, dtype=torch.bool, device=z.device)
+        )
         # For each anchor, compute loss over positives
-        exp_logits = torch.exp(logits) * (~torch.eye(B, dtype=torch.bool, device=z.device))
+        exp_logits = torch.exp(logits) * (
+            ~torch.eye(B, dtype=torch.bool, device=z.device)
+        )
         denom = exp_logits.sum(dim=1, keepdim=True)  # (B, 1)
         # avoid division by zero
         denom = denom + 1e-8
@@ -240,7 +296,6 @@ class WeatherAutoencoder(pl.LightningModule):
         pos_logits = torch.exp(logits) * pos_mask
         # sum over positives for each anchor
         pos_sum = pos_logits.sum(dim=1)
-        pos_count = pos_mask.sum(dim=1).clamp(min=1)
         # loss per anchor (only if has a positive)
         # - (1/|P(i)|) * sum_p log( exp(sim)/sum_all ) == - log( pos_sum / denom ) averaged by positives count mask
         loss_i = -torch.log((pos_sum / denom.squeeze(1)).clamp(min=1e-12))
@@ -258,7 +313,11 @@ class WeatherAutoencoder(pl.LightningModule):
         return losses.mean()
 
     def init_bias(self):
-        for module in [self.input_projection, self.output_projection, self.embedding_layer]:  # likely dead code
+        for module in [
+            self.input_projection,
+            self.output_projection,
+            self.embedding_layer,
+        ]:  # likely dead code
             if module.bias is not None:
                 nn.init.uniform_(module.bias, -0.1, 0.1)
 
@@ -280,24 +339,29 @@ class WeatherAutoencoder(pl.LightningModule):
         # Schedule target-channel dropout (per-sample) over warmup epochs
         drop_p = float(self.target_channel_dropout_p)
         if drop_p > 0 and self.target_dropout_warmup_epochs > 0:
-            f = min(1.0, float(self.current_epoch) / float(self.target_dropout_warmup_epochs))
+            f = min(
+                1.0,
+                float(self.current_epoch) / float(self.target_dropout_warmup_epochs),
+            )
             drop_p = drop_p * f
         if drop_p > 0:
             drop = torch.rand((bsz,), device=x.device) < drop_p
             if drop.any():
-                tidx = int(getattr(self, 'target_input_idx', 0))
+                tidx = int(getattr(self, "target_input_idx", 0))
                 x = x.clone()
                 x[drop, :, tidx] = torch.nan  # becomes 0 after scaling + nan_to_num
 
         # Schedule span masking on target timesteps (per-sample) over warmup epochs
         span_frac = float(self.span_mask_frac)
         if span_frac > 0 and self.span_mask_warmup_epochs > 0:
-            f = min(1.0, float(self.current_epoch) / float(self.span_mask_warmup_epochs))
+            f = min(
+                1.0, float(self.current_epoch) / float(self.span_mask_warmup_epochs)
+            )
             span_frac = span_frac * f
         if span_frac > 0:
             T = x.size(1)
             span_mask = self._make_span_mask(bsz, T, frac=span_frac, device=x.device)
-            tidx = int(getattr(self, 'target_input_idx', 0))
+            tidx = int(getattr(self, "target_input_idx", 0))
             x = x.clone()
             # mask target channel at masked timesteps
             xt = x[:, :, tidx]
@@ -315,7 +379,7 @@ class WeatherAutoencoder(pl.LightningModule):
         # Flatten for masked loss
         y_hat = y_hat.reshape(-1, self.output_dim)
         y = y.reshape(-1, self.output_dim)
-        mask = mask[:, :, :self.output_dim].reshape(-1, self.output_dim)
+        mask = mask[:, :, : self.output_dim].reshape(-1, self.output_dim)
         # Do not restrict reconstruction to masked spans; supervise all valid targets
         # This increases gradient signal and helps prevent early plateau.
         if span_mask.any():
@@ -325,7 +389,13 @@ class WeatherAutoencoder(pl.LightningModule):
 
         # Log mean mask fraction for diagnostics
         try:
-            self.log('mask_frac', float(mask.float().mean().detach().cpu()), on_step=True, prog_bar=False, batch_size=bsz)
+            self.log(
+                "mask_frac",
+                float(mask.float().mean().detach().cpu()),
+                on_step=True,
+                prog_bar=False,
+                batch_size=bsz,
+            )
         except Exception:
             pass
 
@@ -341,7 +411,9 @@ class WeatherAutoencoder(pl.LightningModule):
             if c_loss is not None:
                 loss = loss + self.contrastive_weight * c_loss
                 try:
-                    self.log('contrastive_loss', float(c_loss.detach().cpu()), batch_size=bsz)
+                    self.log(
+                        "contrastive_loss", float(c_loss.detach().cpu()), batch_size=bsz
+                    )
                 except Exception:
                     pass
 
@@ -353,14 +425,19 @@ class WeatherAutoencoder(pl.LightningModule):
                 _, z_neg = self(x_neg)
                 triplet_loss = self.triplet_loss(z, z_pos, z_neg)
                 loss += triplet_loss * 2.0
-                self.log('triplet_loss', triplet_loss, batch_size=bsz)
+                self.log("triplet_loss", triplet_loss, batch_size=bsz)
 
         # Log CPU scalars to avoid compiled graph interactions in Lightning internals
         rec_val = float(loss.detach().cpu())
-        self.log('reconstruction_loss', rec_val, batch_size=bsz)
-        self.log('train_loss', rec_val, on_step=True, batch_size=bsz)
+        self.log("reconstruction_loss", rec_val, batch_size=bsz)
+        self.log("train_loss", rec_val, on_step=True, batch_size=bsz)
         try:
-            self.log('span_mask_frac', float(span_mask.float().mean().detach().cpu()), on_step=True, batch_size=bsz)
+            self.log(
+                "span_mask_frac",
+                float(span_mask.float().mean().detach().cpu()),
+                on_step=True,
+                batch_size=bsz,
+            )
         except Exception:
             pass
 
@@ -387,7 +464,7 @@ class WeatherAutoencoder(pl.LightningModule):
         # Flatten and mask
         y_hat = y_hat.reshape(-1, self.output_dim)
         y = y.reshape(-1, self.output_dim)
-        mask = mask[:, :, :self.output_dim].reshape(-1, self.output_dim)
+        mask = mask[:, :, : self.output_dim].reshape(-1, self.output_dim)
 
         # Detach and move to CPU to avoid GPU memory growth and compiled graph capture
         self.y_hat_last.append(y_hat.detach().cpu())
@@ -409,14 +486,44 @@ class WeatherAutoencoder(pl.LightningModule):
             loss_obs = self.criterion(y[nan_mask], y_hat[nan_mask])
 
         val_val = float(loss_obs.detach().cpu())
-        self.log('val_loss', val_val, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True, batch_size=bsz)
+        self.log(
+            "val_loss",
+            val_val,
+            on_step=False,
+            on_epoch=True,
+            prog_bar=True,
+            sync_dist=True,
+            batch_size=bsz,
+        )
         # Explicit epoch-aggregated metric for LR scheduler monitoring
-        self.log('val_loss_epoch', val_val, on_step=False, on_epoch=True, prog_bar=False, sync_dist=True, batch_size=bsz)
+        self.log(
+            "val_loss_epoch",
+            val_val,
+            on_step=False,
+            on_epoch=True,
+            prog_bar=False,
+            sync_dist=True,
+            batch_size=bsz,
+        )
 
-        current_lr = self.trainer.optimizers[0].param_groups[0]['lr']
-        self.log('lr', float(current_lr), on_step=False, on_epoch=True, prog_bar=True, batch_size=bsz)
+        current_lr = self.trainer.optimizers[0].param_groups[0]["lr"]
+        self.log(
+            "lr",
+            float(current_lr),
+            on_step=False,
+            on_epoch=True,
+            prog_bar=True,
+            batch_size=bsz,
+        )
         lr_ratio = current_lr / self.learning_rate
-        self.log('lr_ratio', float(lr_ratio), on_step=False, on_epoch=True, prog_bar=True, batch_size=bsz)
+        self.log(
+            "lr_ratio",
+            float(lr_ratio),
+            on_step=False,
+            on_epoch=True,
+            prog_bar=True,
+            batch_size=bsz,
+        )
 
         return loss_obs
 
@@ -425,32 +532,49 @@ class WeatherAutoencoder(pl.LightningModule):
     def configure_optimizers(self):
         # Prefer fused AdamW when available for GPU speedups.
         try:
-            optimizer = optim.AdamW(self.parameters(), lr=self.learning_rate, weight_decay=1e-4, fused=True)
+            optimizer = optim.AdamW(
+                self.parameters(), lr=self.learning_rate, weight_decay=1e-4, fused=True
+            )
         except TypeError:
-            optimizer = optim.AdamW(self.parameters(), lr=self.learning_rate, weight_decay=1e-4)
-        scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=2, threshold=1e-3, min_lr=1e-6)
+            optimizer = optim.AdamW(
+                self.parameters(), lr=self.learning_rate, weight_decay=1e-4
+            )
+        scheduler = ReduceLROnPlateau(
+            optimizer, mode="min", factor=0.5, patience=2, threshold=1e-3, min_lr=1e-6
+        )
         return {
-            'optimizer': optimizer,
-            'lr_scheduler': {
-                'scheduler': scheduler,
-                'monitor': 'val_loss_epoch',
-                'interval': 'epoch',
-                'reduce_on_plateau': True,
-            }
+            "optimizer": optimizer,
+            "lr_scheduler": {
+                "scheduler": scheduler,
+                "monitor": "val_loss_epoch",
+                "interval": "epoch",
+                "reduce_on_plateau": True,
+            },
         }
 
     def on_before_optimizer_step(self, optimizer):
         try:
             total_norm = torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=1.0)
             # Log scalar grad norm (CPU) for stability checks
-            self.log('grad_norm', float(total_norm.detach().cpu()) if hasattr(total_norm, 'detach') else float(total_norm), on_step=True, prog_bar=False)
+            self.log(
+                "grad_norm",
+                float(total_norm.detach().cpu())
+                if hasattr(total_norm, "detach")
+                else float(total_norm),
+                on_step=True,
+                prog_bar=False,
+            )
         except Exception:
             pass
 
 
 def stack_batch(batch):
     # Support tuples of length 5 or 6 (with optional station ids)
-    if isinstance(batch, (tuple, list)) and len(batch) in (5, 6) and torch.is_tensor(batch[0]):
+    if (
+        isinstance(batch, (tuple, list))
+        and len(batch) in (5, 6)
+        and torch.is_tensor(batch[0])
+    ):
         if len(batch) == 5:
             x, y, mask, pos, neg = batch
             return x, y, mask, pos, neg
@@ -465,7 +589,6 @@ def stack_batch(batch):
             xi, yi, mi, pi, ni, si = item
         else:
             xi, yi, mi, pi, ni = item
-            si = -1
         if pi is None:
             pi = torch.full_like(xi, torch.nan)
         if ni is None:
@@ -489,6 +612,6 @@ def stack_batch(batch):
     return x, y, mask, pos, neg
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     pass
 # ========================= EOF ====================================================================
