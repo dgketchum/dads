@@ -61,6 +61,13 @@ class RtmaPatchDataModule(L.LightningDataModule):
         self.val_ds = Subset(full_ds, indices[:n_val])
         self.train_ds = Subset(full_ds, indices[n_val:])
 
+    def save_norm_stats(self, path: str) -> None:
+        """Delegate to the underlying full dataset."""
+        ds = self.train_ds.dataset if self.train_ds is not None else None
+        if ds is None:
+            raise RuntimeError("Call setup() before save_norm_stats()")
+        ds.save_norm_stats(path)
+
     def train_dataloader(self):
         return DataLoader(
             self.train_ds,

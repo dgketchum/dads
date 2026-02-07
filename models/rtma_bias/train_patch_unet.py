@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 
 import lightning as L
 from lightning.pytorch.callbacks import EarlyStopping, ModelCheckpoint
@@ -54,6 +55,8 @@ def main() -> None:
 
     L.seed_everything(a.seed, workers=True)
 
+    os.makedirs(a.out_dir, exist_ok=True)
+
     dm = RtmaPatchDataModule(
         patch_index=a.patch_index,
         tif_root=a.tif_root,
@@ -65,6 +68,10 @@ def main() -> None:
         preload=a.preload,
     )
     dm.setup()
+
+    # Save normalisation stats for inference.
+    norm_path = os.path.join(a.out_dir, "norm_stats.json")
+    dm.save_norm_stats(norm_path)
 
     model = LitPatchUNet(
         in_channels=dm.in_channels,

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 from dataclasses import dataclass
 
@@ -72,11 +73,41 @@ def _preload_cogs(
             keep["__shape__"] = np.array([src.height, src.width], dtype="int64")
         cache[ymd] = keep
         if (i + 1) % 50 == 0 or (i + 1) == total:
-            mem_gb = sum(
-                sum(v.nbytes for v in d.values()) for d in cache.values()
-            ) / 1e9
+            mem_gb = (
+                sum(sum(v.nbytes for v in d.values()) for d in cache.values()) / 1e9
+            )
             print(f"  preload: {i + 1}/{total} COGs ({mem_gb:.1f} GB)", flush=True)
     return cache
+
+
+def _compute_channel_stats(
+    cache: dict[str, dict[str, np.ndarray]],
+    channels: tuple[str, ...],
+) -> tuple[np.ndarray, np.ndarray]:
+    """Compute per-channel (mean, std) from preloaded COG arrays.
+
+    Returns two (C,) float64 arrays.  NaN pixels are excluded.
+    """
+    n_ch = len(channels)
+    total = np.zeros(n_ch, dtype="float64")
+    total_sq = np.zeros(n_ch, dtype="float64")
+    count = np.zeros(n_ch, dtype="float64")
+
+    for cog in cache.values():
+        for i, ch in enumerate(channels):
+            arr = cog.get(ch)
+            if arr is None:
+                continue
+            valid = arr[np.isfinite(arr)]
+            total[i] += valid.sum()
+            total_sq[i] += (valid.astype("float64") ** 2).sum()
+            count[i] += valid.size
+
+    mean = np.where(count > 0, total / count, 0.0)
+    var = np.where(count > 0, total_sq / count - mean**2, 1.0)
+    std = np.sqrt(np.maximum(var, 0.0))
+    std = np.where(std < 1e-8, 1.0, std)  # avoid division by zero
+    return mean.astype("float32"), std.astype("float32")
 
 
 class RtmaHumidityPatchDataset(Dataset):
@@ -110,17 +141,71 @@ class RtmaHumidityPatchDataset(Dataset):
         # Pre-load COGs into memory when requested.
         self._cog_cache: dict[str, dict[str, np.ndarray]] | None = None
         if config.preload:
-            print(f"Pre-loading COGs for {df['day'].nunique()} unique days …", flush=True)
+            print(
+                f"Pre-loading COGs for {df['day'].nunique()} unique days …", flush=True
+            )
             self._cog_cache = _preload_cogs(
                 config.tif_root,
                 df["day"].tolist(),
                 config.rtma_channels,
             )
-            print(f"Pre-load complete: {len(self._cog_cache)} COGs in memory.", flush=True)
+            print(
+                f"Pre-load complete: {len(self._cog_cache)} COGs in memory.", flush=True
+            )
+
+        # Per-channel normalisation (mean, std).
+        self._norm_mean: np.ndarray | None = None  # (C, 1, 1) float32
+        self._norm_std: np.ndarray | None = None  # (C, 1, 1) float32
+        if self._cog_cache is not None:
+            rtma_mean, rtma_std = _compute_channel_stats(
+                self._cog_cache, config.rtma_channels
+            )
+            # Append stats for doy channels (already ~N(0, 0.7); normalise anyway).
+            if config.add_doy:
+                rtma_mean = np.concatenate([rtma_mean, [0.0, 0.0]])
+                rtma_std = np.concatenate([rtma_std, [1.0, 1.0]])
+            self._norm_mean = rtma_mean[:, None, None]
+            self._norm_std = rtma_std[:, None, None]
+            print(
+                f"Channel stats computed: {len(rtma_mean)} channels.",
+                flush=True,
+            )
 
     @property
     def in_channels(self) -> int:
         return int(self._in_channels)
+
+    @property
+    def norm_stats(self) -> dict:
+        """Return normalisation stats as a plain dict (for JSON serialisation)."""
+        channels = list(self.config.rtma_channels)
+        if self.config.add_doy:
+            channels += ["doy_sin", "doy_cos"]
+        return {
+            "channels": channels,
+            "mean": self._norm_mean[:, 0, 0].tolist()
+            if self._norm_mean is not None
+            else [],
+            "std": self._norm_std[:, 0, 0].tolist()
+            if self._norm_std is not None
+            else [],
+        }
+
+    def save_norm_stats(self, path: str) -> None:
+        with open(path, "w") as f:
+            json.dump(self.norm_stats, f, indent=2)
+        print(f"Norm stats saved to {path}", flush=True)
+
+    def load_norm_stats(self, path: str) -> None:
+        with open(path) as f:
+            d = json.load(f)
+        self._norm_mean = np.array(d["mean"], dtype="float32")[:, None, None]
+        self._norm_std = np.array(d["std"], dtype="float32")[:, None, None]
+
+    def _normalize(self, x: np.ndarray) -> np.ndarray:
+        if self._norm_mean is not None:
+            x = (x - self._norm_mean) / self._norm_std
+        return x
 
     @staticmethod
     def _tif_path(tif_root: str, day: pd.Timestamp) -> str:
@@ -149,7 +234,7 @@ class RtmaHumidityPatchDataset(Dataset):
 
         # Inverse affine: pixel coords from lon/lat.
         # transform = (a, b, c, d, e, f, 0, 0, 1)  — rasterio Affine
-        a, b, c, d, e, f = tf[0], tf[1], tf[2], tf[3], tf[4], tf[5]
+        a, _b, c, _d, e, f = tf[0], tf[1], tf[2], tf[3], tf[4], tf[5]
         col = (lon - c) / a
         row = (lat - f) / e
 
@@ -183,7 +268,10 @@ class RtmaHumidityPatchDataset(Dataset):
             doy_c = np.full((ps, ps), dc, dtype="float32")
             x = np.concatenate([x, doy_s[None], doy_c[None]], axis=0)
 
-        x = np.nan_to_num(x, nan=0.0, posinf=0.0, neginf=0.0).astype("float32", copy=False)
+        x = np.nan_to_num(x, nan=0.0, posinf=0.0, neginf=0.0).astype(
+            "float32", copy=False
+        )
+        x = self._normalize(x)
         x_t = torch.from_numpy(x)
         y_t = torch.tensor([y], dtype=torch.float32)
 
@@ -220,7 +308,10 @@ class RtmaHumidityPatchDataset(Dataset):
             doy_c = np.full((h, w), dc, dtype="float32")
             x = np.concatenate([x, doy_s[None, :, :], doy_c[None, :, :]], axis=0)
 
-        x = np.nan_to_num(x, nan=0.0, posinf=0.0, neginf=0.0).astype("float32", copy=False)
+        x = np.nan_to_num(x, nan=0.0, posinf=0.0, neginf=0.0).astype(
+            "float32", copy=False
+        )
+        x = self._normalize(x)
         x_t = torch.from_numpy(x)
         y_t = torch.tensor([y], dtype=torch.float32)
 
