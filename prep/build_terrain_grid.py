@@ -104,20 +104,15 @@ def _box_mean(arr: np.ndarray, radius: int) -> np.ndarray:
 
     def _cumsum_2d(a):
         cs = np.cumsum(np.cumsum(a, axis=0), axis=1)
+        # Prepend zero row and column for standard integral-image indexing
+        cs = np.pad(cs, ((1, 0), (1, 0)), mode="constant")
         H, W = arr.shape
-        # Use the integral image to get the box sum
-        out = np.zeros((H, W), dtype="float64")
-        r0 = 0
-        r1 = d
-        c0 = 0
-        c1 = d
-        out = (
-            cs[r1 : r1 + H, c1 : c1 + W]
-            - cs[r0 : r0 + H, c1 : c1 + W]
-            - cs[r1 : r1 + H, c0 : c0 + W]
-            + cs[r0 : r0 + H, c0 : c0 + W]
+        return (
+            cs[d : d + H, d : d + W]
+            - cs[:H, d : d + W]
+            - cs[d : d + H, :W]
+            + cs[:H, :W]
         )
-        return out
 
     s = _cumsum_2d(filled_p)
     c = _cumsum_2d(valid_p)
@@ -247,27 +242,34 @@ def build_rsun(rsun_dir: str, out_tif: str) -> str:
         "nodata": float("nan"),
     }
 
+    skipped = []
     with rasterio.open(out_tif, "w", **profile) as dst:
         for doy in range(1, 366):
             fname = f"rsun_doy_{doy:03d}.tif"
             path = os.path.join(rsun_dir, fname)
             buf = np.full((H, W), np.nan, dtype="float32")
-            with rasterio.open(path) as src:
-                reproject(
-                    source=rasterio.band(src, 1),
-                    destination=buf,
-                    src_transform=src.transform,
-                    src_crs=src.crs,
-                    dst_transform=tf,
-                    dst_crs=RTMA_CRS,
-                    resampling=Resampling.bilinear,
-                    src_nodata=src.nodata,
-                    dst_nodata=np.nan,
-                )
+            try:
+                with rasterio.open(path) as src:
+                    reproject(
+                        source=rasterio.band(src, 1),
+                        destination=buf,
+                        src_transform=src.transform,
+                        src_crs=src.crs,
+                        dst_transform=tf,
+                        dst_crs=RTMA_CRS,
+                        resampling=Resampling.bilinear,
+                        src_nodata=src.nodata,
+                        dst_nodata=np.nan,
+                    )
+            except Exception as exc:
+                print(f"  WARNING: {fname} corrupt, filling with NaN: {exc}")
+                skipped.append(doy)
             dst.write(buf, doy)
             dst.set_band_description(doy, f"rsun_doy_{doy:03d}")
             if doy % 50 == 0 or doy == 365:
                 print(f"  rsun: {doy}/365", flush=True)
+    if skipped:
+        print(f"  WARNING: {len(skipped)} corrupt DOY(s) skipped: {skipped}")
 
     print(f"RSUN written: {out_tif}  (365 bands, {H}×{W})")
     return out_tif
