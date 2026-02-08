@@ -3,7 +3,13 @@ from __future__ import annotations
 import lightning as L
 import torch
 from torch import nn
-from torchmetrics import MeanAbsoluteError, MeanMetric, MeanSquaredError, R2Score
+from torchmetrics import (
+    MeanAbsoluteError,
+    MeanAbsolutePercentageError,
+    MeanMetric,
+    MeanSquaredError,
+    R2Score,
+)
 
 from models.rtma_bias.unet import UNetSmall
 
@@ -41,7 +47,10 @@ class LitPatchUNet(L.LightningModule):
         self.val_rmse = MeanSquaredError(squared=False)
         self.val_r2 = R2Score()
         self.val_bias = MeanMetric()
+        self.val_mape = MeanAbsolutePercentageError()
         self.baseline_mae = MeanAbsoluteError()
+        self.val_rtma_mae = MeanAbsoluteError()
+        self._has_rtma_baseline = False
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.model(x)
@@ -72,7 +81,19 @@ class LitPatchUNet(L.LightningModule):
         self.val_rmse.update(pred_flat, target_flat)
         self.val_r2.update(pred_flat, target_flat)
         self.val_bias.update(pred_flat - target_flat)
+        self.val_mape.update(pred_flat, target_flat)
         self.baseline_mae.update(zeros, target_flat)  # MAE of predicting 0
+
+        # RTMA baseline: MAE of log(ea_rtma) vs target (when available)
+        _, _, meta = batch
+        if meta and "log_ea_rtma" in meta[0]:
+            rtma_vals = torch.tensor(
+                [m["log_ea_rtma"] for m in meta],
+                dtype=torch.float32,
+                device=target_flat.device,
+            )
+            self.val_rtma_mae.update(rtma_vals, target_flat)
+            self._has_rtma_baseline = True
 
         return loss
 
@@ -81,7 +102,10 @@ class LitPatchUNet(L.LightningModule):
         self.log("val_rmse", self.val_rmse)
         self.log("val_r2", self.val_r2)
         self.log("val_bias", self.val_bias)
+        self.log("val_mape", self.val_mape)
         self.log("baseline_mae", self.baseline_mae)
+        if self._has_rtma_baseline:
+            self.log("val_rtma_mae", self.val_rtma_mae)
 
     def configure_optimizers(self):
         return torch.optim.AdamW(self.parameters(), lr=self.hparams.lr)

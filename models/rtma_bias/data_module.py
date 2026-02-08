@@ -26,6 +26,8 @@ class RtmaPatchDataModule(L.LightningDataModule):
         terrain_tif: str | None = None,
         rsun_tif: str | None = None,
         landsat_tif: str | None = None,
+        target_col: str = "delta_log_ea",
+        rtma_channels: tuple[str, ...] | None = None,
     ):
         super().__init__()
         self.save_hyperparameters()
@@ -40,6 +42,8 @@ class RtmaPatchDataModule(L.LightningDataModule):
         self.terrain_tif = terrain_tif
         self.rsun_tif = rsun_tif
         self.landsat_tif = landsat_tif
+        self.target_col = target_col
+        self.rtma_channels = rtma_channels
 
         self._in_channels: int | None = None
         self.train_ds: Subset | None = None
@@ -54,6 +58,9 @@ class RtmaPatchDataModule(L.LightningDataModule):
     def setup(self, stage: str | None = None):
         if self.train_ds is not None:
             return
+        extra = {}
+        if self.rtma_channels is not None:
+            extra["rtma_channels"] = self.rtma_channels
         cfg = PatchDatasetConfig(
             tif_root=self.tif_root,
             patch_size=self.patch_size,
@@ -61,6 +68,8 @@ class RtmaPatchDataModule(L.LightningDataModule):
             terrain_tif=self.terrain_tif,
             rsun_tif=self.rsun_tif,
             landsat_tif=self.landsat_tif,
+            target_col=self.target_col,
+            **extra,
         )
         full_ds = RtmaHumidityPatchDataset(self.patch_index, cfg)
         self._in_channels = full_ds.in_channels

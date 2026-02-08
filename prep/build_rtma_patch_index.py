@@ -45,7 +45,9 @@ def _read_station_day_table(path: str) -> pd.DataFrame:
         df = df.dropna(subset=["day"])
         df = df.set_index(["fid", "day"]).sort_index()
     else:
-        raise ValueError("station-day table must be keyed by (fid, day) or contain fid/day columns")
+        raise ValueError(
+            "station-day table must be keyed by (fid, day) or contain fid/day columns"
+        )
     return df
 
 
@@ -67,7 +69,9 @@ def build_patch_index(
     elif "delta_ea_rtma" in sdf.columns and "ea_rtma" in sdf.columns:
         need = ["delta_ea_rtma", "ea_rtma"]
     else:
-        raise ValueError("expected columns: (y_obs, ea_rtma) or (delta_ea_rtma, ea_rtma)")
+        raise ValueError(
+            "expected columns: (y_obs, ea_rtma) or (delta_ea_rtma, ea_rtma)"
+        )
 
     sub = sdf[need].copy()
     sub = sub.reset_index()
@@ -76,7 +80,9 @@ def build_patch_index(
     if station_id_col not in stations.columns:
         raise ValueError(f"stations_csv must include '{station_id_col}' column")
     if lat_col not in stations.columns or lon_col not in stations.columns:
-        raise ValueError(f"stations_csv must include '{lat_col}' and '{lon_col}' columns")
+        raise ValueError(
+            f"stations_csv must include '{lat_col}' and '{lon_col}' columns"
+        )
     stations[station_id_col] = stations[station_id_col].astype(str)
 
     merged = sub.merge(
@@ -93,9 +99,9 @@ def build_patch_index(
         ea_obs = pd.to_numeric(merged["y_obs"], errors="coerce")
     else:
         # delta_ea_rtma + ea_rtma
-        ea_obs = pd.to_numeric(merged["delta_ea_rtma"], errors="coerce") + pd.to_numeric(
-            merged["ea_rtma"], errors="coerce"
-        )
+        ea_obs = pd.to_numeric(
+            merged["delta_ea_rtma"], errors="coerce"
+        ) + pd.to_numeric(merged["ea_rtma"], errors="coerce")
     ea_rtma = pd.to_numeric(merged["ea_rtma"], errors="coerce")
 
     # Keep a numeric ea_obs column so any filtering happens before log() to avoid warnings.
@@ -109,7 +115,9 @@ def build_patch_index(
         & np.isfinite(ea_rtma)
     )
     merged = merged.loc[m].copy()
+    merged["ea_rtma"] = ea_rtma.loc[merged.index].values
     merged["delta_log_ea"] = np.log(merged["ea_obs"]) - np.log(merged["ea_rtma"])
+    merged["log_ea_obs"] = np.log(merged["ea_obs"])
 
     merged["day"] = pd.to_datetime(merged["day"], errors="coerce").dt.normalize()
     merged = merged.dropna(subset=["day"])
@@ -123,22 +131,51 @@ def build_patch_index(
         exists = paths.map(os.path.exists)
         merged = merged.loc[exists.values].copy()
 
-    out = merged[["fid", "day", "latitude", "longitude", "delta_log_ea"]].copy()
+    out = merged[
+        ["fid", "day", "latitude", "longitude", "delta_log_ea", "log_ea_obs", "ea_rtma"]
+    ].copy()
     os.makedirs(os.path.dirname(out_parquet) or ".", exist_ok=True)
     out.to_parquet(out_parquet, index=False)
     return out_parquet
 
 
 def _parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(description="Build a station-day patch index for RTMA correction training.")
-    p.add_argument("--station-day", required=True, help="Parquet keyed by (fid, day) from build_station_day_table.")
-    p.add_argument("--stations-csv", required=True, help="CSV with columns fid, latitude, longitude.")
+    p = argparse.ArgumentParser(
+        description="Build a station-day patch index for RTMA correction training."
+    )
+    p.add_argument(
+        "--station-day",
+        required=True,
+        help="Parquet keyed by (fid, day) from build_station_day_table.",
+    )
+    p.add_argument(
+        "--stations-csv",
+        required=True,
+        help="CSV with columns fid, latitude, longitude.",
+    )
     p.add_argument("--out", required=True, help="Output Parquet path.")
-    p.add_argument("--min-ea-kpa", type=float, default=1e-4, help="Minimum ea threshold to allow log residuals.")
-    p.add_argument("--require-tif-root", default=None, help="If set, filter rows to those with RTMA_YYYYMMDD.tif present.")
-    p.add_argument("--station-id-col", default="fid", help="Station id column in --stations-csv (default fid).")
-    p.add_argument("--lat-col", default="latitude", help="Latitude column in --stations-csv.")
-    p.add_argument("--lon-col", default="longitude", help="Longitude column in --stations-csv.")
+    p.add_argument(
+        "--min-ea-kpa",
+        type=float,
+        default=1e-4,
+        help="Minimum ea threshold to allow log residuals.",
+    )
+    p.add_argument(
+        "--require-tif-root",
+        default=None,
+        help="If set, filter rows to those with RTMA_YYYYMMDD.tif present.",
+    )
+    p.add_argument(
+        "--station-id-col",
+        default="fid",
+        help="Station id column in --stations-csv (default fid).",
+    )
+    p.add_argument(
+        "--lat-col", default="latitude", help="Latitude column in --stations-csv."
+    )
+    p.add_argument(
+        "--lon-col", default="longitude", help="Longitude column in --stations-csv."
+    )
     return p.parse_args()
 
 

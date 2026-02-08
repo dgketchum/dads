@@ -62,6 +62,16 @@ def _parse_args() -> argparse.Namespace:
         default=None,
         help="35-band Landsat composite GeoTIFF (from prep/build_landsat_grid.py)",
     )
+    p.add_argument(
+        "--target-col",
+        default="delta_log_ea",
+        help="Target column in patch index (default: delta_log_ea)",
+    )
+    p.add_argument(
+        "--rtma-channels",
+        default=None,
+        help="Comma-separated RTMA channel names (default: all 8)",
+    )
     return p.parse_args()
 
 
@@ -71,6 +81,8 @@ def main() -> None:
     L.seed_everything(a.seed, workers=True)
 
     os.makedirs(a.out_dir, exist_ok=True)
+
+    rtma_channels = tuple(a.rtma_channels.split(",")) if a.rtma_channels else None
 
     dm = RtmaPatchDataModule(
         patch_index=a.patch_index,
@@ -84,6 +96,8 @@ def main() -> None:
         terrain_tif=a.terrain_tif,
         rsun_tif=a.rsun_tif,
         landsat_tif=a.landsat_tif,
+        target_col=a.target_col,
+        rtma_channels=rtma_channels,
     )
     dm.setup()
 

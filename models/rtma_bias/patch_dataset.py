@@ -57,6 +57,7 @@ class PatchDatasetConfig:
     )
     rsun_tif: str | None = None
     landsat_tif: str | None = None
+    target_col: str = "delta_log_ea"
     preload_workers: int = 8
 
 
@@ -429,14 +430,15 @@ class RtmaHumidityPatchDataset(Dataset):
     def __init__(self, patch_index_parquet: str, config: PatchDatasetConfig):
         self.config = config
         df = pd.read_parquet(patch_index_parquet)
-        req = {"fid", "day", "latitude", "longitude", "delta_log_ea"}
+        target_col = config.target_col
+        req = {"fid", "day", "latitude", "longitude", target_col}
         missing = req - set(df.columns)
         if missing:
             raise ValueError(f"patch index missing columns: {sorted(missing)}")
         df = df.copy()
         df["fid"] = df["fid"].astype(str)
         df["day"] = pd.to_datetime(df["day"], errors="coerce").dt.normalize()
-        df = df.dropna(subset=["day", "latitude", "longitude", "delta_log_ea"])
+        df = df.dropna(subset=["day", "latitude", "longitude", target_col])
         self.df = df.reset_index(drop=True)
 
         self.rtma_cfg = RtmaPatchConfig(patch_size=int(config.patch_size))
@@ -580,7 +582,7 @@ class RtmaHumidityPatchDataset(Dataset):
         lon = float(r["longitude"])
         lat = float(r["latitude"])
         day = pd.Timestamp(r["day"])
-        y = float(r["delta_log_ea"])
+        y = float(r[self.config.target_col])
         ymd = day.strftime("%Y%m%d")
 
         cog = self._cog_cache[ymd]
@@ -670,6 +672,8 @@ class RtmaHumidityPatchDataset(Dataset):
         y_t = torch.tensor([y], dtype=torch.float32)
 
         meta = {"fid": str(r["fid"]), "day": day, "lon": lon, "lat": lat}
+        if "ea_rtma" in self.df.columns:
+            meta["log_ea_rtma"] = float(np.log(r["ea_rtma"]))
         return x_t, y_t, meta
 
     # ------------------------------------------------------------------
@@ -681,7 +685,7 @@ class RtmaHumidityPatchDataset(Dataset):
         lon = float(r["longitude"])
         lat = float(r["latitude"])
         day = pd.Timestamp(r["day"])
-        y = float(r["delta_log_ea"])
+        y = float(r[self.config.target_col])
 
         tif_path = self._tif_path(self.config.tif_root, day)
         src = _cached_open(tif_path)
@@ -769,6 +773,8 @@ class RtmaHumidityPatchDataset(Dataset):
             "tif": tif_path,
             "channels": chan_to_idx,
         }
+        if "ea_rtma" in self.df.columns:
+            meta["log_ea_rtma"] = float(np.log(r["ea_rtma"]))
         return x_t, y_t, meta
 
     def __getitem__(self, idx: int):
