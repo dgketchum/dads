@@ -25,6 +25,7 @@ class RtmaPatchDataModule(L.LightningDataModule):
         preload: bool = True,
         terrain_tif: str | None = None,
         rsun_tif: str | None = None,
+        landsat_tif: str | None = None,
     ):
         super().__init__()
         self.save_hyperparameters()
@@ -38,6 +39,7 @@ class RtmaPatchDataModule(L.LightningDataModule):
         self.preload = preload
         self.terrain_tif = terrain_tif
         self.rsun_tif = rsun_tif
+        self.landsat_tif = landsat_tif
 
         self._in_channels: int | None = None
         self.train_ds: Subset | None = None
@@ -50,12 +52,15 @@ class RtmaPatchDataModule(L.LightningDataModule):
         return self._in_channels
 
     def setup(self, stage: str | None = None):
+        if self.train_ds is not None:
+            return
         cfg = PatchDatasetConfig(
             tif_root=self.tif_root,
             patch_size=self.patch_size,
             preload=self.preload,
             terrain_tif=self.terrain_tif,
             rsun_tif=self.rsun_tif,
+            landsat_tif=self.landsat_tif,
         )
         full_ds = RtmaHumidityPatchDataset(self.patch_index, cfg)
         self._in_channels = full_ds.in_channels

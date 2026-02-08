@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 
 import numpy as np
@@ -55,38 +56,65 @@ class PatchDatasetConfig:
         "tpi_10",
     )
     rsun_tif: str | None = None
+    landsat_tif: str | None = None
+    preload_workers: int = 8
+
+
+def _load_one_cog(
+    tif_root: str,
+    ymd: str,
+    channels: tuple[str, ...],
+) -> tuple[str, dict[str, np.ndarray]] | None:
+    """Load a single COG and return (ymd, decoded_dict) or None if missing."""
+    tif_path = os.path.join(tif_root, f"RTMA_{ymd}.tif")
+    if not os.path.exists(tif_path):
+        return None
+    with rasterio.open(tif_path) as src:
+        raw = src.read()  # (B, H, W) int32
+        decoded = _decode_rtma_raw_patch(src, raw)
+        keep = {c: decoded[c] for c in channels if c in decoded}
+        keep["__transform__"] = np.array(src.transform, dtype="float64")
+        keep["__shape__"] = np.array([src.height, src.width], dtype="int64")
+    return ymd, keep
 
 
 def _preload_cogs(
     tif_root: str,
     days: list[pd.Timestamp],
     channels: tuple[str, ...],
+    max_workers: int = 8,
 ) -> dict[str, dict[str, np.ndarray]]:
     """Read each unique COG once and decode all bands into memory.
+
+    Uses a thread pool (rasterio/GDAL releases the GIL during I/O) to
+    overlap disk reads and LZW decompression.
 
     Returns ``{yyyymmdd: {channel_name: (H, W) float32 array}}``.
     """
     unique_days = sorted(set(d.strftime("%Y%m%d") for d in days))
     cache: dict[str, dict[str, np.ndarray]] = {}
     total = len(unique_days)
-    for i, ymd in enumerate(unique_days):
-        tif_path = os.path.join(tif_root, f"RTMA_{ymd}.tif")
-        if not os.path.exists(tif_path):
-            continue
-        with rasterio.open(tif_path) as src:
-            raw = src.read()  # (B, H, W) int32
-            decoded = _decode_rtma_raw_patch(src, raw)
-            # Keep only the requested channels + geo transform info.
-            keep = {c: decoded[c] for c in channels if c in decoded}
-            # Store the transform for lon/lat → pixel conversion.
-            keep["__transform__"] = np.array(src.transform, dtype="float64")
-            keep["__shape__"] = np.array([src.height, src.width], dtype="int64")
-        cache[ymd] = keep
-        if (i + 1) % 50 == 0 or (i + 1) == total:
-            mem_gb = (
-                sum(sum(v.nbytes for v in d.values()) for d in cache.values()) / 1e9
-            )
-            print(f"  preload: {i + 1}/{total} COGs ({mem_gb:.1f} GB)", flush=True)
+    done = 0
+
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        futures = {
+            pool.submit(_load_one_cog, tif_root, ymd, channels): ymd
+            for ymd in unique_days
+        }
+        for fut in as_completed(futures):
+            result = fut.result()
+            if result is not None:
+                ymd, keep = result
+                cache[ymd] = keep
+            done += 1
+            if done % 50 == 0 or done == total:
+                mem_gb = (
+                    sum(sum(v.nbytes for v in d.values()) for d in cache.values()) / 1e9
+                )
+                print(
+                    f"  preload: {done}/{total} COGs ({mem_gb:.1f} GB)",
+                    flush=True,
+                )
     return cache
 
 
@@ -304,6 +332,88 @@ def _extract_rsun_patch(
     return patch[None]  # (1, ps, ps)
 
 
+# ---------------------------------------------------------------------------
+# Landsat helpers
+# ---------------------------------------------------------------------------
+
+_LANDSAT_BANDS_PER_PERIOD = 7
+
+
+def _load_landsat(tif_path: str) -> dict[str, np.ndarray]:
+    """Load 35-band Landsat composite GeoTIFF.
+
+    Returns dict with 'data' (35, H, W) float32 and '__transform__'.
+    """
+    with rasterio.open(tif_path) as src:
+        arr = src.read().astype("float32", copy=False)  # (35, H, W)
+        tf = np.array(src.transform, dtype="float64")
+    mem = arr.nbytes / 1e6
+    print(
+        f"Landsat loaded: {arr.shape[0]} bands from {tif_path} ({mem:.0f} MB)",
+        flush=True,
+    )
+    return {"data": arr, "__transform__": tf}
+
+
+def _date_to_period(day: pd.Timestamp) -> int:
+    """Map a date to Landsat composite period index (0-4)."""
+    m, d = day.month, day.day
+    if m <= 2:
+        return 0
+    if m <= 4:
+        return 1
+    if m <= 6 or (m == 7 and d < 15):
+        return 2
+    if m <= 8 or (m == 9 and d < 30) or (m == 7 and d >= 15):
+        return 3
+    return 4
+
+
+def _extract_landsat_patch(
+    landsat: dict[str, np.ndarray],
+    day: pd.Timestamp,
+    r0: int,
+    c0: int,
+    ps: int,
+    rtma_tf: np.ndarray,
+    rtma_H: int,
+    rtma_W: int,
+) -> np.ndarray:
+    """Extract 7-band Landsat patch for the correct period. Returns (7, ps, ps)."""
+    period = _date_to_period(day)
+    b_start = period * _LANDSAT_BANDS_PER_PERIOD
+    b_end = b_start + _LANDSAT_BANDS_PER_PERIOD
+    bands = landsat["data"][b_start:b_end]  # (7, H, W)
+    aux_tf = landsat["__transform__"]
+    patch = _extract_aux_patch(bands, r0, c0, ps, rtma_tf, aux_tf)
+    return patch  # (7, ps, ps)
+
+
+def _landsat_channel_stats(
+    landsat: dict[str, np.ndarray],
+) -> tuple[np.ndarray, np.ndarray]:
+    """Per-spectral-band (mean, std) averaged across all 5 periods.
+
+    Returns two (7,) float32 arrays.
+    """
+    data = landsat["data"]  # (35, H, W)
+    means = np.zeros(7, dtype="float64")
+    stds = np.zeros(7, dtype="float64")
+    for b in range(7):
+        # Gather this spectral band across all 5 periods
+        indices = [p * 7 + b for p in range(5)]
+        vals = data[indices]  # (5, H, W)
+        valid = vals[np.isfinite(vals)]
+        if valid.size > 0:
+            means[b] = float(valid.mean())
+            s = float(valid.std())
+            stds[b] = s if s > 1e-8 else 1.0
+        else:
+            means[b] = 0.0
+            stds[b] = 1.0
+    return means.astype("float32"), stds.astype("float32")
+
+
 class RtmaHumidityPatchDataset(Dataset):
     """
     Station-day patch dataset for humidity correction.
@@ -342,6 +452,7 @@ class RtmaHumidityPatchDataset(Dataset):
                 config.tif_root,
                 df["day"].tolist(),
                 config.rtma_channels,
+                max_workers=config.preload_workers,
             )
             print(
                 f"Pre-load complete: {len(self._cog_cache)} COGs in memory.", flush=True
@@ -361,6 +472,12 @@ class RtmaHumidityPatchDataset(Dataset):
             self._rsun_cache = _load_rsun(config.rsun_tif)
             self._in_channels += 1
 
+        # ---- Landsat (35-band climatological composite) ----
+        self._landsat_cache: dict[str, np.ndarray] | None = None
+        if config.landsat_tif:
+            self._landsat_cache = _load_landsat(config.landsat_tif)
+            self._in_channels += _LANDSAT_BANDS_PER_PERIOD  # +7
+
         # Per-channel normalisation (mean, std).
         self._norm_mean: np.ndarray | None = None  # (C, 1, 1) float32
         self._norm_std: np.ndarray | None = None  # (C, 1, 1) float32
@@ -370,8 +487,12 @@ class RtmaHumidityPatchDataset(Dataset):
             )
             # Append stats for doy channels (already ~N(0, 0.7); normalise anyway).
             if config.add_doy:
-                rtma_mean = np.concatenate([rtma_mean, [0.0, 0.0]])
-                rtma_std = np.concatenate([rtma_std, [1.0, 1.0]])
+                rtma_mean = np.concatenate(
+                    [rtma_mean, np.array([0.0, 0.0], dtype="float32")]
+                )
+                rtma_std = np.concatenate(
+                    [rtma_std, np.array([1.0, 1.0], dtype="float32")]
+                )
 
             # Terrain channel stats
             if self._terrain_cache is not None:
@@ -387,8 +508,14 @@ class RtmaHumidityPatchDataset(Dataset):
                 rtma_mean = np.concatenate([rtma_mean, r_mean])
                 rtma_std = np.concatenate([rtma_std, r_std])
 
-            self._norm_mean = rtma_mean[:, None, None]
-            self._norm_std = rtma_std[:, None, None]
+            # Landsat channel stats
+            if self._landsat_cache is not None:
+                l_mean, l_std = _landsat_channel_stats(self._landsat_cache)
+                rtma_mean = np.concatenate([rtma_mean, l_mean])
+                rtma_std = np.concatenate([rtma_std, l_std])
+
+            self._norm_mean = rtma_mean.astype("float32")[:, None, None]
+            self._norm_std = rtma_std.astype("float32")[:, None, None]
             print(
                 f"Channel stats computed: {len(rtma_mean)} channels.",
                 flush=True,
@@ -408,6 +535,8 @@ class RtmaHumidityPatchDataset(Dataset):
             channels += list(self.config.terrain_channels)
         if self._rsun_cache is not None:
             channels += ["rsun"]
+        if self._landsat_cache is not None:
+            channels += ["ls_b2", "ls_b3", "ls_b4", "ls_b5", "ls_b6", "ls_b7", "ls_b10"]
         return {
             "channels": channels,
             "mean": self._norm_mean[:, 0, 0].tolist()
@@ -521,6 +650,18 @@ class RtmaHumidityPatchDataset(Dataset):
                 axis=0,
             )
 
+        # Landsat channels (period-indexed, 7 bands)
+        if self._landsat_cache is not None:
+            x = np.concatenate(
+                [
+                    x,
+                    _extract_landsat_patch(
+                        self._landsat_cache, day, r0, c0, ps, tf, H, W
+                    ),
+                ],
+                axis=0,
+            )
+
         x = np.nan_to_num(x, nan=0.0, posinf=0.0, neginf=0.0).astype(
             "float32", copy=False
         )
@@ -561,8 +702,12 @@ class RtmaHumidityPatchDataset(Dataset):
             doy_c = np.full((h, w), dc, dtype="float32")
             x = np.concatenate([x, doy_s[None, :, :], doy_c[None, :, :]], axis=0)
 
-        # Terrain / RSUN for on-disk path: use RTMA file transform for coord mapping
-        if self._terrain_cache is not None or self._rsun_cache is not None:
+        # Terrain / RSUN / Landsat for on-disk path: use RTMA file transform
+        if (
+            self._terrain_cache is not None
+            or self._rsun_cache is not None
+            or self._landsat_cache is not None
+        ):
             ps = int(self.config.patch_size)
             half = ps // 2
             row_px, col_px = src.index(float(lon), float(lat))
@@ -594,6 +739,16 @@ class RtmaHumidityPatchDataset(Dataset):
                         x,
                         _extract_rsun_patch(
                             self._rsun_cache, day, r0, c0, ps, tf_arr, sH, sW
+                        ),
+                    ],
+                    axis=0,
+                )
+            if self._landsat_cache is not None:
+                x = np.concatenate(
+                    [
+                        x,
+                        _extract_landsat_patch(
+                            self._landsat_cache, day, r0, c0, ps, tf_arr, sH, sW
                         ),
                     ],
                     axis=0,
