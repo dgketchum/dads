@@ -57,6 +57,11 @@ def _parse_args() -> argparse.Namespace:
         default=None,
         help="365-band RSUN GeoTIFF (from prep/build_terrain_grid.py)",
     )
+    p.add_argument(
+        "--landsat-tif",
+        default=None,
+        help="35-band Landsat composite GeoTIFF (from prep/build_landsat_grid.py)",
+    )
     return p.parse_args()
 
 
@@ -78,6 +83,7 @@ def main() -> None:
         preload=a.preload,
         terrain_tif=a.terrain_tif,
         rsun_tif=a.rsun_tif,
+        landsat_tif=a.landsat_tif,
     )
     dm.setup()
 
