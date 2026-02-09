@@ -28,6 +28,8 @@ class RtmaPatchDataModule(L.LightningDataModule):
         landsat_tif: str | None = None,
         target_col: str = "delta_log_ea",
         rtma_channels: tuple[str, ...] | None = None,
+        start_date: str | None = None,
+        end_date: str | None = None,
     ):
         super().__init__()
         self.save_hyperparameters()
@@ -44,6 +46,8 @@ class RtmaPatchDataModule(L.LightningDataModule):
         self.landsat_tif = landsat_tif
         self.target_col = target_col
         self.rtma_channels = rtma_channels
+        self.start_date = start_date
+        self.end_date = end_date
 
         self._in_channels: int | None = None
         self.train_ds: Subset | None = None
@@ -69,6 +73,8 @@ class RtmaPatchDataModule(L.LightningDataModule):
             rsun_tif=self.rsun_tif,
             landsat_tif=self.landsat_tif,
             target_col=self.target_col,
+            start_date=self.start_date,
+            end_date=self.end_date,
             **extra,
         )
         full_ds = RtmaHumidityPatchDataset(self.patch_index, cfg)
@@ -88,14 +94,22 @@ class RtmaPatchDataModule(L.LightningDataModule):
             raise RuntimeError("Call setup() before save_norm_stats()")
         ds.save_norm_stats(path)
 
+    def _loader_kwargs(self) -> dict:
+        kw = {
+            "num_workers": self.num_workers,
+            "pin_memory": True,
+            "collate_fn": _collate,
+        }
+        if self.num_workers > 0:
+            kw["persistent_workers"] = True
+        return kw
+
     def train_dataloader(self):
         return DataLoader(
             self.train_ds,
             batch_size=self.batch_size,
             shuffle=True,
-            num_workers=self.num_workers,
-            pin_memory=True,
-            collate_fn=_collate,
+            **self._loader_kwargs(),
         )
 
     def val_dataloader(self):
@@ -103,7 +117,5 @@ class RtmaPatchDataModule(L.LightningDataModule):
             self.val_ds,
             batch_size=self.batch_size,
             shuffle=False,
-            num_workers=self.num_workers,
-            pin_memory=True,
-            collate_fn=_collate,
+            **self._loader_kwargs(),
         )

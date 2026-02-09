@@ -59,6 +59,8 @@ class PatchDatasetConfig:
     landsat_tif: str | None = None
     target_col: str = "delta_log_ea"
     preload_workers: int = 8
+    start_date: str | None = None
+    end_date: str | None = None
 
 
 def _load_one_cog(
@@ -73,7 +75,7 @@ def _load_one_cog(
     with rasterio.open(tif_path) as src:
         raw = src.read()  # (B, H, W) int32
         decoded = _decode_rtma_raw_patch(src, raw)
-        keep = {c: decoded[c] for c in channels if c in decoded}
+        keep = {c: decoded[c].astype(np.float16) for c in channels if c in decoded}
         keep["__transform__"] = np.array(src.transform, dtype="float64")
         keep["__shape__"] = np.array([src.height, src.width], dtype="int64")
     return ymd, keep
@@ -137,9 +139,9 @@ def _compute_channel_stats(
             arr = cog.get(ch)
             if arr is None:
                 continue
-            valid = arr[np.isfinite(arr)]
+            valid = arr[np.isfinite(arr)].astype("float64")
             total[i] += valid.sum()
-            total_sq[i] += (valid.astype("float64") ** 2).sum()
+            total_sq[i] += (valid**2).sum()
             count[i] += valid.size
 
     mean = np.where(count > 0, total / count, 0.0)
@@ -326,7 +328,7 @@ def _extract_rsun_patch(
     rtma_W: int,
 ) -> np.ndarray:
     """Extract RSUN patch for the given DOY. Returns (1, ps, ps)."""
-    doy_idx = day.dayofyear - 1  # 0-based band index
+    doy_idx = min(day.dayofyear - 1, rsun["data"].shape[0] - 1)  # clamp leap day
     band = rsun["data"][doy_idx]  # (H, W)
     aux_tf = rsun["__transform__"]
     patch = _extract_aux_patch(band, r0, c0, ps, rtma_tf, aux_tf)
@@ -439,6 +441,10 @@ class RtmaHumidityPatchDataset(Dataset):
         df["fid"] = df["fid"].astype(str)
         df["day"] = pd.to_datetime(df["day"], errors="coerce").dt.normalize()
         df = df.dropna(subset=["day", "latitude", "longitude", target_col])
+        if config.start_date:
+            df = df.loc[df["day"] >= pd.to_datetime(config.start_date)]
+        if config.end_date:
+            df = df.loc[df["day"] <= pd.to_datetime(config.end_date)]
         self.df = df.reset_index(drop=True)
 
         self.rtma_cfg = RtmaPatchConfig(patch_size=int(config.patch_size))

@@ -42,7 +42,7 @@ class LitPatchUNet(L.LightningModule):
         self.model = UNetSmall(in_channels, out_channels, base)
         self.huber = nn.HuberLoss(delta=1.0)
 
-        # torchmetrics: accumulation, reset, and distributed sync handled automatically.
+        # --- log-space metrics (continuity with prior runs) ---
         self.val_mae = MeanAbsoluteError()
         self.val_rmse = MeanSquaredError(squared=False)
         self.val_r2 = R2Score()
@@ -50,6 +50,15 @@ class LitPatchUNet(L.LightningModule):
         self.val_mape = MeanAbsolutePercentageError()
         self.baseline_mae = MeanAbsoluteError()
         self.val_rtma_mae = MeanAbsoluteError()
+
+        # --- ea-space metrics (kPa, stakeholder-friendly) ---
+        self.val_mae_ea = MeanAbsoluteError()
+        self.val_mae_rtma_ea = MeanAbsoluteError()
+        self.val_mape_ea = MeanAbsolutePercentageError()
+        self.val_mape_rtma_ea = MeanAbsolutePercentageError()
+        self._ea_mae_sum = MeanMetric()
+        self._rtma_mae_sum = MeanMetric()
+
         self._has_rtma_baseline = False
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -77,35 +86,74 @@ class LitPatchUNet(L.LightningModule):
         target_flat = target.squeeze(-1)  # (B,)
         zeros = torch.zeros_like(target_flat)
 
+        # log-space metrics
         self.val_mae.update(pred_flat, target_flat)
         self.val_rmse.update(pred_flat, target_flat)
         self.val_r2.update(pred_flat, target_flat)
         self.val_bias.update(pred_flat - target_flat)
         self.val_mape.update(pred_flat, target_flat)
-        self.baseline_mae.update(zeros, target_flat)  # MAE of predicting 0
+        self.baseline_mae.update(zeros, target_flat)
 
-        # RTMA baseline: MAE of log(ea_rtma) vs target (when available)
+        # ea-space metrics (requires log_ea_rtma in metadata)
         _, _, meta = batch
         if meta and "log_ea_rtma" in meta[0]:
-            rtma_vals = torch.tensor(
+            log_ea_rtma = torch.tensor(
                 [m["log_ea_rtma"] for m in meta],
                 dtype=torch.float32,
                 device=target_flat.device,
             )
-            self.val_rtma_mae.update(rtma_vals, target_flat)
+            self.val_rtma_mae.update(log_ea_rtma, target_flat)
             self._has_rtma_baseline = True
+
+            # reconstruct ea values in kPa
+            ea_obs = torch.exp(log_ea_rtma + target_flat)
+            ea_rtma = torch.exp(log_ea_rtma)
+            ea_corrected = torch.exp(log_ea_rtma + pred_flat)
+
+            self.val_mae_ea.update(ea_corrected, ea_obs)
+            self.val_mae_rtma_ea.update(ea_rtma, ea_obs)
+            self.val_mape_ea.update(ea_corrected, ea_obs)
+            self.val_mape_rtma_ea.update(ea_rtma, ea_obs)
+
+            # accumulate raw MAE values for pct_improvement
+            self._ea_mae_sum.update(torch.abs(ea_corrected - ea_obs))
+            self._rtma_mae_sum.update(torch.abs(ea_rtma - ea_obs))
 
         return loss
 
     def on_validation_epoch_end(self):
+        # log-space metrics
         self.log("val_mae", self.val_mae, prog_bar=True)
         self.log("val_rmse", self.val_rmse)
         self.log("val_r2", self.val_r2)
         self.log("val_bias", self.val_bias)
         self.log("val_mape", self.val_mape)
         self.log("baseline_mae", self.baseline_mae)
+
         if self._has_rtma_baseline:
             self.log("val_rtma_mae", self.val_rtma_mae)
 
+            # ea-space metrics
+            self.log("val/mae_ea_kpa", self.val_mae_ea)
+            self.log("val/mae_rtma_ea_kpa", self.val_mae_rtma_ea)
+            self.log("val/mape_ea", self.val_mape_ea)
+            self.log("val/mape_rtma_ea", self.val_mape_rtma_ea)
+
+            # pct improvement
+            model_mae = self._ea_mae_sum.compute()
+            rtma_mae = self._rtma_mae_sum.compute()
+            if rtma_mae > 0:
+                pct = (1.0 - model_mae / rtma_mae) * 100.0
+                self.log("val/pct_improvement", pct)
+            self._ea_mae_sum.reset()
+            self._rtma_mae_sum.reset()
+
     def configure_optimizers(self):
-        return torch.optim.AdamW(self.parameters(), lr=self.hparams.lr)
+        opt = torch.optim.AdamW(self.parameters(), lr=self.hparams.lr)
+        sched = torch.optim.lr_scheduler.ReduceLROnPlateau(
+            opt, mode="min", factor=0.5, patience=7, min_lr=1e-6
+        )
+        return {
+            "optimizer": opt,
+            "lr_scheduler": {"scheduler": sched, "monitor": "val_loss"},
+        }
