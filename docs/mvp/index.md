@@ -27,7 +27,14 @@ The MVP validates the core hypothesis -- that RTMA humidity can be improved with
 
 ## Current Status
 
-The best model (Run 5: 7 years of data, base-48 U-Net, 24 epochs) reduces RTMA $e_a$ MAE by **28%** (0.076 to 0.055 kPa) with R$^2$ = 0.60 on held-out stations. Ablation confirms that RTMA humidity inputs (dewpoint, $e_a$) are essential -- without them, the model converges to RTMA-level accuracy.
+The best model (Run 5: 7 years of data, base-48 U-Net, 24 epochs) reduces RTMA $e_a$ MAE by **28%** (0.076 → 0.055 kPa) with R² = 0.60 on held-out stations.
+
+**Key findings from ablation studies:**
+
+- **Terrain and land cover dominate the correction signal.** Elevation, slope, TPI, solar geometry, and Landsat surface reflectance together account for the bulk of the model's skill. Adding these covariates in Run 2 lifted R² from 0.02 to 0.61.
+- **Humidity inputs help, but less than expected.** Dropping dewpoint and $e_a$ from the input channels (Run 6) costs only ~3% in MAE and ~2.4 percentage points of RTMA improvement (24.4% vs 28.3%). The model reconstructs most of the bias-correction signal from weather, terrain, and vegetation context alone.
+- **Bias-correction framing is clearly superior to direct prediction.** Predicting $\log(e_{a,\text{obs}})$ without humidity inputs (Run 4) merely matches RTMA; predicting $\Delta\!\log e_a$ with the same inputs (Run 6) beats it by 25%.
+- **More data improves robustness.** Expanding from 1 year (2024) to 7 years (2018–2024) in Run 5 yielded similar peak accuracy but better generalisation across years and seasons.
 
 ## Chapters
 
