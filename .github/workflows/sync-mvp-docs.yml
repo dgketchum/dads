@@ -1,0 +1,77 @@
+name: Sync MVP docs to main
+
+on:
+  push:
+    branches:
+      - mvp/rtma-humidity
+    paths:
+      - 'docs/mvp/**'
+
+jobs:
+  sync-docs:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Copy docs/mvp/ from MVP branch
+        run: |
+          git checkout origin/mvp/rtma-humidity -- docs/mvp/
+
+      - name: Ensure MVP nav section in mkdocs.yml
+        run: |
+          if ! grep -q 'MVP – RTMA Humidity' mkdocs.yml; then
+            python3 -c "
+          import re, sys
+
+          with open('mkdocs.yml') as f:
+              text = f.read()
+
+          mvp_section = '''  - MVP – RTMA Humidity:
+            - Overview: mvp/index.md
+            - System Architecture: mvp/architecture.md
+            - Data Provenance: mvp/data_provenance.md
+            - Algorithms: mvp/algorithms.md
+          '''
+
+          # Append MVP section after the last nav entry
+          # Find the nav block and append before the next top-level key
+          lines = text.split('\n')
+          nav_end = None
+          in_nav = False
+          for i, line in enumerate(lines):
+              if line.startswith('nav:'):
+                  in_nav = True
+                  continue
+              if in_nav:
+                  if line and not line.startswith(' ') and not line.startswith('#'):
+                      nav_end = i
+                      break
+          if nav_end is None:
+              nav_end = len(lines)
+
+          new_lines = lines[:nav_end] + mvp_section.rstrip().split('\n') + lines[nav_end:]
+          with open('mkdocs.yml', 'w') as f:
+              f.write('\n'.join(new_lines))
+          "
+            echo "Added MVP nav section to mkdocs.yml"
+          else
+            echo "MVP nav section already present"
+          fi
+
+      - name: Commit and push if changed
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add docs/mvp/ mkdocs.yml
+          if git diff --cached --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "docs: sync MVP docs from mvp/rtma-humidity"
+            git push origin main
+          fi
