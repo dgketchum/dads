@@ -1,0 +1,26 @@
+name = "run5_all_features"
+description = "Run 5 — all RTMA channels + aux covariates, base=48, bs=128"
+features = ["rtma_all", "terrain", "rsun", "landsat"]
+
+base = 48
+lr = 3e-4
+tv_weight = 1e-3
+batch_size = 128
+epochs = 100
+
+patch_size = 64
+val_frac = 0.2
+seed = 42
+target_col = "delta_log_ea"
+start_date = "2021-01-01"
+
+patch_index = "/nas/dads/mvp/patch_index_ea_pnw_2018_2024.parquet"
+tif_root = "/data/ssd1/rtma/tif"
+out_dir = "/nas/dads/mvp/unet_ea_pnw_run5"
+terrain_tif = "/nas/dads/mvp/terrain_pnw_rtma.tif"
+rsun_tif = "/nas/dads/mvp/rsun_pnw_rtma.tif"
+landsat_tif = "/nas/dads/mvp/landsat_pnw_rtma.tif"
+
+device = "cuda:0"
+num_workers = 4
+preload = true
