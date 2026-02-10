@@ -6,6 +6,7 @@ on:
       - mvp/rtma-humidity
     paths:
       - 'docs/mvp/**'
+      - 'docs/wind/**'
 
 jobs:
   sync-docs:
@@ -19,9 +20,10 @@ jobs:
           ref: main
           fetch-depth: 0
 
-      - name: Copy docs/mvp/ from MVP branch
+      - name: Copy docs from MVP branch
         run: |
           git checkout origin/mvp/rtma-humidity -- docs/mvp/
+          git checkout origin/mvp/rtma-humidity -- docs/wind/
 
       - name: Ensure MVP nav section in mkdocs.yml
         run: |
@@ -64,11 +66,50 @@ jobs:
             echo "MVP nav section already present"
           fi
 
+      - name: Ensure Wind nav section in mkdocs.yml
+        run: |
+          if ! grep -q 'MVP – Wind' mkdocs.yml; then
+            python3 -c "
+          import re, sys
+
+          with open('mkdocs.yml') as f:
+              text = f.read()
+
+          wind_section = '''  - MVP – Wind:
+            - Overview: wind/index.md
+            - System Architecture: wind/architecture.md
+            - Data Provenance: wind/data_provenance.md
+            - Algorithms: wind/algorithms.md
+          '''
+
+          lines = text.split('\n')
+          nav_end = None
+          in_nav = False
+          for i, line in enumerate(lines):
+              if line.startswith('nav:'):
+                  in_nav = True
+                  continue
+              if in_nav:
+                  if line and not line.startswith(' ') and not line.startswith('#'):
+                      nav_end = i
+                      break
+          if nav_end is None:
+              nav_end = len(lines)
+
+          new_lines = lines[:nav_end] + wind_section.rstrip().split('\n') + lines[nav_end:]
+          with open('mkdocs.yml', 'w') as f:
+              f.write('\n'.join(new_lines))
+          "
+            echo "Added Wind nav section to mkdocs.yml"
+          else
+            echo "Wind nav section already present"
+          fi
+
       - name: Commit and push if changed
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add docs/mvp/ mkdocs.yml
+          git add docs/mvp/ docs/wind/ mkdocs.yml
           if git diff --cached --quiet; then
             echo "No changes to commit"
           else
