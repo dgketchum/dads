@@ -1,0 +1,36 @@
+name = "wind_gnn_no_sx"
+description = "Step 2: GNN with neighbor attention, no Sx"
+
+# Model
+hidden_dim = 128
+n_hops = 1
+use_graph = true
+use_sx = false
+use_flow_terrain = false
+
+# Training
+lr = 1e-3
+weight_decay = 1e-5
+huber_delta = 2.0
+calm_threshold = 2.0
+calm_min_weight = 0.1
+correction_penalty = 0.0
+batch_size = 16
+epochs = 100
+seed = 42
+k_neighbors = 16
+
+# Data
+table_path = "/nas/dads/mvp/station_day_wind_pnw_2018_2024.parquet"
+stations_csv = "artifacts/madis_pnw.csv"
+out_dir = "/nas/dads/mvp/wind_gnn_no_sx"
+train_years = [2018, 2019, 2020, 2021, 2022, 2023]
+val_years = [2024]
+
+# Spatial holdout
+spatial_holdout_frac = 0.1
+spatial_holdout_seed = 99
+
+# Runtime
+device = "cuda:0"
+num_workers = 0
