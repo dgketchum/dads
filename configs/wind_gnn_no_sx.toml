@@ -24,6 +24,7 @@ k_neighbors = 16
 table_path = "/nas/dads/mvp/station_day_wind_pnw_2018_2024.parquet"
 stations_csv = "artifacts/madis_pnw.csv"
 out_dir = "/nas/dads/mvp/wind_gnn_no_sx"
+graph_dir = "/nas/dads/mvp/wind_graphs_pnw"
 train_years = [2018, 2019, 2020, 2021, 2022, 2023]
 val_years = [2024]
 

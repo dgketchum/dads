@@ -26,7 +26,7 @@ from lightning.pytorch.callbacks import (
 from torch_geometric.loader import DataLoader
 
 from models.wind_bias.lit_wind_gnn import LitWindGNN
-from models.wind_bias.wind_dataset import WindGraphDataset
+from models.wind_bias.wind_dataset import PrecomputedWindDataset, WindGraphDataset
 
 
 # ---------------------------------------------------------------------------
@@ -62,6 +62,7 @@ class WindGNNConfig:
     table_path: str = "/nas/dads/mvp/station_day_wind_pnw_2018_2024.parquet"
     stations_csv: str = "artifacts/madis_pnw.csv"
     out_dir: str = "/nas/dads/mvp/wind_gnn_v1"
+    graph_dir: str | None = None
     train_years: list[int] = field(
         default_factory=lambda: [2018, 2019, 2020, 2021, 2022, 2023]
     )
@@ -99,6 +100,7 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--table-path", default=None)
     p.add_argument("--stations-csv", default=None)
     p.add_argument("--out-dir", default=None)
+    p.add_argument("--graph-dir", default=None, help="Precomputed graph dir")
     p.add_argument("--hidden-dim", type=int, default=None)
     p.add_argument("--n-hops", type=int, default=None)
     p.add_argument("--use-graph", type=int, default=None, help="0=MLP only, 1=GNN")
@@ -124,6 +126,7 @@ def _build_config(args: argparse.Namespace) -> WindGNNConfig:
         "table_path": "table_path",
         "stations_csv": "stations_csv",
         "out_dir": "out_dir",
+        "graph_dir": "graph_dir",
         "hidden_dim": "hidden_dim",
         "n_hops": "n_hops",
         "lr": "lr",
@@ -193,30 +196,53 @@ def main() -> None:
     with open(os.path.join(cfg.out_dir, "holdout_fids.json"), "w") as f:
         json.dump(sorted(holdout_fids), f)
 
-    print("Building training dataset...")
-    train_ds = WindGraphDataset(
-        table_path=cfg.table_path,
-        stations_csv=cfg.stations_csv,
-        k=cfg.k_neighbors,
-        use_graph=cfg.use_graph,
-        use_sx=cfg.use_sx,
-        use_flow_terrain=cfg.use_flow_terrain,
-        train_days=train_days,
-        exclude_fids=holdout_fids,
-    )
-    train_ds.save_norm_stats(os.path.join(cfg.out_dir, "norm_stats.json"))
+    if cfg.graph_dir:
+        print(f"Using precomputed graphs from {cfg.graph_dir}")
+        print("Building training dataset...")
+        train_ds = PrecomputedWindDataset(
+            graph_dir=cfg.graph_dir,
+            use_sx=cfg.use_sx,
+            use_flow_terrain=cfg.use_flow_terrain,
+            use_graph=cfg.use_graph,
+            train_days=train_days,
+            exclude_fids=holdout_fids,
+        )
+        train_ds.save_norm_stats(os.path.join(cfg.out_dir, "norm_stats.json"))
 
-    print("Building validation dataset...")
-    val_ds = WindGraphDataset(
-        table_path=cfg.table_path,
-        stations_csv=cfg.stations_csv,
-        k=cfg.k_neighbors,
-        use_graph=cfg.use_graph,
-        use_sx=cfg.use_sx,
-        use_flow_terrain=cfg.use_flow_terrain,
-        norm_stats=train_ds.norm_stats,
-        train_days=val_days,
-    )
+        print("Building validation dataset...")
+        val_ds = PrecomputedWindDataset(
+            graph_dir=cfg.graph_dir,
+            use_sx=cfg.use_sx,
+            use_flow_terrain=cfg.use_flow_terrain,
+            use_graph=cfg.use_graph,
+            norm_stats=train_ds.norm_stats,
+            train_days=val_days,
+        )
+    else:
+        print("Building training dataset (on-the-fly graph construction)...")
+        train_ds = WindGraphDataset(
+            table_path=cfg.table_path,
+            stations_csv=cfg.stations_csv,
+            k=cfg.k_neighbors,
+            use_graph=cfg.use_graph,
+            use_sx=cfg.use_sx,
+            use_flow_terrain=cfg.use_flow_terrain,
+            train_days=train_days,
+            exclude_fids=holdout_fids,
+        )
+        train_ds.save_norm_stats(os.path.join(cfg.out_dir, "norm_stats.json"))
+
+        print("Building validation dataset...")
+        val_ds = WindGraphDataset(
+            table_path=cfg.table_path,
+            stations_csv=cfg.stations_csv,
+            k=cfg.k_neighbors,
+            use_graph=cfg.use_graph,
+            use_sx=cfg.use_sx,
+            use_flow_terrain=cfg.use_flow_terrain,
+            norm_stats=train_ds.norm_stats,
+            train_days=val_days,
+        )
 
     print(f"Train: {len(train_ds)} days, Val: {len(val_ds)} days")
     print(f"Node features: {train_ds.node_dim}, Edge features: {train_ds.edge_dim}")
