@@ -232,7 +232,9 @@ A 4-step ladder isolates the contribution of each architectural component:
 
 ---
 
-## MLP Baseline Results (Step 1)
+## Ablation Results
+
+### Step 1: MLP Baseline
 
 Best checkpoint: epoch 95 (`ckpt-epoch=095-val_loss=0.3624.ckpt`)
 
@@ -242,20 +244,26 @@ Best checkpoint: epoch 95 (`ckpt-epoch=095-val_loss=0.3624.ckpt`)
 | Perpendicular MAE (m/s) | 0.603 | 0.546 | 9.5% |
 | Vector RMSE (m/s) | 2.179 | 1.440 | 33.9% |
 
-### Learning Curve
+### Step 2: GNN no-Sx
 
-| Epoch | val_loss | mae_par | mae_perp | vec_rmse |
-|------:|---------:|--------:|---------:|---------:|
-| 0 | 0.460 | 0.829 | 0.577 | 1.615 |
-| 5 | 0.424 | 0.775 | 0.564 | 1.546 |
-| 10 | 0.405 | 0.752 | 0.561 | 1.515 |
-| 20 | 0.387 | 0.722 | 0.554 | 1.484 |
-| 30 | 0.381 | 0.714 | 0.548 | 1.475 |
-| 50 | 0.371 | 0.701 | 0.545 | 1.457 |
-| 75 | 0.364 | 0.691 | 0.546 | 1.444 |
-| 95 | 0.362 | 0.686 | 0.546 | 1.440 |
+Best checkpoint: epoch 94 (`val_loss=0.3394`)
 
-The model reaches 95% of final performance by epoch 30, with marginal gains thereafter.
+| Component | MLP (Step 1) | GNN no-Sx (Step 2) | Δ vs MLP |
+|-----------|--------------|---------------------|----------|
+| Parallel MAE (m/s) | 0.686 | 0.656 | −4.4% |
+| Perpendicular MAE (m/s) | 0.546 | 0.523 | −4.2% |
+| Vector RMSE (m/s) | 1.440 | 1.393 | −3.3% |
+| val_loss | 0.362 | 0.339 | −6.4% |
+
+Neighbor attention improves both components, not just perpendicular as initially hypothesized. The edge-gated attention mechanism learns useful spatial relationships even without directional terrain (Sx) features.
+
+### Cumulative Summary
+
+| Component | RTMA | MLP | GNN no-Sx | Total reduction |
+|-----------|------|-----|-----------|-----------------|
+| Parallel MAE (m/s) | 1.371 | 0.686 | 0.656 | **52.2%** |
+| Perpendicular MAE (m/s) | 0.603 | 0.546 | 0.523 | **13.3%** |
+| Vector RMSE (m/s) | 2.179 | 1.440 | 1.393 | **36.1%** |
 
 ---
 

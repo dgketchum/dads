@@ -1,4 +1,4 @@
-# MVP -- Wind Bias-Correction
+# MVP -- RTMA Wind Bias-Correction
 
 The Wind MVP is a station-graph GNN (with MLP baseline) for RTMA wind bias correction over the Pacific Northwest. Given an RTMA wind estimate, terrain context, and neighboring station information, the model predicts a vector correction $(\hat{\delta}_{par}, \hat{\delta}_{perp})$ that corrects both wind speed and direction biases.
 
@@ -39,24 +39,26 @@ Both MVPs correct RTMA biases using terrain and station observations, but differ
 
 ## Current Status
 
-The MLP baseline (Step 1 of the ablation ladder) is complete. GNN experiments (Steps 2--4) are pending.
+Steps 1--2 of the ablation ladder are complete. Step 3 (GNN + Sx + flow-terrain) is in progress; Step 4 (2-hop) is pending.
 
-### MLP Baseline Results (Step 1)
+### Ablation Results
 
-| Component | RTMA Baseline | MLP Corrected | Reduction |
-|-----------|---------------|---------------|-----------|
-| Parallel MAE (m/s) | 1.371 | 0.686 | **50.0%** |
-| Perpendicular MAE (m/s) | 0.603 | 0.546 | **9.5%** |
-| Vector RMSE (m/s) | 2.179 | 1.440 | **33.9%** |
+| Component | RTMA Baseline | MLP (Step 1) | GNN no-Sx (Step 2) |
+|-----------|---------------|--------------|---------------------|
+| Parallel MAE (m/s) | 1.371 | 0.686 | **0.656** |
+| Perpendicular MAE (m/s) | 0.603 | 0.546 | **0.523** |
+| Vector RMSE (m/s) | 2.179 | 1.440 | **1.393** |
+| val_loss | — | 0.362 | **0.339** |
 
 RTMA systematically overestimates wind speed by ~1.2 m/s (negative parallel delta = obs < RTMA). The perpendicular bias is smaller but non-trivial.
 
 ## Key Findings So Far
 
 - **Parallel (speed) correction is strong.** The MLP halves along-wind MAE (1.37 to 0.69 m/s), learning the systematic RTMA speed overestimation from local features alone.
-- **Perpendicular (direction) correction is weak.** Cross-wind MAE drops only 9.5% -- directional biases depend on terrain channeling and upwind neighbors, which an MLP without spatial context cannot capture.
-- **No overfitting.** Train loss (0.34) and val loss (0.36) are close, confirming the temporal split generalizes well.
-- **Vector RMSE 1.44 m/s is the baseline to beat.** The GNN experiments should improve primarily on the perpendicular component via neighbor attention and Sx terrain features.
+- **Neighbor attention helps both components.** The GNN (Step 2) improves parallel MAE by a further 4.4% (0.686 → 0.656) and perpendicular MAE by 4.2% (0.546 → 0.523) over the MLP, despite using the same 20 node features. The spatial context from edge-gated attention benefits speed correction as well as direction.
+- **Vector RMSE down 36%.** The GNN reduces RTMA vector RMSE from 2.18 to 1.39 m/s -- a 3.3% improvement over the MLP's 1.44 m/s.
+- **No overfitting.** Train and val losses remain close across both experiments, confirming the temporal split generalizes well.
+- **Sx and flow-terrain features are the next test.** Step 3 adds 37 directional terrain features (Winstral Sx + flow-terrain interactions) to test whether explicit terrain exposure information further improves corrections.
 
 ## Chapters
 
