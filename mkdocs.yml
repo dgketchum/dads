@@ -1,0 +1,80 @@
+site_name: DADS
+site_description: Data Assimilation and DownScaling — spatial meteorological prediction
+site_url: https://dads.readthedocs.io
+repo_url: https://github.com/dgketchum/dads
+repo_name: dgketchum/dads
+
+theme:
+  name: material
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: teal
+      accent: teal
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: teal
+      accent: teal
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  font:
+    text: Inter
+    code: JetBrains Mono
+  icon:
+    repo: fontawesome/brands/github
+  features:
+    - navigation.sections
+    - navigation.expand
+    - navigation.instant
+    - navigation.top
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+    - header.autohide
+
+plugins:
+  - search
+
+markdown_extensions:
+  - tables
+  - fenced_code
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.arithmatex:
+      generic: true
+  - admonition
+  - pymdownx.details
+  - toc:
+      permalink: true
+
+extra_javascript:
+  - javascripts/mathjax.js
+  - https://unpkg.com/mathjax@3/es5/tex-mml-chtml.js
+  - https://unpkg.com/mermaid@10/dist/mermaid.min.js
+
+nav:
+  - Home: index.md
+  - System Architecture: architecture.md
+  - Data Provenance: data_provenance.md
+  - Data Cube Schema: cube_schema.md
+  - Algorithms: algorithms.md
+  - Design Decisions: decisions.md
+  - MVP – RTMA Humidity:
+    - Overview: mvp/index.md
+    - System Architecture: mvp/architecture.md
+    - Data Provenance: mvp/data_provenance.md
+    - Algorithms: mvp/algorithms.md
+  - MVP – RTMA Wind:
+    - Overview: wind/index.md
+    - System Architecture: wind/architecture.md
+    - Data Provenance: wind/data_provenance.md
+    - Algorithms: wind/algorithms.md
