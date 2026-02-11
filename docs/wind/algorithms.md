@@ -42,7 +42,35 @@ The same argument as the [Humidity MVP](../mvp/algorithms.md#why-bias-correction
 
 ---
 
+## GNN Overview
+
+The model learns to correct RTMA wind at station locations by combining each station's own features with information gathered from nearby stations. In plain language, here is what happens end to end:
+
+**1. Encode each station independently.** Every station's raw features (RTMA weather, terrain, Sx sheltering, etc.) are passed through a small MLP to produce a hidden vector. At this point no station knows anything about its neighbors.
+
+**2. Each neighbor makes a case for how relevant it is.** For every edge j→i (neighbor j reporting to target station i), the model concatenates three things: the target's hidden state, the neighbor's hidden state, and the edge features (distance, bearing, elevation difference, upwind alignment). This combined vector goes through an MLP that outputs a single scalar — an importance score for that neighbor.
+
+**3. Scores become weights via softmax.** The importance scores for all neighbors of a given target station are passed through a softmax so they sum to 1. This is the attention — the model learns which neighbors matter most. A nearby upwind station on similar terrain might get weight 0.4, while a distant station behind a ridge gets 0.02.
+
+**4. Weighted sum produces context.** Each neighbor's hidden state is scaled by its attention weight and these are summed to produce a single context vector for the target station — a neighborhood summary of what surrounding stations collectively say about local conditions.
+
+**5. Merge local + context.** The target's own hidden state and the neighborhood context are concatenated and compressed back down through a merge MLP. If there are 2 hops, steps 2–5 repeat so that second-hop neighbors effectively see information from two edges away.
+
+**6. Predict.** The final output head takes the station's pre-attention representation alongside its post-attention representation and predicts two wind bias components (parallel and perpendicular to RTMA flow).
+
+### Edge selection
+
+The neighbor graph is built in two stages. First, a static k-NN map is precomputed once over the full station inventory using geographic distance (k=16). Second, on each training day the graph is pruned to only stations present in that day's active set — neighbors that didn't report are simply dropped, so the topology varies day to day.
+
+Importantly, **neighbor selection is purely spatial — wind direction does not determine which stations are connected.** All k=16 nearest neighbors are included regardless of whether they are upwind, downwind, or crosswind. What wind direction *does* control is a pair of edge features: `upwind_cos` and `upwind_sin`, which encode the angular relationship between the day's RTMA wind direction and the bearing from neighbor to target. The attention mechanism then learns to weight upwind neighbors more heavily when that context is informative — but this is a soft, learned preference, not a hard selection rule. A downwind neighbor on similar terrain may still receive substantial attention weight if the model finds it useful.
+
+Edge features combine static geometry (distance, bearing, delta-elevation) with these per-day dynamic upwind alignment components. Because edges are informed entirely by gridded RTMA fields and precomputed terrain — both of which have near-complete spatial coverage — missing data in edge construction is rare.
+
+---
+
 ## EdgeGatedAttention Mechanism
+
+The key distinction from standard graph attention (like GAT) is that **edge features directly participate in computing attention weights**. The model doesn't just ask "how similar are stations i and j?" — it asks "how similar are they *given that j is 12 km away, bearing northwest, 300 m higher, and directly upwind?*" The spatial and topographic relationship between two stations modulates how much one should influence the other. This is what "edge-gated" means: the edge attributes gate the flow of information between nodes.
 
 The core spatial aggregation layer (`models/wind_bias/gnn.py`):
 
@@ -267,11 +295,33 @@ Neighbor attention improves both components, not just perpendicular as initially
 
 ---
 
-## Inference Strategy
+## Gridded Inference
+
+The model is trained on station graphs but needs no station observations at inference time. Every input feature — RTMA weather fields, terrain, Sx sheltering indices, flow-terrain interactions — comes from gridded products that are available at any location. Station observations only ever appear in the training targets (the residual between observed and RTMA wind). This means the trained model can be applied directly to a regular grid to produce a wall-to-wall corrected wind field.
 
 !!! note "Forward-looking"
     Inference over the full RTMA grid is planned but not yet implemented.
 
-- **MLP mode**: trivially parallelizable. Each RTMA grid cell is treated as an independent node with the same feature vector as during training. A pointwise forward pass produces the correction at every cell.
-- **GNN mode**: define a k-NN graph over RTMA grid cells, compute static edge attributes (distance, bearing, delta_elevation) and dynamic edge attributes (upwind_cos, upwind_sin from RTMA wind). Run the full forward pass to produce a corrected wind vector field over the PNW domain.
-- **Output**: $\mathbf{w}_\text{corrected} = \mathbf{w}_\text{rtma} + \hat{\delta}_{par} \cdot \hat{e}_{par} + \hat{\delta}_{perp} \cdot \hat{e}_{perp}$ at every grid cell.
+### Approach
+
+**1. Build a grid graph.** Lay down nodes on the RTMA grid (or any desired output resolution) over the domain of interest. Each node's features are populated from the same sources used in training: RTMA analysis fields for that day, precomputed terrain attributes, and Sx values derived from terrain + the day's RTMA wind direction.
+
+**2. Connect neighbors.** Build edges using the same spatial k-NN logic used in training. For a regular grid the neighbor structure is uniform — each cell connects to its k nearest grid cells. Edge features (distance, bearing, delta-elevation, upwind alignment) are computed identically to training.
+
+**3. Run message passing.** The trained node encoder, attention layers, and output head process the grid graph exactly as they processed station graphs. Each grid cell attends to its neighbors, gathers context about the surrounding terrain and weather regime, and predicts a wind correction.
+
+**4. Apply corrections.** The model outputs parallel and perpendicular bias components at each grid cell. These are projected back into u/v space using the RTMA flow direction at that cell:
+
+$$
+\mathbf{w}_\text{corrected} = \mathbf{w}_\text{rtma} + \hat{\delta}_{par} \cdot \hat{e}_{par} + \hat{\delta}_{perp} \cdot \hat{e}_{perp}
+$$
+
+### MLP mode
+
+For the MLP baseline (no graph), inference is trivially parallelizable — each RTMA grid cell is treated as an independent node with the same feature vector as during training. A pointwise forward pass produces the correction at every cell.
+
+### Domain shift considerations
+
+Training graphs are sparse and irregular (thousands of stations, unevenly spaced) while inference graphs are dense and regular (potentially millions of grid cells at uniform spacing). The attention weights learned on sparse station neighborhoods may behave differently on dense grid neighborhoods — for example, a model trained with neighbors typically 10–50 km away will see neighbors at ~2.5 km spacing on the RTMA grid. Whether this transfer works well is an empirical question. Potential mitigations include training on subsampled grid patches or fine-tuning on grid-structured inputs.
+
+A second consideration is that training stations are not uniformly distributed — they cluster in valleys and near population centers. The model may have less exposure to ridgetop or remote terrain configurations. Spatial holdout evaluation partially tests this, but gridded inference will inevitably extrapolate to terrain positions underrepresented in the station network.

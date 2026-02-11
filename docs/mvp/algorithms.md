@@ -28,6 +28,22 @@ Run 4 tested direct prediction of $\log(e_{a,\text{obs}})$ without humidity inpu
 
 ---
 
+## U-Net Overview
+
+RTMA is a ~2.5 km gridded weather analysis, but its humidity field has systematic biases — especially in complex terrain where valley inversions, elevation gradients, and land cover effects operate at scales finer than the analysis can resolve. We correct these biases using a small U-Net trained on station observations.
+
+**What the model sees.** For each training sample the model receives a 64×64 pixel patch (~160 km) of gridded inputs centered on a weather station. The input channels include RTMA weather fields (temperature, dewpoint, wind, pressure, cloud cover, precipitation, vapor pressure), terrain attributes (elevation, slope, aspect, TPI), clear-sky solar radiation, day of year, and Landsat surface reflectance composites. Everything comes from gridded products that are available wall to wall — no station observations appear in the inputs.
+
+**What the model predicts.** The U-Net outputs a full 64×64 correction field, but during training only the center pixel is supervised. The target is the log-space humidity residual between the station observation and RTMA at that location: `delta_log_ea = log(ea_obs) - log(ea_rtma)`. Working in log space keeps the correction multiplicative and stabilizes variance across dry and wet regimes.
+
+**How the U-Net works.** The encoder compresses the patch through two rounds of convolution + pooling, capturing progressively larger spatial context. At the bottom (16×16), the model has a wide receptive field — it can see terrain and weather patterns tens of kilometers away from the station. The decoder then upsamples back to full resolution through transposed convolutions, with skip connections that carry fine-grained detail from the encoder. The final 1×1 convolution produces a single-channel correction field.
+
+**Why a U-Net for point targets.** The architecture is fully convolutional, so it naturally produces spatially coherent corrections — neighboring pixels get similar adjustments unless the input features (terrain, land cover) change. A total-variation penalty on the output field reinforces this smoothness. Training on station points scattered across the domain teaches the model the relationship between gridded covariates and humidity bias; at inference the same convolutions slide over the entire grid to produce a wall-to-wall correction.
+
+**What matters most.** Ablation experiments show that terrain covariates are the single largest contributor — they tell the model where RTMA's smooth analysis misrepresents local conditions. Humidity inputs (dewpoint, vapor pressure) provide a useful but modest additional boost. Without terrain, the model barely beats raw RTMA.
+
+---
+
 ## UNetSmall Architecture
 
 A minimal 2-level encoder-decoder with skip connections, designed for fast iteration:
@@ -218,3 +234,34 @@ The learning rate follows a ReduceLROnPlateau schedule:
 | Min LR | $10^{-6}$ |
 
 In Run 5 (24 epochs), the scheduler had not yet triggered a reduction -- the model was still improving at the initial learning rate. With early stopping patience of 20, training can continue for up to 100 epochs.
+
+---
+
+## Gridded Inference
+
+The model is trained on patches centered on weather stations, but it needs no station observations at inference time. Every input channel — RTMA weather fields, terrain, solar radiation, Landsat composites, day of year — is a gridded product available at every pixel in the domain. Station observations only appear in the training targets (the residual between observed and RTMA humidity). This means the trained model can be applied directly to the full grid to produce a wall-to-wall corrected humidity field.
+
+!!! note "Forward-looking"
+    Gridded inference over the full RTMA domain is planned but not yet implemented.
+
+### Approach
+
+**1. Tile the domain.** Divide the full RTMA grid into overlapping patches (e.g., 64×64 with some overlap stride). For each patch, assemble the same input channels used in training: RTMA bands for that day, static terrain, solar radiation for that DOY, and the seasonal Landsat composite.
+
+**2. Run the U-Net.** Each patch goes through the same forward pass used in training. Because the model is fully convolutional, it outputs a correction value at every pixel in the patch — not just at the center where supervision happened during training. The spatial coherence enforced by the convolutional architecture and the TV smoothness penalty means the correction field varies smoothly, changing only where the input features (terrain, land cover) change.
+
+**3. Stitch and blend.** Overlapping patch outputs are blended (e.g., linear ramp in the overlap zone) to eliminate edge artifacts, producing a single seamless correction grid over the full domain.
+
+**4. Apply corrections.** The correction grid is applied back to RTMA:
+
+$$
+e_{a,\text{corrected}} = e_{a,\text{rtma}} \cdot \exp(\widehat{\Delta\!\log e_a})
+$$
+
+The log-space residual becomes a multiplicative adjustment, guaranteeing positive output values.
+
+### Domain shift considerations
+
+During training, every patch is centered on a station, so the model always sees a station at the center pixel. At inference, most patches are centered on arbitrary grid locations with no station nearby. The model must generalize from "correct RTMA where I have a station" to "correct RTMA everywhere based on the same covariate patterns." This works because the model learns the mapping from gridded covariates (terrain shape, weather regime, land cover) to bias — not from station identity. A valley with a temperature inversion signature in the RTMA fields should receive a similar correction whether or not a station happens to sit there.
+
+A second consideration is station density. Stations cluster in valleys and near population centers, so the model has more training signal in those areas. Corrections in remote ridgetops or deep wilderness are extrapolations — the model applies patterns learned elsewhere to terrain configurations it may have seen less often. Spatial holdout evaluation (holding out entire stations) partially tests this generalization.
