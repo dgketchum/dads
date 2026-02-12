@@ -68,6 +68,7 @@ nav:
   - Data Cube Schema: cube_schema.md
   - Algorithms: algorithms.md
   - Design Decisions: decisions.md
+  - MADIS Observation QC: madis_qaqc.md
   - MVP – RTMA Humidity:
     - Overview: mvp/index.md
     - System Architecture: mvp/architecture.md
