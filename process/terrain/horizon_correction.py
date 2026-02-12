@@ -392,8 +392,10 @@ def run_validate(tile, mapset=MAPSET):
 
     # --- compare interpolated vs full-365 ---
     print(f"[validate] {tile}: comparing interpolated vs full-365 ...")
-    max_errors = []
-    mean_errors = []
+    max_ratio_err = []
+    mean_ratio_err = []
+    max_abs_err = []
+    mean_abs_err = []
     for i, doy in enumerate(range(1, 366)):
         hz_path = os.path.join(hz_full_dir, f"irradiance_day_{doy}_{tile}.tif")
         nohz_path = os.path.join(existing_dir, f"irradiance_day_{doy}_{tile}.tif")
@@ -405,18 +407,36 @@ def run_validate(tile, mapset=MAPSET):
             true_ratio = np.where(nohz_data > 0, hz_data / nohz_data, 1.0)
         true_ratio = np.clip(true_ratio, 0.0, 1.0)
 
-        err = np.abs(interp_ratios[i] - true_ratio)
-        max_errors.append(np.max(err))
-        mean_errors.append(np.mean(err))
+        ratio_err = np.abs(interp_ratios[i] - true_ratio)
+        max_ratio_err.append(np.max(ratio_err))
+        mean_ratio_err.append(np.mean(ratio_err))
 
-    max_errors = np.array(max_errors)
-    mean_errors = np.array(mean_errors)
-    p99 = np.percentile(max_errors, 99)
+        # absolute error in Wh/m² (what actually matters)
+        truth_irrad = nohz_data * true_ratio
+        interp_irrad = nohz_data * interp_ratios[i]
+        abs_err = np.abs(interp_irrad - truth_irrad)
+        max_abs_err.append(np.max(abs_err))
+        mean_abs_err.append(np.mean(abs_err))
 
-    print(f"[validate] {tile}: max pixel error = {max_errors.max():.4f}")
-    print(f"[validate] {tile}: mean pixel error = {mean_errors.mean():.6f}")
-    print(f"[validate] {tile}: p99 max error = {p99:.4f}")
-    print(f"[validate] {tile}: worst DOY = {np.argmax(max_errors) + 1}")
+    max_ratio_err = np.array(max_ratio_err)
+    mean_ratio_err = np.array(mean_ratio_err)
+    max_abs_err = np.array(max_abs_err)
+    mean_abs_err = np.array(mean_abs_err)
+
+    print(f"[validate] {tile}: --- ratio error (unitless) ---")
+    print(f"[validate] {tile}: max ratio error = {max_ratio_err.max():.4f}")
+    print(f"[validate] {tile}: mean ratio error = {mean_ratio_err.mean():.6f}")
+    print(
+        f"[validate] {tile}: p99 max ratio error = {np.percentile(max_ratio_err, 99):.4f}"
+    )
+    print(f"[validate] {tile}: worst ratio DOY = {np.argmax(max_ratio_err) + 1}")
+    print(f"[validate] {tile}: --- absolute error (Wh/m²) ---")
+    print(f"[validate] {tile}: max abs error = {max_abs_err.max():.1f}")
+    print(f"[validate] {tile}: mean abs error = {mean_abs_err.mean():.2f}")
+    print(
+        f"[validate] {tile}: p99 max abs error = {np.percentile(max_abs_err, 99):.1f}"
+    )
+    print(f"[validate] {tile}: worst abs DOY = {np.argmax(max_abs_err) + 1}")
     print(f"[validate] temp files in {tmpdir}")
 
     # clean up GRASS horizon rasters
