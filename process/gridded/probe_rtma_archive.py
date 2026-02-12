@@ -38,10 +38,15 @@ _PREFIX_TEMPLATES: dict[str, str] = {
     "urma": "urma2p5.{ymd}/",
 }
 
-# File-stem pattern: e.g. rtma2p5.t00z.2dvaranl_ndfd
+# File-stem pattern: e.g. rtma2p5.t00z.2dvaranl_ndfd.grb2_wexp
+# The suffix group captures .grb2, .grb2_ext, or .grb2_wexp but NOT .idx sidecars.
 _ANL_PATTERN: dict[str, re.Pattern[str]] = {
-    "rtma": re.compile(r"rtma2p5\.t(\d{2})z\.2dvar(anl|err|ges)_ndfd(.*)"),
-    "urma": re.compile(r"urma2p5\.t(\d{2})z\.2dvar(anl|err|ges)_ndfd(.*)"),
+    "rtma": re.compile(
+        r"rtma2p5\.t(\d{2})z\.2dvar(anl|err|ges)_ndfd(\.grb2(?:_\w+)?)$"
+    ),
+    "urma": re.compile(
+        r"urma2p5\.t(\d{2})z\.2dvar(anl|err|ges)_ndfd(\.grb2(?:_\w+)?)$"
+    ),
 }
 
 # Known search bounds for binary-search of archive start
