@@ -49,7 +49,7 @@ SPARSE_DOYS = [
 DEM_DIR = "/data/ssd2/dads/dem/dem_5071"
 TERRAIN_DIR = "/data/ssd2/dads/dem"
 RSUN_DIR = "/nas/dads/dem/rsun_irradiance"
-MAPSET = "PERMANENT"
+MAPSET = "dads_map"
 HORIZON_STEP = 5
 HORIZON_MAXDIST = 50000
 
