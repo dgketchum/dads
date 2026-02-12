@@ -106,25 +106,27 @@ def _seconds_until_window(schedule: str, weekend_free: bool) -> float:
     """Seconds to sleep before the next download window opens."""
     now = datetime.now()
 
-    # If weekend-free and tomorrow is Saturday, sleep until midnight Friday
-    if weekend_free:
-        # Check if we'll hit a weekend before the next weeknight window
-        for day_offset in range(7):
-            future = now + timedelta(days=day_offset)
-            if future.weekday() >= 5:
-                # Weekend day — entire day is open
-                target = datetime.combine(future.date(), datetime.min.time())
-                if target > now:
-                    return (target - now).total_seconds()
-                return 0.0
-
+    # Next scheduled weeknight window
     start_m, _ = _parse_schedule(schedule)
     start_time = datetime.combine(now.date(), datetime.min.time()) + timedelta(
         minutes=start_m
     )
     if start_time <= now:
         start_time += timedelta(days=1)
-    return (start_time - now).total_seconds()
+    wait_weeknight = (start_time - now).total_seconds()
+
+    if not weekend_free:
+        return wait_weeknight
+
+    # Next weekend midnight (entire weekend days are open)
+    for day_offset in range(1, 7):
+        future = now + timedelta(days=day_offset)
+        if future.weekday() >= 5:
+            target = datetime.combine(future.date(), datetime.min.time())
+            wait_weekend = (target - now).total_seconds()
+            return min(wait_weeknight, wait_weekend)
+
+    return wait_weeknight
 
 
 def _wait_for_window(schedule: str | None, weekend_free: bool) -> None:
