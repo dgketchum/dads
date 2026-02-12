@@ -19,9 +19,31 @@ from __future__ import annotations
 
 import argparse
 import os
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
+
+
+def _load_gsi_reject_set(paths: list[str]) -> set[str]:
+    """Parse GSI-fix reject-list files and return a set of station IDs.
+
+    Format: 3 header lines, then ``'STAID   | itype=...`` per line.
+    Station ID is at ``line[1:9].strip()``.
+    """
+    ids: set[str] = set()
+    for p in paths:
+        p = str(Path(p).expanduser())
+        with open(p) as fh:
+            lines = fh.readlines()
+        for line in lines[3:]:
+            line = line.strip()
+            if len(line) < 9:
+                continue
+            sid = line[1:9].strip()
+            if sid:
+                ids.add(sid)
+    return ids
 
 
 def _read_station_day_table(path: str) -> pd.DataFrame:
@@ -56,10 +78,12 @@ def build_patch_index(
     stations_csv: str,
     out_parquet: str,
     min_ea_kpa: float = 1e-4,
+    max_abs_delta: float | None = 3.0,
     require_tif_root: str | None = None,
     station_id_col: str = "fid",
     lat_col: str = "latitude",
     lon_col: str = "longitude",
+    reject_lists: list[str] | None = None,
 ) -> str:
     sdf = _read_station_day_table(station_day_parquet)
     # Keep only humidity MVP columns.
@@ -94,6 +118,19 @@ def build_patch_index(
     )
     merged = merged.dropna(subset=["latitude", "longitude"])
 
+    # GSI reject-list filtering
+    if reject_lists:
+        reject_ids = _load_gsi_reject_set(reject_lists)
+        n_before = len(merged)
+        n_stations_before = merged["fid"].nunique()
+        merged = merged.loc[~merged["fid"].isin(reject_ids)].copy()
+        n_drop_rows = n_before - len(merged)
+        n_drop_sta = n_stations_before - merged["fid"].nunique()
+        print(
+            f"  reject-list filter: dropped {n_drop_sta:,} stations, "
+            f"{n_drop_rows:,} rows ({n_drop_rows / n_before * 100:.1f}%)"
+        )
+
     # Compute delta_log_ea.
     if "y_obs" in merged.columns:
         ea_obs = pd.to_numeric(merged["y_obs"], errors="coerce")
@@ -118,6 +155,15 @@ def build_patch_index(
     merged["ea_rtma"] = ea_rtma.loc[merged.index].values
     merged["delta_log_ea"] = np.log(merged["ea_obs"]) - np.log(merged["ea_rtma"])
     merged["log_ea_obs"] = np.log(merged["ea_obs"])
+
+    if max_abs_delta is not None:
+        n_before = len(merged)
+        merged = merged.loc[merged["delta_log_ea"].abs() <= float(max_abs_delta)].copy()
+        n_drop = n_before - len(merged)
+        if n_drop:
+            print(
+                f"  outlier filter: dropped {n_drop:,} rows with |delta_log_ea| > {max_abs_delta}"
+            )
 
     merged["day"] = pd.to_datetime(merged["day"], errors="coerce").dt.normalize()
     merged = merged.dropna(subset=["day"])
@@ -161,6 +207,12 @@ def _parse_args() -> argparse.Namespace:
         help="Minimum ea threshold to allow log residuals.",
     )
     p.add_argument(
+        "--max-abs-delta",
+        type=float,
+        default=3.0,
+        help="Drop rows with |delta_log_ea| above this threshold (default 3.0).",
+    )
+    p.add_argument(
         "--require-tif-root",
         default=None,
         help="If set, filter rows to those with RTMA_YYYYMMDD.tif present.",
@@ -176,6 +228,12 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument(
         "--lon-col", default="longitude", help="Longitude column in --stations-csv."
     )
+    p.add_argument(
+        "--reject-list",
+        nargs="*",
+        default=None,
+        help="GSI-fix reject-list file(s). Stations in these lists are dropped.",
+    )
     return p.parse_args()
 
 
@@ -186,10 +244,12 @@ def main() -> None:
         stations_csv=a.stations_csv,
         out_parquet=a.out,
         min_ea_kpa=float(a.min_ea_kpa),
+        max_abs_delta=float(a.max_abs_delta) if a.max_abs_delta else None,
         require_tif_root=a.require_tif_root,
         station_id_col=str(a.station_id_col),
         lat_col=str(a.lat_col),
         lon_col=str(a.lon_col),
+        reject_lists=a.reject_list,
     )
 
 
