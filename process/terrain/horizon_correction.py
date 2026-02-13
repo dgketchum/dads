@@ -10,8 +10,6 @@ import argparse
 import os
 import subprocess
 import tempfile
-from multiprocessing import Pool
-
 import numpy as np
 import rasterio
 from scipy.interpolate import interp1d
@@ -532,15 +530,14 @@ def _correct_single_tile(args):
     return tile
 
 
-def run_correct(num_tiles=4, nprocs_per_tile=4, tiles=None, mapset=MAPSET):
-    """Apply horizon correction to existing PNW tiles."""
+def run_correct(nprocs=16, tiles=None, mapset=MAPSET):
+    """Apply horizon correction to existing PNW tiles (serial)."""
     target = tiles if tiles else PNW_EXISTING
-    args_list = [(t, mapset, nprocs_per_tile) for t in target]
-    print(f"[correct] {len(args_list)} tiles, {num_tiles} parallel")
+    print(f"[correct] {len(target)} tiles, serial, r.sun nprocs={nprocs}")
 
-    with Pool(processes=num_tiles) as pool:
-        for result in pool.imap_unordered(_correct_single_tile, args_list):
-            print(f"[correct] completed: {result}")
+    for i, tile in enumerate(target):
+        print(f"[correct] tile {i + 1}/{len(target)}: {tile}")
+        _correct_single_tile((tile, mapset, nprocs))
 
 
 # ---------------------------------------------------------------------------
@@ -610,15 +607,14 @@ def _generate_single_tile(args):
     return tile
 
 
-def run_generate(num_tiles=4, nprocs_per_tile=4, tiles=None, mapset=MAPSET):
-    """Generate rsun with horizons for missing PNW tiles."""
+def run_generate(nprocs=16, tiles=None, mapset=MAPSET):
+    """Generate rsun with horizons for missing PNW tiles (serial)."""
     target = tiles if tiles else PNW_MISSING
-    args_list = [(t, mapset, nprocs_per_tile) for t in target]
-    print(f"[generate] {len(args_list)} tiles, {num_tiles} parallel")
+    print(f"[generate] {len(target)} tiles, serial, r.sun nprocs={nprocs}")
 
-    with Pool(processes=num_tiles) as pool:
-        for result in pool.imap_unordered(_generate_single_tile, args_list):
-            print(f"[generate] completed: {result}")
+    for i, tile in enumerate(target):
+        print(f"[generate] tile {i + 1}/{len(target)}: {tile}")
+        _generate_single_tile((tile, mapset, nprocs))
 
 
 # ---------------------------------------------------------------------------
@@ -637,15 +633,13 @@ def main():
 
     # correct
     p_corr = sub.add_parser("correct", help="Apply correction to existing tiles")
-    p_corr.add_argument("--num-tiles", type=int, default=4, help="Parallel tiles")
-    p_corr.add_argument("--nprocs", type=int, default=4, help="r.sun nprocs per tile")
+    p_corr.add_argument("--nprocs", type=int, default=16, help="r.sun nprocs")
     p_corr.add_argument("--tiles", nargs="+", default=None, help="Specific tiles")
     p_corr.add_argument("--mapset", default=MAPSET)
 
     # generate
     p_gen = sub.add_parser("generate", help="Generate missing tiles from scratch")
-    p_gen.add_argument("--num-tiles", type=int, default=4, help="Parallel tiles")
-    p_gen.add_argument("--nprocs", type=int, default=4, help="r.sun nprocs per tile")
+    p_gen.add_argument("--nprocs", type=int, default=16, help="r.sun nprocs")
     p_gen.add_argument("--tiles", nargs="+", default=None, help="Specific tiles")
     p_gen.add_argument("--mapset", default=MAPSET)
 
@@ -654,19 +648,9 @@ def main():
     if args.mode == "validate":
         run_validate(args.tile, mapset=args.mapset)
     elif args.mode == "correct":
-        run_correct(
-            num_tiles=args.num_tiles,
-            nprocs_per_tile=args.nprocs,
-            tiles=args.tiles,
-            mapset=args.mapset,
-        )
+        run_correct(nprocs=args.nprocs, tiles=args.tiles, mapset=args.mapset)
     elif args.mode == "generate":
-        run_generate(
-            num_tiles=args.num_tiles,
-            nprocs_per_tile=args.nprocs,
-            tiles=args.tiles,
-            mapset=args.mapset,
-        )
+        run_generate(nprocs=args.nprocs, tiles=args.tiles, mapset=args.mapset)
 
 
 if __name__ == "__main__":
