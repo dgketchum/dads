@@ -72,6 +72,9 @@ class WindGNNConfig:
     spatial_holdout_frac: float = 0.1
     spatial_holdout_seed: int = 99
 
+    # QC filtering
+    accepted_fids_path: str | None = None
+
     # Runtime
     device: str | None = None
     num_workers: int = 0
@@ -113,6 +116,7 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--seed", type=int, default=None)
     p.add_argument("--device", default=None)
     p.add_argument("--num-workers", type=int, default=None)
+    p.add_argument("--accepted-fids-path", default=None)
     return p.parse_args()
 
 
@@ -136,6 +140,7 @@ def _build_config(args: argparse.Namespace) -> WindGNNConfig:
         "seed": "seed",
         "device": "device",
         "num_workers": "num_workers",
+        "accepted_fids_path": "accepted_fids_path",
     }
     for cli_name, cfg_name in cli_map.items():
         val = getattr(args, cli_name, None)
@@ -196,6 +201,23 @@ def main() -> None:
     with open(os.path.join(cfg.out_dir, "holdout_fids.json"), "w") as f:
         json.dump(sorted(holdout_fids), f)
 
+    # RTMA uselist filtering (optional)
+    rejected_fids: set[str] = set()
+    if cfg.accepted_fids_path:
+        with open(cfg.accepted_fids_path) as f:
+            accepted_fids = set(json.load(f))
+        all_fids = set(df["fid"].unique())
+        rejected_fids = all_fids - accepted_fids
+        print(
+            f"RTMA uselist: {len(accepted_fids)} accepted, "
+            f"{len(rejected_fids)} rejected from {len(all_fids)} total"
+        )
+        with open(os.path.join(cfg.out_dir, "accepted_fids.json"), "w") as f:
+            json.dump(sorted(accepted_fids), f)
+
+    train_exclude = holdout_fids | rejected_fids
+    val_exclude = rejected_fids if rejected_fids else None
+
     if cfg.graph_dir:
         print(f"Using precomputed graphs from {cfg.graph_dir}")
         print("Building training dataset...")
@@ -205,7 +227,7 @@ def main() -> None:
             use_flow_terrain=cfg.use_flow_terrain,
             use_graph=cfg.use_graph,
             train_days=train_days,
-            exclude_fids=holdout_fids,
+            exclude_fids=train_exclude,
         )
         train_ds.save_norm_stats(os.path.join(cfg.out_dir, "norm_stats.json"))
 
@@ -217,6 +239,7 @@ def main() -> None:
             use_graph=cfg.use_graph,
             norm_stats=train_ds.norm_stats,
             train_days=val_days,
+            exclude_fids=val_exclude,
         )
     else:
         print("Building training dataset (on-the-fly graph construction)...")
@@ -228,7 +251,7 @@ def main() -> None:
             use_sx=cfg.use_sx,
             use_flow_terrain=cfg.use_flow_terrain,
             train_days=train_days,
-            exclude_fids=holdout_fids,
+            exclude_fids=train_exclude,
         )
         train_ds.save_norm_stats(os.path.join(cfg.out_dir, "norm_stats.json"))
 
@@ -242,6 +265,7 @@ def main() -> None:
             use_flow_terrain=cfg.use_flow_terrain,
             norm_stats=train_ds.norm_stats,
             train_days=val_days,
+            exclude_fids=val_exclude,
         )
 
     print(f"Train: {len(train_ds)} days, Val: {len(val_ds)} days")
