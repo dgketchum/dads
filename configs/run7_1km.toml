@@ -1,0 +1,28 @@
+name = "run7_1km"
+description = "Run 7 — 1km EPSG:5070 resolution experiment (compare vs Run 3 at 2.5km)"
+features = ["rtma_all", "terrain", "rsun", "landsat"]
+
+base = 32
+lr = 3e-4
+tv_weight = 1e-3
+batch_size = 64
+epochs = 10
+
+patch_size = 64
+val_frac = 0.2
+seed = 42
+target_col = "delta_log_ea"
+start_date = "2024-01-01"
+end_date = "2024-12-31"
+decoded = true
+
+patch_index = "/nas/dads/mvp/patch_index_ea_pnw_2024.parquet"
+tif_root = "/nas/dads/mvp/rtma_1km_pnw_2024"
+out_dir = "/nas/dads/mvp/unet_ea_pnw_2024_1km"
+terrain_tif = "/nas/dads/mvp/terrain_pnw_1km.tif"
+rsun_tif = "/nas/dads/mvp/rsun_pnw_1km.tif"
+landsat_tif = "/nas/dads/mvp/landsat_pnw_1km.tif"
+
+device = "cuda:0"
+num_workers = 2
+preload = true

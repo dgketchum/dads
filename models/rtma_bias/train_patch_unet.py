@@ -136,6 +136,7 @@ def _build_config(args: argparse.Namespace) -> ExperimentConfig:
         "target_col": "target_col",
         "start_date": "start_date",
         "end_date": "end_date",
+        "decoded": "decoded",
     }
     for cli_name, cfg_name in _cli_map.items():
         val = getattr(args, cli_name, None)
@@ -215,6 +216,7 @@ def main() -> None:
         rtma_channels=rtma_channels,
         start_date=cfg.start_date,
         end_date=cfg.end_date,
+        decoded=cfg.decoded,
     )
     dm.setup()
 

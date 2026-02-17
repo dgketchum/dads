@@ -125,6 +125,7 @@ class ExperimentConfig:
     device: str | None = None
     num_workers: int = 2
     preload: bool = True
+    decoded: bool = False
 
     # ── Derived properties ──────────────────────────────────────────────
 

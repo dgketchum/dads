@@ -21,6 +21,7 @@ import rasterio
 from rasterio.warp import Resampling, reproject
 
 from prep.build_terrain_grid import RTMA_CRS, _pnw_rtma_transform_and_shape
+from prep.pnw_1km_grid import PNW_1KM_CRS, PNW_1KM_SHAPE, PNW_1KM_TRANSFORM
 
 LANDSAT_DIR = "/nas/dads/landsat_composites"
 YEARS = list(range(1987, 2026))
@@ -128,9 +129,89 @@ def build_landsat(landsat_dir: str, out_tif: str) -> str:
     return out_tif
 
 
+def build_landsat_1km(landsat_dir: str, out_tif: str) -> str:
+    """Build 35-band climatological Landsat composite on the 1 km PNW grid.
+
+    Source composites are already EPSG:5070 1 km, so this is mostly a clip +
+    reproject (handles any minor CRS/extent differences).
+    """
+    H, W = PNW_1KM_SHAPE
+    tf = PNW_1KM_TRANSFORM
+    dst_crs = PNW_1KM_CRS
+    print(f"Target 1 km grid: {W}×{H}")
+
+    ref_path = os.path.join(landsat_dir, f"{YEARS[0]}_p0.tif")
+    with rasterio.open(ref_path) as ref:
+        src_crs = ref.crs
+        src_tf = ref.transform
+        src_h, src_w = ref.height, ref.width
+    print(f"Source grid: {src_w}×{src_h}, CRS: {src_crs}")
+
+    os.makedirs(os.path.dirname(out_tif) or ".", exist_ok=True)
+    profile = {
+        "driver": "GTiff",
+        "dtype": "float32",
+        "count": TOTAL_BANDS,
+        "height": H,
+        "width": W,
+        "crs": dst_crs,
+        "transform": tf,
+        "compress": "lzw",
+        "tiled": True,
+        "blockxsize": 256,
+        "blockysize": 256,
+        "nodata": float("nan"),
+    }
+
+    with rasterio.open(out_tif, "w", **profile) as dst:
+        out_band = 0
+        for p in range(PERIODS):
+            paths = []
+            for yr in YEARS:
+                fp = os.path.join(landsat_dir, f"{yr}_p{p}.tif")
+                if os.path.exists(fp):
+                    paths.append(fp)
+            print(f"  Period {p}: {len(paths)} files")
+
+            for b in range(BANDS):
+                stack = np.empty((len(paths), src_h, src_w), dtype="float32")
+                for i, fp in enumerate(paths):
+                    with rasterio.open(fp) as src:
+                        raw = src.read(b + 1)
+                    stack[i] = _descale_band(raw, b)
+
+                clim = np.nanmean(stack, axis=0)
+                del stack
+                clim = np.nan_to_num(clim, nan=0.0)
+
+                buf = np.full((H, W), np.nan, dtype="float32")
+                reproject(
+                    source=clim,
+                    destination=buf,
+                    src_transform=src_tf,
+                    src_crs=src_crs,
+                    dst_transform=tf,
+                    dst_crs=dst_crs,
+                    resampling=Resampling.bilinear,
+                    src_nodata=0.0,
+                    dst_nodata=np.nan,
+                )
+                del clim
+
+                out_band += 1
+                desc = f"p{p}_{BAND_NAMES[b].lower()}"
+                dst.write(buf, out_band)
+                dst.set_band_description(out_band, desc)
+
+            print(f"  Period {p} done ({out_band}/{TOTAL_BANDS} bands written)")
+
+    print(f"Landsat 1 km composite written: {out_tif} ({TOTAL_BANDS} bands, {H}×{W})")
+    return out_tif
+
+
 def _parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
-        description="Build RTMA-aligned climatological Landsat composite for PNW."
+        description="Build climatological Landsat composite for PNW."
     )
     p.add_argument(
         "--landsat-dir",
@@ -142,13 +223,22 @@ def _parse_args() -> argparse.Namespace:
         default="/nas/dads/mvp",
         help="Output directory",
     )
+    p.add_argument(
+        "--grid",
+        choices=["rtma", "1km"],
+        default="rtma",
+        help="Target grid: 'rtma' (EPSG:4326 ~2.5 km) or '1km' (EPSG:5070 1 km)",
+    )
     return p.parse_args()
 
 
 def main() -> None:
     a = _parse_args()
     os.makedirs(a.out_dir, exist_ok=True)
-    build_landsat(a.landsat_dir, os.path.join(a.out_dir, "landsat_pnw_rtma.tif"))
+    if a.grid == "1km":
+        build_landsat_1km(a.landsat_dir, os.path.join(a.out_dir, "landsat_pnw_1km.tif"))
+    else:
+        build_landsat(a.landsat_dir, os.path.join(a.out_dir, "landsat_pnw_rtma.tif"))
     print("Done.")
 
 

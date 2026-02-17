@@ -25,6 +25,11 @@ from rasterio.crs import CRS
 from rasterio.transform import Affine
 from rasterio.warp import Resampling, reproject
 
+from prep.pnw_1km_grid import (
+    PNW_1KM_CRS,
+    PNW_1KM_SHAPE,
+    PNW_1KM_TRANSFORM,
+)
 
 # ---------------------------------------------------------------------------
 # PNW bounds (cube-aligned) and RTMA grid constants
@@ -217,6 +222,88 @@ def build_terrain(dem_dir: str, out_tif: str) -> str:
     return out_tif
 
 
+def build_terrain_1km(dem_dir: str, out_tif: str) -> str:
+    """Mosaic DEM tiles, resample to 1 km EPSG:5070 PNW grid, compute terrain."""
+    H, W = PNW_1KM_SHAPE
+    tf = PNW_1KM_TRANSFORM
+    dst_crs = PNW_1KM_CRS
+    print(f"Target 1 km grid: {W}×{H}, transform: {tf}")
+
+    tiles = sorted(
+        os.path.join(dem_dir, f) for f in os.listdir(dem_dir) if f.endswith(".tif")
+    )
+    print(f"Found {len(tiles)} DEM tiles")
+
+    with tempfile.NamedTemporaryFile(suffix=".vrt", delete=False) as tmp:
+        vrt_path = tmp.name
+    try:
+        subprocess.run(
+            [
+                "gdalbuildvrt",
+                "-te",
+                str(PNW_WEST - 0.5),
+                str(PNW_SOUTH - 0.5),
+                str(PNW_EAST + 0.5),
+                str(PNW_NORTH + 0.5),
+                vrt_path,
+            ]
+            + tiles,
+            check=True,
+            capture_output=True,
+        )
+
+        dst_elev = np.full((H, W), np.nan, dtype="float32")
+        with rasterio.open(vrt_path) as src:
+            reproject(
+                source=rasterio.band(src, 1),
+                destination=dst_elev,
+                src_transform=src.transform,
+                src_crs=src.crs,
+                dst_transform=tf,
+                dst_crs=dst_crs,
+                resampling=Resampling.average,
+                dst_nodata=np.nan,
+            )
+        print(f"DEM resampled: valid pixels = {np.isfinite(dst_elev).sum()}")
+    finally:
+        os.unlink(vrt_path)
+
+    # Cell size is 1000 m
+    cell_m = 1000.0
+    slope_deg, aspect_rad = _horns_slope_aspect(dst_elev, cell_m)
+    aspect_sin = np.sin(aspect_rad).astype("float32")
+    aspect_cos = np.cos(aspect_rad).astype("float32")
+    tpi_4 = _compute_tpi(dst_elev, 4)
+    tpi_10 = _compute_tpi(dst_elev, 10)
+
+    nan_mask = ~np.isfinite(dst_elev)
+    for arr in [slope_deg, aspect_sin, aspect_cos, tpi_4, tpi_10]:
+        arr[nan_mask] = np.nan
+
+    bands = [dst_elev, slope_deg, aspect_sin, aspect_cos, tpi_4, tpi_10]
+    os.makedirs(os.path.dirname(out_tif) or ".", exist_ok=True)
+    profile = {
+        "driver": "GTiff",
+        "dtype": "float32",
+        "count": len(bands),
+        "height": H,
+        "width": W,
+        "crs": dst_crs,
+        "transform": tf,
+        "compress": "lzw",
+        "tiled": True,
+        "blockxsize": 256,
+        "blockysize": 256,
+        "nodata": float("nan"),
+    }
+    with rasterio.open(out_tif, "w", **profile) as dst:
+        for i, (arr, name) in enumerate(zip(bands, TERRAIN_BAND_NAMES), 1):
+            dst.write(arr, i)
+            dst.set_band_description(i, name)
+    print(f"Terrain 1 km written: {out_tif}  ({len(bands)} bands, {H}×{W})")
+    return out_tif
+
+
 # ---------------------------------------------------------------------------
 # Build RSUN GeoTIFF (365 bands, DOY-indexed)
 # ---------------------------------------------------------------------------
@@ -275,6 +362,61 @@ def build_rsun(rsun_dir: str, out_tif: str) -> str:
     return out_tif
 
 
+def build_rsun_1km(rsun_dir: str, out_tif: str) -> str:
+    """Clip/reproject 365 RSUN DOY grids to the 1 km EPSG:5070 PNW grid."""
+    H, W = PNW_1KM_SHAPE
+    tf = PNW_1KM_TRANSFORM
+    dst_crs = PNW_1KM_CRS
+
+    os.makedirs(os.path.dirname(out_tif) or ".", exist_ok=True)
+    profile = {
+        "driver": "GTiff",
+        "dtype": "float32",
+        "count": 365,
+        "height": H,
+        "width": W,
+        "crs": dst_crs,
+        "transform": tf,
+        "compress": "lzw",
+        "tiled": True,
+        "blockxsize": 256,
+        "blockysize": 256,
+        "nodata": float("nan"),
+    }
+
+    skipped = []
+    with rasterio.open(out_tif, "w", **profile) as dst:
+        for doy in range(1, 366):
+            fname = f"rsun_doy_{doy:03d}.tif"
+            path = os.path.join(rsun_dir, fname)
+            buf = np.full((H, W), np.nan, dtype="float32")
+            try:
+                with rasterio.open(path) as src:
+                    reproject(
+                        source=rasterio.band(src, 1),
+                        destination=buf,
+                        src_transform=src.transform,
+                        src_crs=src.crs,
+                        dst_transform=tf,
+                        dst_crs=dst_crs,
+                        resampling=Resampling.bilinear,
+                        src_nodata=src.nodata,
+                        dst_nodata=np.nan,
+                    )
+            except Exception as exc:
+                print(f"  WARNING: {fname} corrupt, filling with NaN: {exc}")
+                skipped.append(doy)
+            dst.write(buf, doy)
+            dst.set_band_description(doy, f"rsun_doy_{doy:03d}")
+            if doy % 50 == 0 or doy == 365:
+                print(f"  rsun 1km: {doy}/365", flush=True)
+    if skipped:
+        print(f"  WARNING: {len(skipped)} corrupt DOY(s) skipped: {skipped}")
+
+    print(f"RSUN 1km written: {out_tif}  (365 bands, {H}×{W})")
+    return out_tif
+
+
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
@@ -282,7 +424,7 @@ def build_rsun(rsun_dir: str, out_tif: str) -> str:
 
 def _parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
-        description="Build RTMA-aligned terrain and RSUN grids for PNW."
+        description="Build terrain and RSUN grids for PNW (RTMA or 1 km)."
     )
     p.add_argument(
         "--dem-dir",
@@ -298,6 +440,12 @@ def _parse_args() -> argparse.Namespace:
         "--out-dir",
         default="/nas/dads/mvp",
         help="Output directory for terrain and rsun grids",
+    )
+    p.add_argument(
+        "--grid",
+        choices=["rtma", "1km"],
+        default="rtma",
+        help="Target grid: 'rtma' (EPSG:4326 ~2.5 km) or '1km' (EPSG:5070 1 km)",
     )
     p.add_argument(
         "--terrain-only",
@@ -316,10 +464,19 @@ def main() -> None:
     a = _parse_args()
     os.makedirs(a.out_dir, exist_ok=True)
 
+    if a.grid == "1km":
+        suffix = "1km"
+        terrain_fn = build_terrain_1km
+        rsun_fn = build_rsun_1km
+    else:
+        suffix = "rtma"
+        terrain_fn = build_terrain
+        rsun_fn = build_rsun
+
     if not a.rsun_only:
-        build_terrain(a.dem_dir, os.path.join(a.out_dir, "terrain_pnw_rtma.tif"))
+        terrain_fn(a.dem_dir, os.path.join(a.out_dir, f"terrain_pnw_{suffix}.tif"))
     if not a.terrain_only:
-        build_rsun(a.rsun_dir, os.path.join(a.out_dir, "rsun_pnw_rtma.tif"))
+        rsun_fn(a.rsun_dir, os.path.join(a.out_dir, f"rsun_pnw_{suffix}.tif"))
 
     print("Done.")
 

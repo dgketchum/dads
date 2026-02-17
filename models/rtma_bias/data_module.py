@@ -30,6 +30,7 @@ class RtmaPatchDataModule(L.LightningDataModule):
         rtma_channels: tuple[str, ...] | None = None,
         start_date: str | None = None,
         end_date: str | None = None,
+        decoded: bool = False,
     ):
         super().__init__()
         self.save_hyperparameters()
@@ -48,6 +49,7 @@ class RtmaPatchDataModule(L.LightningDataModule):
         self.rtma_channels = rtma_channels
         self.start_date = start_date
         self.end_date = end_date
+        self.decoded = decoded
 
         self._in_channels: int | None = None
         self.train_ds: Subset | None = None
@@ -75,6 +77,7 @@ class RtmaPatchDataModule(L.LightningDataModule):
             target_col=self.target_col,
             start_date=self.start_date,
             end_date=self.end_date,
+            decoded=self.decoded,
             **extra,
         )
         full_ds = RtmaHumidityPatchDataset(self.patch_index, cfg)

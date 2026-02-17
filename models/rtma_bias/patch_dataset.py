@@ -9,6 +9,7 @@ import numpy as np
 import pandas as pd
 import rasterio
 import torch
+from pyproj import Transformer
 from torch.utils.data import Dataset
 
 from process.gridded.rtma_patch_sampler import (
@@ -61,23 +62,43 @@ class PatchDatasetConfig:
     preload_workers: int = 8
     start_date: str | None = None
     end_date: str | None = None
+    decoded: bool = False
 
 
 def _load_one_cog(
     tif_root: str,
     ymd: str,
     channels: tuple[str, ...],
+    decoded_tifs: bool = False,
 ) -> tuple[str, dict[str, np.ndarray]] | None:
-    """Load a single COG and return (ymd, decoded_dict) or None if missing."""
-    tif_path = os.path.join(tif_root, f"RTMA_{ymd}.tif")
+    """Load a single COG and return (ymd, decoded_dict) or None if missing.
+
+    When *decoded_tifs* is True the source TIF already contains float32
+    bands with channel names matching *channels* (as written by
+    ``prep/build_rtma_1km.py``).  The Int32→float decode step is skipped.
+    """
+    if decoded_tifs:
+        tif_path = os.path.join(tif_root, f"RTMA_1km_{ymd}.tif")
+    else:
+        tif_path = os.path.join(tif_root, f"RTMA_{ymd}.tif")
     if not os.path.exists(tif_path):
         return None
     with rasterio.open(tif_path) as src:
-        raw = src.read()  # (B, H, W) int32
-        decoded = _decode_rtma_raw_patch(src, raw)
-        keep = {c: decoded[c].astype(np.float16) for c in channels if c in decoded}
-        keep["__transform__"] = np.array(src.transform, dtype="float64")
-        keep["__shape__"] = np.array([src.height, src.width], dtype="int64")
+        if decoded_tifs:
+            descs = [src.descriptions[i] for i in range(src.count)]
+            keep: dict[str, np.ndarray] = {}
+            for ch in channels:
+                if ch in descs:
+                    idx = descs.index(ch) + 1
+                    keep[ch] = src.read(idx).astype(np.float16)
+            keep["__transform__"] = np.array(src.transform, dtype="float64")
+            keep["__shape__"] = np.array([src.height, src.width], dtype="int64")
+        else:
+            raw = src.read()  # (B, H, W) int32
+            decoded = _decode_rtma_raw_patch(src, raw)
+            keep = {c: decoded[c].astype(np.float16) for c in channels if c in decoded}
+            keep["__transform__"] = np.array(src.transform, dtype="float64")
+            keep["__shape__"] = np.array([src.height, src.width], dtype="int64")
     return ymd, keep
 
 
@@ -86,6 +107,7 @@ def _preload_cogs(
     days: list[pd.Timestamp],
     channels: tuple[str, ...],
     max_workers: int = 8,
+    decoded_tifs: bool = False,
 ) -> dict[str, dict[str, np.ndarray]]:
     """Read each unique COG once and decode all bands into memory.
 
@@ -101,7 +123,7 @@ def _preload_cogs(
 
     with ThreadPoolExecutor(max_workers=max_workers) as pool:
         futures = {
-            pool.submit(_load_one_cog, tif_root, ymd, channels): ymd
+            pool.submit(_load_one_cog, tif_root, ymd, channels, decoded_tifs): ymd
             for ymd in unique_days
         }
         for fut in as_completed(futures):
@@ -447,6 +469,14 @@ class RtmaHumidityPatchDataset(Dataset):
             df = df.loc[df["day"] <= pd.to_datetime(config.end_date)]
         self.df = df.reset_index(drop=True)
 
+        # When using pre-decoded projected TIFs (EPSG:5070), precompute
+        # station coordinates in the grid CRS so pixel lookups are correct.
+        if config.decoded:
+            t = Transformer.from_crs("EPSG:4326", "EPSG:5070", always_xy=True)
+            x, y = t.transform(self.df["longitude"].values, self.df["latitude"].values)
+            self.df["_grid_x"] = x
+            self.df["_grid_y"] = y
+
         self.rtma_cfg = RtmaPatchConfig(patch_size=int(config.patch_size))
         self._in_channels = len(config.rtma_channels) + (2 if config.add_doy else 0)
 
@@ -461,6 +491,7 @@ class RtmaHumidityPatchDataset(Dataset):
                 df["day"].tolist(),
                 config.rtma_channels,
                 max_workers=config.preload_workers,
+                decoded_tifs=config.decoded,
             )
             print(
                 f"Pre-load complete: {len(self._cog_cache)} COGs in memory.", flush=True
@@ -596,11 +627,16 @@ class RtmaHumidityPatchDataset(Dataset):
         shp = cog["__shape__"]
         H, W = int(shp[0]), int(shp[1])
 
-        # Inverse affine: pixel coords from lon/lat.
-        # transform = (a, b, c, d, e, f, 0, 0, 1)  — rasterio Affine
+        # Inverse affine: pixel coords from map coordinates.
+        # For projected grids (decoded=True), use precomputed EPSG:5070 x/y;
+        # for EPSG:4326 grids, use lon/lat directly.
         a, _b, c, _d, e, f = tf[0], tf[1], tf[2], tf[3], tf[4], tf[5]
-        col = (lon - c) / a
-        row = (lat - f) / e
+        if self.config.decoded:
+            mx, my = float(r["_grid_x"]), float(r["_grid_y"])
+        else:
+            mx, my = lon, lat
+        col = (mx - c) / a
+        row = (my - f) / e
 
         ps = int(self.config.patch_size)
         half = ps // 2
