@@ -15,12 +15,16 @@ import argparse
 import gzip
 import os
 import tempfile
+import warnings
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from datetime import datetime, timedelta
 
 import numpy as np
 import pandas as pd
 import xarray as xr
+
+warnings.filterwarnings("ignore", category=xr.SerializationWarning)
+warnings.filterwarnings("ignore", category=FutureWarning, module="xarray")
 
 # ---------------------------------------------------------------------------
 # QC constants
@@ -106,10 +110,10 @@ def _extract_hourly(
     ds: xr.Dataset, bounds: tuple[float, float, float, float]
 ) -> pd.DataFrame | None:
     """Extract one hourly netCDF dataset into a DataFrame with ID, met, DD, and QCR columns."""
-    if "recNum" not in ds.dims or ds.dims["recNum"] == 0:
+    if "recNum" not in ds.sizes or ds.sizes["recNum"] == 0:
         return None
 
-    n = ds.dims["recNum"]
+    n = ds.sizes["recNum"]
     data: dict[str, np.ndarray | list] = {}
 
     for var in ID_VARS + MET_VARS + DD_VARS + QCR_VARS:
@@ -153,7 +157,7 @@ def _extract_hourly(
     return df if len(df) > 0 else None
 
 
-def _apply_qc(df: pd.DataFrame) -> pd.DataFrame:
+def _apply_qc(df: pd.DataFrame, qcr_mask: int = QCR_REJECT_BITS) -> pd.DataFrame:
     """Three-layer QC: DD flags, QCR bitmask, physical bounds.
 
     NaNs individual variable values on failure; sets per-row ``qc_passed`` bool
@@ -173,7 +177,7 @@ def _apply_qc(df: pd.DataFrame) -> pd.DataFrame:
         # Layer 2: QCR bitmask filter
         if qcr_col in df.columns:
             qcr = pd.to_numeric(df[qcr_col], errors="coerce").fillna(0).astype(np.int64)
-            bad_qcr = (qcr & QCR_REJECT_BITS) > 0
+            bad_qcr = (qcr & qcr_mask) > 0
             df.loc[bad_qcr, var] = np.nan
 
         # Layer 3: physical bounds
@@ -200,6 +204,7 @@ def _process_day(
     src: str,
     dst: str,
     bounds: tuple[float, float, float, float],
+    qcr_mask: int = QCR_REJECT_BITS,
 ) -> tuple[str, int | None, str | None]:
     """Process 24 hourly files for one day → 1 daily parquet.
 
@@ -228,7 +233,7 @@ def _process_day(
         return day_str, 0, "no data"
 
     df = pd.concat(frames, ignore_index=True)
-    df = _apply_qc(df)
+    df = _apply_qc(df, qcr_mask=qcr_mask)
     df = df.sort_values("stationId").reset_index(drop=True)
 
     os.makedirs(dst, exist_ok=True)
@@ -275,6 +280,12 @@ def main() -> None:
         default="-125,24,-66,53",
         help="west,south,east,north (default CONUS: -125,24,-66,53)",
     )
+    p.add_argument(
+        "--qcr-mask",
+        type=int,
+        default=QCR_REJECT_BITS,
+        help=f"QCR reject bitmask (default {QCR_REJECT_BITS}; use 2 for validity-only)",
+    )
     a = p.parse_args()
 
     bounds = tuple(float(x) for x in a.bounds.split(","))
@@ -285,6 +296,7 @@ def main() -> None:
     print(f"  src: {a.src}")
     print(f"  dst: {a.dst}")
     print(f"  bounds: {bounds}")
+    print(f"  qcr_mask: {a.qcr_mask} (0b{a.qcr_mask:08b})")
 
     os.makedirs(a.dst, exist_ok=True)
 
@@ -293,7 +305,10 @@ def main() -> None:
     skipped = 0
 
     with ProcessPoolExecutor(max_workers=a.workers) as pool:
-        futures = {pool.submit(_process_day, d, a.src, a.dst, bounds): d for d in days}
+        futures = {
+            pool.submit(_process_day, d, a.src, a.dst, bounds, a.qcr_mask): d
+            for d in days
+        }
 
         for fut in as_completed(futures):
             day_str = futures[fut]
