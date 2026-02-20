@@ -58,6 +58,8 @@ class WindBiasGNN(nn.Module):
         Number of attention hops (1 or 2).
     use_graph : bool
         If False, skip attention — pure local MLP (experiment step 1).
+    out_dim : int
+        Number of output scalars per node (default 2 for wind par/perp).
     """
 
     def __init__(
@@ -67,6 +69,7 @@ class WindBiasGNN(nn.Module):
         hidden_dim: int = 64,
         n_hops: int = 1,
         use_graph: bool = True,
+        out_dim: int = 2,
     ):
         super().__init__()
         self.use_graph = use_graph
@@ -100,7 +103,7 @@ class WindBiasGNN(nn.Module):
         self.output_head = nn.Sequential(
             nn.Linear(out_input_dim, hidden_dim),
             nn.ReLU(),
-            nn.Linear(hidden_dim, 2),  # (delta_w_par, delta_w_perp)
+            nn.Linear(hidden_dim, out_dim),
         )
 
     def forward(

@@ -1,0 +1,449 @@
+"""
+Precompute per-day PyG graph files for the tmax GNN.
+
+Reads the station-day Parquet + station CSV + static TIFs, builds per-day
+graphs with raw (unnormalized) node features for ALL stations, and saves
+each as a .pt file. Normalization, feature selection, and holdout filtering
+happen at load time in PrecomputedTmaxDataset.
+
+Node features (29):
+  - URMA weather: 11 (tmp, tmax, tmin, pres, ugrd, vgrd, wind, tcdc, gust, ea, wdir)
+  - terrain: 6 (elevation, slope, aspect_sin, aspect_cos, tpi_4, tpi_10)
+  - rsun: 1 (DOY-indexed)
+  - landsat: 7 (period-indexed)
+  - temporal: 2 (doy_sin, doy_cos)
+  - location: 2 (latitude, longitude)
+
+Target: delta_tmax (1 scalar per node)
+
+Edge construction: reuses build_knn_map, build_static_edge_attrs,
+build_edges_for_day from models/wind_bias/wind_dataset.py.
+
+Output structure:
+    {out_dir}/
+        meta.json       # {all_feature_cols, target_cols, edge_dim, n_days}
+        2024-01-01.pt   # {x, y, edge_index, edge_attr, fids}
+        ...
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import sys
+import time
+
+# Ensure project root is on sys.path when run as a script
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+
+import numpy as np
+import pandas as pd
+import rasterio
+import torch
+from pyproj import Transformer
+
+try:
+    from torch_geometric.data import Data
+except ImportError:
+    Data = None
+
+from models.rtma_bias.patch_dataset import _date_to_period
+from models.wind_bias.wind_dataset import (
+    build_edges_for_day,
+    build_knn_map,
+    build_static_edge_attrs,
+)
+
+# ---------------------------------------------------------------------------
+# Feature definitions
+# ---------------------------------------------------------------------------
+
+URMA_WEATHER_COLS = [
+    "tmp_urma",
+    "tmax_urma",
+    "tmin_urma",
+    "pres_urma",
+    "ugrd_urma",
+    "vgrd_urma",
+    "wind_urma",
+    "tcdc_urma",
+    "gust_urma",
+    "ea_urma",
+    "wdir_urma",
+]
+
+TERRAIN_COLS = [
+    "elevation",
+    "slope",
+    "aspect_sin",
+    "aspect_cos",
+    "tpi_4",
+    "tpi_10",
+]
+
+TEMPORAL_COLS = ["doy_sin", "doy_cos"]
+LOCATION_COLS = ["latitude", "longitude"]
+RSUN_COL = "rsun"
+LANDSAT_COLS = ["ls_b2", "ls_b3", "ls_b4", "ls_b5", "ls_b6", "ls_b7", "ls_b10"]
+
+TARGET_COLS = ["delta_tmax"]
+
+
+# ---------------------------------------------------------------------------
+# Static raster helpers
+# ---------------------------------------------------------------------------
+
+
+def _load_terrain(tif_path: str) -> tuple[np.ndarray, np.ndarray]:
+    """Load 6-band terrain TIF. Returns (data (6, H, W), transform (6,))."""
+    with rasterio.open(tif_path) as src:
+        data = src.read().astype("float32")
+        tf = np.array(src.transform, dtype="float64")
+    print(f"Terrain loaded: {data.shape} from {tif_path}", flush=True)
+    return data, tf
+
+
+def _load_rsun(tif_path: str) -> tuple[np.ndarray, np.ndarray]:
+    """Load 365-band rsun TIF. Returns (data (365, H, W), transform)."""
+    with rasterio.open(tif_path) as src:
+        data = src.read().astype("float32")
+        tf = np.array(src.transform, dtype="float64")
+    print(f"RSUN loaded: {data.shape} from {tif_path}", flush=True)
+    return data, tf
+
+
+def _load_landsat(tif_path: str) -> tuple[np.ndarray, np.ndarray]:
+    """Load 35-band Landsat TIF. Returns (data (35, H, W), transform)."""
+    with rasterio.open(tif_path) as src:
+        data = src.read().astype("float32")
+        tf = np.array(src.transform, dtype="float64")
+    print(f"Landsat loaded: {data.shape} from {tif_path}", flush=True)
+    return data, tf
+
+
+def _extract_point(
+    raster: np.ndarray,
+    transform: np.ndarray,
+    x_proj: float,
+    y_proj: float,
+    band_idx: int | None = None,
+) -> float:
+    """Extract a single pixel value from a raster at projected coordinates.
+
+    If band_idx is None and raster is 2D, extract directly.
+    If band_idx is given, index the first axis.
+    """
+    a, _b, c, _d, e, f = transform[:6]
+    col = int((x_proj - c) / a)
+    row = int((y_proj - f) / e)
+
+    if raster.ndim == 2:
+        H, W = raster.shape
+    else:
+        _, H, W = raster.shape
+
+    if 0 <= row < H and 0 <= col < W:
+        if band_idx is not None:
+            return float(raster[band_idx, row, col])
+        elif raster.ndim == 2:
+            return float(raster[row, col])
+        else:
+            return float(raster[0, row, col])
+    return 0.0
+
+
+def _extract_point_bands(
+    raster: np.ndarray,
+    transform: np.ndarray,
+    x_proj: float,
+    y_proj: float,
+    band_start: int,
+    n_bands: int,
+) -> np.ndarray:
+    """Extract multiple bands at a single point. Returns (n_bands,) float32."""
+    a, _b, c, _d, e, f = transform[:6]
+    col = int((x_proj - c) / a)
+    row = int((y_proj - f) / e)
+
+    _, H, W = raster.shape
+    if 0 <= row < H and 0 <= col < W:
+        return raster[band_start : band_start + n_bands, row, col].astype("float32")
+    return np.zeros(n_bands, dtype="float32")
+
+
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
+
+
+def _parse_args() -> argparse.Namespace:
+    p = argparse.ArgumentParser(description="Precompute tmax GNN graphs.")
+    p.add_argument(
+        "--table-path",
+        default="/nas/dads/mvp/station_day_e1_tmax_dailyall.parquet",
+    )
+    p.add_argument(
+        "--stations-csv",
+        default="/nas/dads/met/stations/madis_02JULY2025_mgrs.csv",
+    )
+    p.add_argument("--out-dir", default="/nas/dads/mvp/tmax_graphs_pnw_2024")
+    p.add_argument("--terrain-tif", default="/nas/dads/mvp/terrain_pnw_1km.tif")
+    p.add_argument("--rsun-tif", default="/nas/dads/mvp/rsun_pnw_1km.tif")
+    p.add_argument("--landsat-tif", default="/nas/dads/mvp/landsat_pnw_1km.tif")
+    p.add_argument("--k", type=int, default=16)
+    p.add_argument("--max-radius-km", type=float, default=150.0)
+    return p.parse_args()
+
+
+def main() -> None:
+    args = _parse_args()
+    os.makedirs(args.out_dir, exist_ok=True)
+
+    # ------------------------------------------------------------------
+    # Load station-day table
+    # ------------------------------------------------------------------
+    print("Loading station-day table...")
+    df = pd.read_parquet(args.table_path)
+    if isinstance(df.index, pd.MultiIndex):
+        df = df.reset_index()
+    df["fid"] = df["fid"].astype(str)
+    df["day"] = pd.to_datetime(df["day"])
+
+    # Drop rows without URMA data or target
+    before = len(df)
+    df = df.dropna(subset=["tmp_urma", "delta_tmax"])
+    print(f"Kept {len(df)} of {before} rows with URMA + delta_tmax")
+
+    # ------------------------------------------------------------------
+    # Load station inventory for lat/lon/elevation
+    # ------------------------------------------------------------------
+    print("Loading station inventory...")
+    stations = pd.read_csv(args.stations_csv)
+    id_col = "station_id" if "station_id" in stations.columns else "fid"
+    stations[id_col] = stations[id_col].astype(str)
+    sta_lookup = stations.set_index(id_col)
+
+    # Merge lat/lon/elevation into df
+    for col in ["latitude", "longitude", "elevation"]:
+        if col not in df.columns:
+            df[col] = df["fid"].map(sta_lookup[col])
+
+    # Drop stations not in inventory
+    df = df.dropna(subset=["latitude", "longitude"])
+
+    # ------------------------------------------------------------------
+    # Project station coords to EPSG:5070 for raster extraction
+    # ------------------------------------------------------------------
+    transformer = Transformer.from_crs("EPSG:4326", "EPSG:5070", always_xy=True)
+    unique_fids = df["fid"].unique()
+    fid_proj = {}
+    for fid in unique_fids:
+        row = df[df["fid"] == fid].iloc[0]
+        x5070, y5070 = transformer.transform(row["longitude"], row["latitude"])
+        fid_proj[fid] = (x5070, y5070)
+
+    # ------------------------------------------------------------------
+    # Load static rasters
+    # ------------------------------------------------------------------
+    terrain_data, terrain_tf = _load_terrain(args.terrain_tif)
+    rsun_data, rsun_tf = _load_rsun(args.rsun_tif)
+    landsat_data, landsat_tf = _load_landsat(args.landsat_tif)
+
+    # Precompute per-station static features (terrain + location)
+    print("Extracting per-station static features...")
+    fid_terrain = {}  # fid -> (6,) array
+    for fid in unique_fids:
+        x5070, y5070 = fid_proj[fid]
+        vals = []
+        for b in range(6):
+            vals.append(_extract_point(terrain_data, terrain_tf, x5070, y5070, b))
+        fid_terrain[fid] = np.array(vals, dtype="float32")
+
+    # ------------------------------------------------------------------
+    # Build k-NN map and static edge attrs (from station inventory)
+    # ------------------------------------------------------------------
+    # First, create a filtered stations CSV with only the active fids
+    active_sta = stations[stations[id_col].isin(set(unique_fids))].copy()
+    active_csv = os.path.join(args.out_dir, "_active_stations.csv")
+    active_sta.to_csv(active_csv, index=False)
+
+    print(f"Building k-NN map (k={args.k}, max_radius={args.max_radius_km} km)...")
+    knn_map = build_knn_map(active_csv, k=args.k, max_radius_km=args.max_radius_km)
+    print("Building static edge attributes...")
+    static_edges = build_static_edge_attrs(active_csv, knn_map)
+
+    # Edge normalization stats
+    all_dists = [
+        ea["distance_km"]
+        for fid_attrs in static_edges.values()
+        for ea in fid_attrs.values()
+    ]
+    dist_mean = float(np.mean(all_dists)) if all_dists else 1.0
+    dist_std = float(max(np.std(all_dists), 1e-6))
+    all_delev = [
+        ea["delta_elevation"]
+        for fid_attrs in static_edges.values()
+        for ea in fid_attrs.values()
+    ]
+    delev_mean = float(np.mean(all_delev)) if all_delev else 0.0
+    delev_std = float(max(np.std(all_delev), 1e-6))
+    edge_norm = {
+        "dist_mean": dist_mean,
+        "dist_std": dist_std,
+        "delev_mean": delev_mean,
+        "delev_std": delev_std,
+    }
+
+    # ------------------------------------------------------------------
+    # Fill NaN in URMA columns
+    # ------------------------------------------------------------------
+    for c in URMA_WEATHER_COLS:
+        if c in df.columns:
+            df[c] = df[c].fillna(0.0)
+
+    # ------------------------------------------------------------------
+    # Build all feature column names
+    # ------------------------------------------------------------------
+    all_feature_cols = (
+        URMA_WEATHER_COLS
+        + TERRAIN_COLS
+        + [RSUN_COL]
+        + LANDSAT_COLS
+        + TEMPORAL_COLS
+        + LOCATION_COLS
+    )
+
+    # ------------------------------------------------------------------
+    # Group by day and build graphs
+    # ------------------------------------------------------------------
+    day_groups = {str(day): grp for day, grp in df.groupby("day")}
+    days = sorted(day_groups.keys())
+    print(f"Days to process: {len(days)}")
+
+    t0 = time.time()
+    for i, day_key in enumerate(days):
+        day_df = day_groups[day_key]
+        day_ts = pd.Timestamp(day_key)
+        fids = day_df["fid"].values
+        fid_list = list(fids)
+        n_stations = len(fid_list)
+
+        # --- Build node feature matrix ---
+        # URMA weather (11 cols from table)
+        urma_cols_present = [c for c in URMA_WEATHER_COLS if c in day_df.columns]
+        urma_arr = day_df[urma_cols_present].values.astype("float32")
+        # Pad missing columns with zeros
+        if len(urma_cols_present) < len(URMA_WEATHER_COLS):
+            full_urma = np.zeros((n_stations, len(URMA_WEATHER_COLS)), dtype="float32")
+            for j, c in enumerate(URMA_WEATHER_COLS):
+                if c in urma_cols_present:
+                    full_urma[:, j] = urma_arr[:, urma_cols_present.index(c)]
+            urma_arr = full_urma
+
+        # Terrain (6 per station, static)
+        terrain_arr = np.stack(
+            [fid_terrain.get(f, np.zeros(6, dtype="float32")) for f in fid_list]
+        )
+
+        # RSUN (1 per station, DOY-indexed)
+        doy_idx = min(day_ts.dayofyear - 1, rsun_data.shape[0] - 1)
+        rsun_arr = np.array(
+            [
+                _extract_point(rsun_data, rsun_tf, *fid_proj[f], band_idx=doy_idx)
+                for f in fid_list
+            ],
+            dtype="float32",
+        ).reshape(-1, 1)
+
+        # Landsat (7 per station, period-indexed)
+        period = _date_to_period(day_ts)
+        b_start = period * 7
+        landsat_arr = np.stack(
+            [
+                _extract_point_bands(landsat_data, landsat_tf, *fid_proj[f], b_start, 7)
+                for f in fid_list
+            ]
+        )
+
+        # Temporal: doy_sin, doy_cos
+        doy = day_ts.dayofyear
+        doy_sin = np.sin(2 * np.pi * doy / 365.25)
+        doy_cos = np.cos(2 * np.pi * doy / 365.25)
+        temporal_arr = np.full((n_stations, 2), [doy_sin, doy_cos], dtype="float32")
+
+        # Location: lat, lon
+        loc_arr = np.column_stack(
+            [
+                day_df["latitude"].values.astype("float32"),
+                day_df["longitude"].values.astype("float32"),
+            ]
+        )
+
+        # Concatenate all features: 11 + 6 + 1 + 7 + 2 + 2 = 29
+        x = np.concatenate(
+            [urma_arr, terrain_arr, rsun_arr, landsat_arr, temporal_arr, loc_arr],
+            axis=1,
+        )
+        x = np.nan_to_num(x, nan=0.0, posinf=0.0, neginf=0.0)
+
+        # Target
+        y = day_df["delta_tmax"].values.astype("float32")
+
+        # --- Build edges ---
+        ugrd = day_df["ugrd_urma"].values if "ugrd_urma" in day_df.columns else None
+        vgrd = day_df["vgrd_urma"].values if "vgrd_urma" in day_df.columns else None
+        edge_index, edge_attr = build_edges_for_day(
+            fids=fid_list,
+            ugrd=ugrd,
+            vgrd=vgrd,
+            knn_map=knn_map,
+            static_edges=static_edges,
+            edge_norm=edge_norm,
+        )
+
+        data = Data(
+            x=torch.from_numpy(x),
+            y=torch.from_numpy(y),
+            edge_index=edge_index,
+            edge_attr=edge_attr,
+            num_nodes=n_stations,
+        )
+        data.fids = fid_list
+
+        date_str = day_ts.strftime("%Y-%m-%d")
+        torch.save(data, os.path.join(args.out_dir, f"{date_str}.pt"))
+
+        if (i + 1) % 50 == 0 or (i + 1) == len(days):
+            elapsed = time.time() - t0
+            rate = (i + 1) / elapsed
+            eta = (len(days) - i - 1) / rate if rate > 0 else 0
+            print(
+                f"  [{i + 1}/{len(days)}] {date_str}  "
+                f"{rate:.1f} days/s  ETA {eta / 60:.1f} min"
+            )
+
+    # Clean up temp file
+    if os.path.exists(active_csv):
+        os.remove(active_csv)
+
+    # Save metadata
+    meta = {
+        "all_feature_cols": all_feature_cols,
+        "target_cols": TARGET_COLS,
+        "edge_dim": 7,
+        "n_days": len(days),
+        "n_features": len(all_feature_cols),
+        "k": args.k,
+        "max_radius_km": args.max_radius_km,
+        "edge_norm": edge_norm,
+    }
+    with open(os.path.join(args.out_dir, "meta.json"), "w") as f:
+        json.dump(meta, f, indent=2)
+
+    print(f"Done. {len(days)} graphs saved to {args.out_dir}")
+    print(f"Features per node: {len(all_feature_cols)}")
+
+
+if __name__ == "__main__":
+    main()
