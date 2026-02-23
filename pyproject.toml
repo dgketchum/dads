@@ -17,6 +17,8 @@ dependencies = [
   "pyproj>=3.7.2",
   "scikit-learn>=1.8.0",
   "xarray>=2026.1.0",
+  "netcdf4>=1.7.4",
+  "earthengine-api>=1.7.14",
 ]
 
 [dependency-groups]
