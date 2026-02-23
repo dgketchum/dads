@@ -27,6 +27,7 @@ class LitTmaxGNN(L.LightningModule):
         lr: float = 1e-3,
         weight_decay: float = 1e-5,
         huber_delta: float = 1.0,
+        dropout: float = 0.0,
     ):
         super().__init__()
         self.save_hyperparameters()
@@ -38,6 +39,7 @@ class LitTmaxGNN(L.LightningModule):
             n_hops=n_hops,
             use_graph=use_graph,
             out_dim=1,
+            dropout=dropout,
         )
         self.huber = nn.HuberLoss(delta=huber_delta, reduction="mean")
 

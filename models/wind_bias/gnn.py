@@ -70,6 +70,7 @@ class WindBiasGNN(nn.Module):
         n_hops: int = 1,
         use_graph: bool = True,
         out_dim: int = 2,
+        dropout: float = 0.0,
     ):
         super().__init__()
         self.use_graph = use_graph
@@ -78,8 +79,10 @@ class WindBiasGNN(nn.Module):
         self.node_encoder = nn.Sequential(
             nn.Linear(node_dim, hidden_dim),
             nn.ReLU(),
+            nn.Dropout(dropout),
             nn.Linear(hidden_dim, hidden_dim),
             nn.ReLU(),
+            nn.Dropout(dropout),
         )
 
         if use_graph:
@@ -92,6 +95,7 @@ class WindBiasGNN(nn.Module):
                     nn.Sequential(
                         nn.Linear(2 * hidden_dim, hidden_dim),
                         nn.ReLU(),
+                        nn.Dropout(dropout),
                     )
                     for _ in range(n_hops)
                 ]
@@ -103,6 +107,7 @@ class WindBiasGNN(nn.Module):
         self.output_head = nn.Sequential(
             nn.Linear(out_input_dim, hidden_dim),
             nn.ReLU(),
+            nn.Dropout(dropout),
             nn.Linear(hidden_dim, out_dim),
         )
 

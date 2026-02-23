@@ -47,6 +47,7 @@ class TmaxGNNConfig:
     lr: float = 1e-3
     weight_decay: float = 1e-5
     huber_delta: float = 1.0
+    dropout: float = 0.0
     batch_size: int = 16
     epochs: int = 100
     seed: int = 42
@@ -221,6 +222,7 @@ def main() -> None:
         lr=cfg.lr,
         weight_decay=cfg.weight_decay,
         huber_delta=cfg.huber_delta,
+        dropout=cfg.dropout,
     )
 
     # Accelerator
