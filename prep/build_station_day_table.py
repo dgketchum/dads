@@ -304,6 +304,8 @@ def build_station_day_table(
     leakage_safe: bool = True,
     overwrite: bool = False,
     obs_day_mode: str = "local",
+    start_date: str = "2024-01-01",
+    end_date: str = "2024-12-31",
 ) -> str:
     if os.path.exists(out_file) and not overwrite:
         return out_file
@@ -333,6 +335,8 @@ def build_station_day_table(
             obs_dir=inputs.obs_dir,
             allowed_fids=allowed_fids,
             obs_cols=obs_cols,
+            start_date=start_date,
+            end_date=end_date,
             provider_heights_path=inputs.provider_heights_path,
         )
         # For backward compat: first obs col maps to y_obs
@@ -549,6 +553,16 @@ def _parse_args() -> argparse.Namespace:
         help="How to map tz-aware obs daily indexes onto a joinable day key.",
     )
     p.add_argument(
+        "--start-date",
+        default="2024-01-01",
+        help="Start date for daily_all obs (YYYY-MM-DD).",
+    )
+    p.add_argument(
+        "--end-date",
+        default="2024-12-31",
+        help="End date for daily_all obs (YYYY-MM-DD).",
+    )
+    p.add_argument(
         "--no-leakage-mask",
         action="store_true",
         help="Disable humidity leakage-safe column mask.",
@@ -577,6 +591,8 @@ def main() -> None:
         obs_day_mode=str(a.obs_day_mode),
         leakage_safe=not bool(a.no_leakage_mask),
         overwrite=bool(a.overwrite),
+        start_date=a.start_date,
+        end_date=a.end_date,
     )
 
 

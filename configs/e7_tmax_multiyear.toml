@@ -1,0 +1,29 @@
+name = "e7_tmax_multiyear"
+description = "Tmax GNN: 7yr relaxed QCR, dropout + weight decay regularization"
+hidden_dim = 128
+n_hops = 1
+use_graph = true
+lr = 3e-4
+weight_decay = 1e-3
+huber_delta = 1.0
+dropout = 0.3
+batch_size = 16
+epochs = 100
+seed = 42
+
+graph_dir = "/nas/dads/mvp/tmax_graphs_relaxed_pnw_2018_2024"
+out_dir = "/nas/dads/mvp/e7_tmax_multiyear"
+stations_csv = "/nas/dads/met/stations/madis_02JULY2025_mgrs.csv"
+device = "cuda:0"
+num_workers = 0
+
+val_mgrs_tiles = [
+    "10TDT", "10TEM", "10TEP", "10TEQ", "10TFM",
+    "10TGQ", "10TGR", "10UEV", "11TLG", "11TML",
+    "11TNG", "11TNH", "11TNL", "11TPJ", "11TPM",
+    "11TPP", "11TQK", "11TQL", "11UPQ", "12TTP",
+    "12TTQ", "12TUR", "12TUU", "12TVS", "12TVU",
+    "12TWR", "12TXP", "12TXT", "12TYN", "12TYU",
+    "12UUV", "13TBH", "13TBL", "13TBM", "13TBN",
+    "13TCG", "13TCK", "13TCL", "13TDJ", "13UEQ",
+]
