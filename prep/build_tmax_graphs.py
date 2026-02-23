@@ -172,6 +172,122 @@ def _extract_point_bands(
     return np.zeros(n_bands, dtype="float32")
 
 
+def _build_covariate_vectors(
+    unique_fids: np.ndarray,
+    fid_proj: dict[str, tuple[float, float]],
+    fid_terrain: dict[str, np.ndarray],
+    rsun_data: np.ndarray,
+    rsun_tf: np.ndarray,
+    landsat_data: np.ndarray,
+    landsat_tf: np.ndarray,
+) -> dict[str, np.ndarray]:
+    """Build min-max normalized 14-dim covariate vectors per station.
+
+    Dimensions: terrain(6) + rsun_annual_mean(1) + landsat_annual_mean(7) = 14.
+    """
+    raw = {}
+    for fid in unique_fids:
+        x5070, y5070 = fid_proj[fid]
+        terrain = fid_terrain.get(fid, np.zeros(6, dtype="float32"))
+
+        # RSUN annual mean (average over all 365 DOY bands)
+        a, _b, c, _d, e, f = rsun_tf[:6]
+        col = int((x5070 - c) / a)
+        row = int((y5070 - f) / e)
+        _, rH, rW = rsun_data.shape
+        if 0 <= row < rH and 0 <= col < rW:
+            rsun_mean = float(rsun_data[:, row, col].mean())
+        else:
+            rsun_mean = 0.0
+
+        # Landsat annual mean (5 periods x 7 bands -> mean over periods)
+        a, _b, c, _d, e, f = landsat_tf[:6]
+        col = int((x5070 - c) / a)
+        row = int((y5070 - f) / e)
+        _, lH, lW = landsat_data.shape
+        if 0 <= row < lH and 0 <= col < lW:
+            ls_all = landsat_data[:, row, col].reshape(5, 7)
+            ls_mean = ls_all.mean(axis=0).astype("float32")
+        else:
+            ls_mean = np.zeros(7, dtype="float32")
+
+        raw[fid] = np.concatenate([terrain, [rsun_mean], ls_mean])
+
+    # Min-max normalize each of 14 dims to [0, 1]
+    mat = np.stack([raw[fid] for fid in unique_fids])
+    mins = mat.min(axis=0)
+    maxs = mat.max(axis=0)
+    rng = maxs - mins
+    rng[rng < 1e-8] = 1.0  # avoid division by zero
+    mat_norm = (mat - mins) / rng
+
+    result = {}
+    for i, fid in enumerate(unique_fids):
+        result[fid] = mat_norm[i].astype("float32")
+    return result
+
+
+def build_covariate_knn_map(
+    stations_csv: str,
+    fid_covariates: dict[str, np.ndarray],
+    k: int = 16,
+    max_radius_km: float = 150.0,
+    similarity_fraction: float = 0.7,
+) -> dict[str, list[str]]:
+    """Build k-NN map using covariate similarity/dissimilarity within geo radius.
+
+    For each station, finds all candidates within max_radius_km, then picks
+    ~70% by covariate similarity (lowest Euclidean distance) and ~30% by
+    covariate dissimilarity (highest distance).
+    """
+    from sklearn.neighbors import BallTree
+
+    stations = pd.read_csv(stations_csv)
+    id_col = "station_id" if "station_id" in stations.columns else "fid"
+    fids = stations[id_col].astype(str).values
+    coords = np.radians(stations[["latitude", "longitude"]].values)
+
+    tree = BallTree(coords, metric="haversine")
+    max_rad = max_radius_km / 6371.0
+
+    # query_radius returns variable-length lists per station
+    all_indices, all_dists = tree.query_radius(
+        coords, r=max_rad, return_distance=True, sort_results=True
+    )
+
+    k_sim = round(k * similarity_fraction)
+    k_dissim = k - k_sim
+
+    knn_map: dict[str, list[str]] = {}
+    for i, fid in enumerate(fids):
+        if fid not in fid_covariates:
+            knn_map[str(fid)] = []
+            continue
+
+        cov_i = fid_covariates[fid]
+        candidates = []
+        for j_idx, j in enumerate(all_indices[i]):
+            if j == i:
+                continue
+            nbr_fid = str(fids[j])
+            if nbr_fid not in fid_covariates:
+                continue
+            cov_dist = float(np.linalg.norm(cov_i - fid_covariates[nbr_fid]))
+            candidates.append((nbr_fid, cov_dist))
+
+        if len(candidates) <= k:
+            # Fewer candidates than k: take all
+            knn_map[str(fid)] = [c[0] for c in candidates]
+        else:
+            # Sort by covariate distance
+            candidates.sort(key=lambda c: c[1])
+            similar = [c[0] for c in candidates[:k_sim]]
+            dissimilar = [c[0] for c in candidates[-k_dissim:]]
+            knn_map[str(fid)] = similar + dissimilar
+
+    return knn_map
+
+
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
@@ -193,6 +309,18 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--landsat-tif", default="/nas/dads/mvp/landsat_pnw_1km.tif")
     p.add_argument("--k", type=int, default=16)
     p.add_argument("--max-radius-km", type=float, default=150.0)
+    p.add_argument(
+        "--neighbor-mode",
+        choices=["geo", "covariate"],
+        default="geo",
+        help="Neighbor selection: pure geographic or covariate-aware",
+    )
+    p.add_argument(
+        "--similarity-fraction",
+        type=float,
+        default=0.7,
+        help="Fraction of k neighbors chosen by covariate similarity (covariate mode)",
+    )
     return p.parse_args()
 
 
@@ -268,8 +396,32 @@ def main() -> None:
     active_csv = os.path.join(args.out_dir, "_active_stations.csv")
     active_sta.to_csv(active_csv, index=False)
 
-    print(f"Building k-NN map (k={args.k}, max_radius={args.max_radius_km} km)...")
-    knn_map = build_knn_map(active_csv, k=args.k, max_radius_km=args.max_radius_km)
+    if args.neighbor_mode == "covariate":
+        print("Building covariate vectors (14-dim)...")
+        fid_covariates = _build_covariate_vectors(
+            unique_fids,
+            fid_proj,
+            fid_terrain,
+            rsun_data,
+            rsun_tf,
+            landsat_data,
+            landsat_tf,
+        )
+        print(
+            f"Building covariate k-NN map (k={args.k}, "
+            f"max_radius={args.max_radius_km} km, "
+            f"sim_frac={args.similarity_fraction})..."
+        )
+        knn_map = build_covariate_knn_map(
+            active_csv,
+            fid_covariates,
+            k=args.k,
+            max_radius_km=args.max_radius_km,
+            similarity_fraction=args.similarity_fraction,
+        )
+    else:
+        print(f"Building k-NN map (k={args.k}, max_radius={args.max_radius_km} km)...")
+        knn_map = build_knn_map(active_csv, k=args.k, max_radius_km=args.max_radius_km)
     print("Building static edge attributes...")
     static_edges = build_static_edge_attrs(active_csv, knn_map)
 
@@ -436,6 +588,8 @@ def main() -> None:
         "n_features": len(all_feature_cols),
         "k": args.k,
         "max_radius_km": args.max_radius_km,
+        "neighbor_mode": args.neighbor_mode,
+        "similarity_fraction": args.similarity_fraction,
         "edge_norm": edge_norm,
     }
     with open(os.path.join(args.out_dir, "meta.json"), "w") as f:
