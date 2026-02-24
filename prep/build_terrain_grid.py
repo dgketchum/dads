@@ -222,6 +222,57 @@ def build_terrain(dem_dir: str, out_tif: str) -> str:
     return out_tif
 
 
+def build_terrain_from_dem(dem_tif: str, out_tif: str) -> str:
+    """Compute terrain features directly from a seamless DEM (no VRT, no reproject).
+
+    The DEM must already be on the PNW 1 km EPSG:5070 grid.
+    """
+    with rasterio.open(dem_tif) as src:
+        raw = src.read(1)
+        nodata = src.nodata
+
+    elev = raw.astype("float32")
+    if nodata is not None:
+        elev[raw == nodata] = np.nan
+
+    H, W = elev.shape
+    print(f"DEM loaded: {W}×{H}, valid pixels = {np.isfinite(elev).sum()}")
+
+    cell_m = 1000.0
+    slope_deg, aspect_rad = _horns_slope_aspect(elev, cell_m)
+    aspect_sin = np.sin(aspect_rad).astype("float32")
+    aspect_cos = np.cos(aspect_rad).astype("float32")
+    tpi_4 = _compute_tpi(elev, 4)
+    tpi_10 = _compute_tpi(elev, 10)
+
+    nan_mask = ~np.isfinite(elev)
+    for arr in [slope_deg, aspect_sin, aspect_cos, tpi_4, tpi_10]:
+        arr[nan_mask] = np.nan
+
+    bands = [elev, slope_deg, aspect_sin, aspect_cos, tpi_4, tpi_10]
+    os.makedirs(os.path.dirname(out_tif) or ".", exist_ok=True)
+    profile = {
+        "driver": "GTiff",
+        "dtype": "float32",
+        "count": len(bands),
+        "height": H,
+        "width": W,
+        "crs": PNW_1KM_CRS,
+        "transform": PNW_1KM_TRANSFORM,
+        "compress": "lzw",
+        "tiled": True,
+        "blockxsize": 256,
+        "blockysize": 256,
+        "nodata": float("nan"),
+    }
+    with rasterio.open(out_tif, "w", **profile) as dst:
+        for i, (arr, name) in enumerate(zip(bands, TERRAIN_BAND_NAMES), 1):
+            dst.write(arr, i)
+            dst.set_band_description(i, name)
+    print(f"Terrain written: {out_tif}  ({len(bands)} bands, {H}×{W})")
+    return out_tif
+
+
 def build_terrain_1km(dem_dir: str, out_tif: str) -> str:
     """Mosaic DEM tiles, resample to 1 km EPSG:5070 PNW grid, compute terrain."""
     H, W = PNW_1KM_SHAPE
@@ -417,6 +468,56 @@ def build_rsun_1km(rsun_dir: str, out_tif: str) -> str:
     return out_tif
 
 
+def stack_rsun_seamless(rsun_dir: str, out_tif: str) -> str:
+    """Stack 365 single-band seamless RSUN TIFs into one multi-band GeoTIFF.
+
+    The input TIFs are assumed to already be on the PNW 1 km grid (no reproject).
+    """
+    H, W = PNW_1KM_SHAPE
+
+    os.makedirs(os.path.dirname(out_tif) or ".", exist_ok=True)
+    profile = {
+        "driver": "GTiff",
+        "dtype": "float32",
+        "count": 365,
+        "height": H,
+        "width": W,
+        "crs": PNW_1KM_CRS,
+        "transform": PNW_1KM_TRANSFORM,
+        "compress": "lzw",
+        "tiled": True,
+        "blockxsize": 256,
+        "blockysize": 256,
+        "nodata": float("nan"),
+    }
+
+    skipped = []
+    with rasterio.open(out_tif, "w", **profile) as dst:
+        for doy in range(1, 366):
+            fname = f"rsun_doy_{doy:03d}.tif"
+            path = os.path.join(rsun_dir, fname)
+            buf = np.full((H, W), np.nan, dtype="float32")
+            try:
+                with rasterio.open(path) as src:
+                    data = src.read(1).astype("float32")
+                    # Replace nodata with NaN
+                    if src.nodata is not None:
+                        data[data == src.nodata] = np.nan
+                    buf[:] = data
+            except Exception as exc:
+                print(f"  WARNING: {fname} missing/corrupt, filling with NaN: {exc}")
+                skipped.append(doy)
+            dst.write(buf, doy)
+            dst.set_band_description(doy, f"rsun_doy_{doy:03d}")
+            if doy % 50 == 0 or doy == 365:
+                print(f"  rsun stack: {doy}/365", flush=True)
+    if skipped:
+        print(f"  WARNING: {len(skipped)} missing DOY(s): {skipped}")
+
+    print(f"RSUN stacked: {out_tif}  (365 bands, {H}×{W})")
+    return out_tif
+
+
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
@@ -427,6 +528,11 @@ def _parse_args() -> argparse.Namespace:
         description="Build terrain and RSUN grids for PNW (RTMA or 1 km)."
     )
     p.add_argument(
+        "--dem-tif",
+        default=None,
+        help="Path to a seamless DEM GeoTIFF (skips VRT mosaic + reproject)",
+    )
+    p.add_argument(
         "--dem-dir",
         default="/data/ssd2/dads/dem/dem_30",
         help="Directory of MGRS DEM tiles (*.tif)",
@@ -434,7 +540,12 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument(
         "--rsun-dir",
         default="/nas/dads/dem/rsun_1km",
-        help="Directory of rsun_doy_NNN.tif files",
+        help="Directory of rsun_doy_NNN.tif files (per-tile mosaics)",
+    )
+    p.add_argument(
+        "--rsun-seamless-dir",
+        default=None,
+        help="Directory of seamless rsun_doy_NNN.tif files (stack only, no reproject)",
     )
     p.add_argument(
         "--out-dir",
@@ -474,9 +585,20 @@ def main() -> None:
         rsun_fn = build_rsun
 
     if not a.rsun_only:
-        terrain_fn(a.dem_dir, os.path.join(a.out_dir, f"terrain_pnw_{suffix}.tif"))
+        if a.dem_tif:
+            build_terrain_from_dem(
+                a.dem_tif, os.path.join(a.out_dir, f"terrain_pnw_{suffix}.tif")
+            )
+        else:
+            terrain_fn(a.dem_dir, os.path.join(a.out_dir, f"terrain_pnw_{suffix}.tif"))
     if not a.terrain_only:
-        rsun_fn(a.rsun_dir, os.path.join(a.out_dir, f"rsun_pnw_{suffix}.tif"))
+        if a.rsun_seamless_dir:
+            stack_rsun_seamless(
+                a.rsun_seamless_dir,
+                os.path.join(a.out_dir, f"rsun_pnw_{suffix}.tif"),
+            )
+        else:
+            rsun_fn(a.rsun_dir, os.path.join(a.out_dir, f"rsun_pnw_{suffix}.tif"))
 
     print("Done.")
 

@@ -268,7 +268,187 @@ def export_rasters(
             # print(tile, day)
 
 
+def compute_rsun_seamless(
+    dem_tif,
+    grass_db,
+    location,
+    out_dir,
+    horizon_step=5,
+    horizon_maxdist=50000,
+    nprocs=16,
+):
+    """Run r.horizon + r.sun on a seamless full-domain DEM.
+
+    Creates a GRASS location from the DEM, imports it, computes horizons once,
+    then runs r.sun for DOY 1-365, exporting each DOY as a single-band TIF.
+
+    Args:
+        dem_tif: path to seamless DEM GeoTIFF (e.g. dem_pnw_1km.tif)
+        grass_db: GRASS database directory (e.g. /data/ssd2/dads/dem/grassdata)
+        location: GRASS location name (e.g. pnw_1km)
+        out_dir: output directory for rsun_doy_NNN.tif files
+        horizon_step: azimuth step in degrees (default 5 → 72 rasters)
+        horizon_maxdist: horizon search radius in meters (default 50 km)
+        nprocs: r.sun internal threading
+    """
+    os.makedirs(out_dir, exist_ok=True)
+    loc_path = os.path.join(grass_db, location, "PERMANENT")
+
+    # Create GRASS location from DEM if it doesn't exist
+    loc_dir = os.path.join(grass_db, location)
+    if not os.path.isdir(loc_path):
+        print(f"Creating GRASS location at {loc_dir} ...")
+        subprocess.run(
+            ["grass", "-c", dem_tif, loc_dir, "-e"],
+            check=True,
+        )
+
+    dem_name = "dem_pnw"
+    slope_name = "slope_pnw"
+    aspect_name = "aspect_pnw"
+    hz_base = "horizon_pnw"
+    mapset = "PERMANENT"
+
+    # Helper to run GRASS commands within the location
+    def _grass_cmd(cmd_list):
+        env = os.environ.copy()
+        env["GISBASE"] = subprocess.run(
+            ["grass", "--config", "path"], capture_output=True, text=True, check=True
+        ).stdout.strip()
+        full = ["grass", os.path.join(grass_db, location, mapset), "--exec"] + cmd_list
+        subprocess.run(full, check=True)
+
+    # 1. Import DEM
+    print("Importing DEM into GRASS ...")
+    _grass_cmd(["r.in.gdal", f"input={dem_tif}", f"output={dem_name}", "--overwrite"])
+
+    # 2. Set region to DEM
+    _grass_cmd(["g.region", f"rast={dem_name}@{mapset}"])
+
+    # 3. Compute slope/aspect via gdaldem then import
+    import tempfile
+
+    tmpdir = tempfile.mkdtemp(prefix="rsun_seamless_")
+    slope_tif = os.path.join(tmpdir, "slope.tif")
+    aspect_tif = os.path.join(tmpdir, "aspect.tif")
+
+    print("Computing slope/aspect via gdaldem ...")
+    subprocess.run(["gdaldem", "slope", dem_tif, slope_tif], check=True)
+    subprocess.run(["gdaldem", "aspect", dem_tif, aspect_tif], check=True)
+
+    print("Importing slope/aspect into GRASS ...")
+    _grass_cmd(
+        ["r.in.gdal", f"input={slope_tif}", f"output={slope_name}", "--overwrite"]
+    )
+    _grass_cmd(
+        ["r.in.gdal", f"input={aspect_tif}", f"output={aspect_name}", "--overwrite"]
+    )
+
+    # 4. Run r.horizon for full domain
+    print(f"Running r.horizon (step={horizon_step}°, maxdist={horizon_maxdist}m) ...")
+    _grass_cmd(
+        [
+            "r.horizon",
+            f"elevation={dem_name}@{mapset}",
+            f"step={horizon_step}",
+            f"output={hz_base}",
+            f"maxdistance={horizon_maxdist}",
+            "--overwrite",
+        ]
+    )
+
+    # 5. Loop DOY 1-365: r.sun with horizons
+    print("Running r.sun for 365 DOYs ...")
+    for doy in range(1, 366):
+        rsun_name = f"rsun_doy_{doy:03d}"
+        _grass_cmd(
+            [
+                "r.sun",
+                f"elevation={dem_name}@{mapset}",
+                f"slope={slope_name}@{mapset}",
+                f"aspect={aspect_name}@{mapset}",
+                f"horizon_basename={hz_base}",
+                f"horizon_step={horizon_step}",
+                f"day={doy}",
+                f"glob_rad={rsun_name}",
+                f"nprocs={nprocs}",
+                "--overwrite",
+            ]
+        )
+
+        # Export
+        out_tif = os.path.join(out_dir, f"rsun_doy_{doy:03d}.tif")
+        _grass_cmd(
+            [
+                "r.out.gdal",
+                "-c",
+                f"input={rsun_name}@{mapset}",
+                "format=GTiff",
+                "createopt=COMPRESS=LZW",
+                "--overwrite",
+                f"output={out_tif}",
+            ]
+        )
+
+        if doy % 50 == 0 or doy == 365:
+            print(f"  rsun: {doy}/365 exported", flush=True)
+
+    # Cleanup temp files
+    subprocess.run(["rm", "-rf", tmpdir])
+    print(f"Done. 365 RSUN TIFs written to {out_dir}")
+
+
+def _parse_args_seamless():
+    import argparse
+
+    p = argparse.ArgumentParser(description="Seamless full-domain r.sun pipeline")
+    p.add_argument(
+        "--dem-tif",
+        required=True,
+        help="Seamless DEM GeoTIFF (e.g. /nas/dads/mvp/dem_pnw_1km.tif)",
+    )
+    p.add_argument(
+        "--grass-db",
+        default="/data/ssd2/dads/dem/grassdata",
+        help="GRASS database directory",
+    )
+    p.add_argument(
+        "--location",
+        default="pnw_1km",
+        help="GRASS location name",
+    )
+    p.add_argument(
+        "--out-dir",
+        required=True,
+        help="Output directory for rsun_doy_NNN.tif files",
+    )
+    p.add_argument("--horizon-step", type=int, default=5)
+    p.add_argument("--horizon-maxdist", type=int, default=50000)
+    p.add_argument("--nprocs", type=int, default=16)
+    p.add_argument(
+        "--seamless",
+        action="store_true",
+        help="Run seamless full-domain pipeline (required)",
+    )
+    return p.parse_args()
+
+
 if __name__ == "__main__":
+    import sys
+
+    if "--seamless" in sys.argv:
+        _a = _parse_args_seamless()
+        compute_rsun_seamless(
+            dem_tif=_a.dem_tif,
+            grass_db=_a.grass_db,
+            location=_a.location,
+            out_dir=_a.out_dir,
+            horizon_step=_a.horizon_step,
+            horizon_maxdist=_a.horizon_maxdist,
+            nprocs=_a.nprocs,
+        )
+        sys.exit(0)
+
     root = "/nas"
     dem_d = "/data/ssd2/dads/dem"
 

@@ -722,12 +722,10 @@ def _parse_args() -> argparse.Namespace:
     )
     p.add_argument(
         "--terrain-tif",
-        default="/nas/dads/mvp/terrain_pnw_1km_feathered.tif",
+        default="/nas/dads/mvp/terrain_pnw_1km.tif",
     )
-    p.add_argument("--rsun-tif", default="/nas/dads/mvp/rsun_pnw_1km_feathered.tif")
-    p.add_argument(
-        "--landsat-tif", default="/nas/dads/mvp/landsat_pnw_1km_feathered.tif"
-    )
+    p.add_argument("--rsun-tif", default="/nas/dads/mvp/rsun_pnw_1km.tif")
+    p.add_argument("--landsat-tif", default="/nas/dads/mvp/landsat_pnw_1km.tif")
     p.add_argument("--out-dir", required=True, help="Output directory for GeoTIFFs")
     p.add_argument("--device", default="cuda:0")
     p.add_argument("--tile-size", type=int, default=256)
