@@ -452,12 +452,47 @@ class WindGraphDataset(Dataset):
             else np.zeros(len(fids), dtype="float32")
         )
 
+        # Raw u/v for speed/direction evaluation metrics
+        u_obs = (
+            day_df["u_obs"].values.astype("float32")
+            if "u_obs" in day_df.columns
+            else np.zeros(len(fids), dtype="float32")
+        )
+        v_obs = (
+            day_df["v_obs"].values.astype("float32")
+            if "v_obs" in day_df.columns
+            else np.zeros(len(fids), dtype="float32")
+        )
+        ugrd_rtma = (
+            day_df["ugrd_rtma"].values.astype("float32")
+            if "ugrd_rtma" in day_df.columns
+            else np.zeros(len(fids), dtype="float32")
+        )
+        vgrd_rtma = (
+            day_df["vgrd_rtma"].values.astype("float32")
+            if "vgrd_rtma" in day_df.columns
+            else np.zeros(len(fids), dtype="float32")
+        )
+
         x_t = torch.from_numpy(x)
         y_t = torch.from_numpy(y)
         rtma_wind_t = torch.from_numpy(rtma_wind)
+        u_obs_t = torch.from_numpy(u_obs)
+        v_obs_t = torch.from_numpy(v_obs)
+        ugrd_rtma_t = torch.from_numpy(ugrd_rtma)
+        vgrd_rtma_t = torch.from_numpy(vgrd_rtma)
 
         if not self.use_graph:
-            return Data(x=x_t, y=y_t, rtma_wind=rtma_wind_t, num_nodes=len(fids))
+            return Data(
+                x=x_t,
+                y=y_t,
+                rtma_wind=rtma_wind_t,
+                u_obs=u_obs_t,
+                v_obs=v_obs_t,
+                ugrd_rtma=ugrd_rtma_t,
+                vgrd_rtma=vgrd_rtma_t,
+                num_nodes=len(fids),
+            )
 
         # Build edges via shared helper
         ugrd = day_df["ugrd_rtma"].values if "ugrd_rtma" in day_df.columns else None
@@ -483,6 +518,10 @@ class WindGraphDataset(Dataset):
             edge_index=edge_index,
             edge_attr=edge_attr,
             rtma_wind=rtma_wind_t,
+            u_obs=u_obs_t,
+            v_obs=v_obs_t,
+            ugrd_rtma=ugrd_rtma_t,
+            vgrd_rtma=vgrd_rtma_t,
             num_nodes=len(fids),
         )
 

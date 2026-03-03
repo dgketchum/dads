@@ -24,7 +24,7 @@ class EdgeGatedAttention(MessagePassing):
     """Single hop of edge-gated attention."""
 
     def __init__(self, hidden_dim: int, edge_dim: int):
-        super().__init__(aggr="add", flow="target_to_source")
+        super().__init__(aggr="add")
         self.att_mlp = nn.Sequential(
             nn.Linear(2 * hidden_dim + edge_dim, hidden_dim),
             nn.ReLU(),

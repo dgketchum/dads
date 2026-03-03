@@ -11,7 +11,7 @@ from __future__ import annotations
 import lightning as L
 import torch
 from torch import nn
-from torchmetrics import MeanAbsoluteError, MeanMetric, MeanSquaredError
+from torchmetrics import MeanAbsoluteError, MeanMetric
 
 from models.wind_bias.gnn import WindBiasGNN
 
@@ -45,7 +45,6 @@ class LitWindGNN(L.LightningModule):
 
         # Val metrics — speed
         self.val_mae_speed = MeanAbsoluteError()
-        self.val_rmse_speed = MeanSquaredError(squared=False)
         self.val_mae_speed_rtma = MeanAbsoluteError()
 
         # Val metrics — par/perp
@@ -105,21 +104,49 @@ class LitWindGNN(L.LightningModule):
         self.val_mae_par.update(pred[:, 0], batch.y[:, 0])
         self.val_mae_perp.update(pred[:, 1], batch.y[:, 1])
 
-        # Reconstruct corrected u/v from parallel/perpendicular
-        # We need ugrd_rtma, vgrd_rtma — stored in batch.x at known positions
-        # Instead, compute from rtma_wind and targets
-        # Actually we need the raw values. Store delta_u/delta_v from targets.
-        # For now, use the raw approach: pred gives (delta_par, delta_perp).
-        # The true delta_u,v = target[:, 0]*e_par_x + target[:,1]*e_perp_x etc.
-        # But we don't have e_par here easily. Use a simpler metric:
-        # vector_rmse from pred vs target residuals directly.
+        # Vector RMSE (pred vs target residuals in par/perp space)
         diff = pred - batch.y
         vector_mse = (diff**2).sum(dim=-1)
         self.val_vector_mse_sum.update(vector_mse)
 
-        # Speed-based metrics require reconstruction — skip if we can't
-        # We'll compute a proxy: |pred_par| vs |target_par| as speed correction magnitude
-        # True speed metrics need u/v reconstruction which we do in on_validation_epoch_end
+        # Reconstruct corrected u/v for speed and direction metrics.
+        # pred = (delta_par, delta_perp) in the RTMA wind-aligned basis.
+        # e_par = (ugrd_rtma, vgrd_rtma) / |rtma_wind|
+        # e_perp = (-vgrd_rtma, ugrd_rtma) / |rtma_wind|
+        # delta_u = delta_par * e_par_x + delta_perp * e_perp_x
+        # corrected_u = ugrd_rtma + delta_u  (same for v)
+        eps = 1e-6
+        rtma_spd = batch.rtma_wind.clamp(min=eps)
+        e_par_x = batch.ugrd_rtma / rtma_spd
+        e_par_y = batch.vgrd_rtma / rtma_spd
+        e_perp_x = -e_par_y
+        e_perp_y = e_par_x
+
+        pred_du = pred[:, 0] * e_par_x + pred[:, 1] * e_perp_x
+        pred_dv = pred[:, 0] * e_par_y + pred[:, 1] * e_perp_y
+        u_corr = batch.ugrd_rtma + pred_du
+        v_corr = batch.vgrd_rtma + pred_dv
+
+        speed_corr = torch.sqrt(u_corr**2 + v_corr**2)
+        speed_obs = torch.sqrt(batch.u_obs**2 + batch.v_obs**2)
+
+        # Speed MAE: corrected vs obs, and RTMA baseline vs obs
+        self.val_mae_speed.update(speed_corr, speed_obs)
+        self.val_mae_speed_rtma.update(rtma_spd, speed_obs)
+        self._speed_mae_sum.update(torch.abs(speed_corr - speed_obs))
+        self._rtma_mae_sum.update(torch.abs(rtma_spd - speed_obs))
+
+        # Direction MAE: only where obs speed >= 2 m/s
+        fast = speed_obs >= 2.0
+        if fast.any():
+            dir_corr = torch.atan2(u_corr[fast], v_corr[fast])
+            dir_obs = torch.atan2(batch.u_obs[fast], batch.v_obs[fast])
+            dir_diff = dir_corr - dir_obs
+            # Wrap to [-pi, pi]
+            dir_diff = (dir_diff + torch.pi) % (2 * torch.pi) - torch.pi
+            dir_ae = torch.abs(dir_diff) * (180.0 / torch.pi)
+            self._dir_ae_sum += dir_ae.sum().item()
+            self._dir_count += int(fast.sum().item())
 
         return loss
 
@@ -131,6 +158,27 @@ class LitWindGNN(L.LightningModule):
         mean_mse = self.val_vector_mse_sum.compute()
         self.log("val/vector_rmse", torch.sqrt(mean_mse))
         self.val_vector_mse_sum.reset()
+
+        # Speed MAE
+        self.log("val/speed_mae", self.val_mae_speed)
+        self.log("val/baseline_speed_mae", self.val_mae_speed_rtma)
+
+        # Pct improvement
+        model_mae = self._speed_mae_sum.compute()
+        rtma_mae = self._rtma_mae_sum.compute()
+        pct = 1.0 - model_mae / rtma_mae.clamp(min=1e-6)
+        self.log("val/pct_improvement", pct)
+        self._speed_mae_sum.reset()
+        self._rtma_mae_sum.reset()
+
+        # Direction MAE (deg)
+        if self._dir_count > 0:
+            self.log(
+                "val/direction_mae_deg",
+                self._dir_ae_sum / self._dir_count,
+            )
+        self._dir_ae_sum = 0.0
+        self._dir_count = 0
 
     def configure_optimizers(self):
         opt = torch.optim.AdamW(
