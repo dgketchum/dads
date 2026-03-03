@@ -1,9 +1,12 @@
 """
-Precomputed tmax graph dataset for the tmax GNN.
+Precomputed graph dataset for scalar bias-correction GNNs.
 
-Loads per-day .pt graphs from disk (built by prep/build_tmax_graphs.py).
-Applies z-score normalization, feature column selection, and spatial holdout
-filtering at __getitem__ time — keeping precomputation split-agnostic.
+Loads per-day .pt graphs from disk (built by prep/build_graphs.py).
+Applies z-score normalization at __getitem__ time.
+
+Spatial holdout is **transductive**: all nodes stay in the graph for message
+passing; a ``loss_mask`` boolean tensor controls which nodes contribute to the
+loss.  This preserves realistic graph topology for both train and val.
 """
 
 from __future__ import annotations
@@ -22,8 +25,8 @@ except ImportError:
     Data = None
 
 
-class PrecomputedTmaxDataset(Dataset):
-    """Load precomputed per-day .pt tmax graphs from disk.
+class PrecomputedGraphDataset(Dataset):
+    """Load precomputed per-day .pt graphs from disk.
 
     Parameters
     ----------
@@ -35,8 +38,10 @@ class PrecomputedTmaxDataset(Dataset):
         Precomputed {col: {mean, std}}. If None, computed from data.
     train_days : set or None
         Restrict to these days only.
-    exclude_fids : set or None
-        Station fids to exclude (spatial holdout).
+    loss_fids : set or None
+        Station fids whose nodes contribute to loss. If None, all nodes
+        contribute.  All nodes remain in the graph regardless of this setting
+        (transductive holdout).
     """
 
     def __init__(
@@ -45,11 +50,11 @@ class PrecomputedTmaxDataset(Dataset):
         use_graph: bool = True,
         norm_stats: dict | None = None,
         train_days: set | None = None,
-        exclude_fids: set | None = None,
+        loss_fids: set | None = None,
     ):
         super().__init__()
         self.use_graph = use_graph
-        self.exclude_fids = exclude_fids
+        self.loss_fids = loss_fids
 
         # Load metadata
         with open(os.path.join(graph_dir, "meta.json")) as f:
@@ -75,7 +80,7 @@ class PrecomputedTmaxDataset(Dataset):
             self.norm_stats = norm_stats
 
     def _compute_norm_stats(self) -> dict[str, dict[str, float]]:
-        """Compute z-score stats from the loaded (raw) training data."""
+        """Compute z-score stats from the loaded (raw) data."""
         xs = [g.x for g in self._graphs]
         if not xs:
             return {}
@@ -109,23 +114,13 @@ class PrecomputedTmaxDataset(Dataset):
         edge_attr = g.edge_attr.clone() if self.use_graph else None
         fids = g.fids
 
-        # Spatial holdout: filter out excluded fids
-        if self.exclude_fids:
-            keep = torch.tensor(
-                [f not in self.exclude_fids for f in fids], dtype=torch.bool
+        # Transductive loss mask: all nodes stay, mask selects loss contributors
+        if self.loss_fids is not None:
+            loss_mask = torch.tensor(
+                [f in self.loss_fids for f in fids], dtype=torch.bool
             )
-            if not keep.all():
-                x = x[keep]
-                y = y[keep]
-                if edge_index is not None and edge_index.numel() > 0:
-                    old_to_new = torch.full((len(fids),), -1, dtype=torch.long)
-                    old_to_new[keep] = torch.arange(keep.sum(), dtype=torch.long)
-                    src, dst = edge_index[0], edge_index[1]
-                    valid = keep[src] & keep[dst]
-                    edge_index = torch.stack(
-                        [old_to_new[src[valid]], old_to_new[dst[valid]]]
-                    )
-                    edge_attr = edge_attr[valid]
+        else:
+            loss_mask = torch.ones(len(fids), dtype=torch.bool)
 
         # Apply z-score normalization
         for i, c in enumerate(self.feature_cols):
@@ -136,13 +131,14 @@ class PrecomputedTmaxDataset(Dataset):
 
         n_nodes = x.shape[0]
         if not self.use_graph or edge_index is None:
-            return Data(x=x, y=y, num_nodes=n_nodes)
+            return Data(x=x, y=y, loss_mask=loss_mask, num_nodes=n_nodes)
 
         return Data(
             x=x,
             y=y,
             edge_index=edge_index,
             edge_attr=edge_attr,
+            loss_mask=loss_mask,
             num_nodes=n_nodes,
         )
 

@@ -1,9 +1,9 @@
 """
-Lightning module for tmax bias correction GNN.
+Lightning module for scalar bias-correction GNN (tmax, EA, etc.).
 
-Target: delta_tmax (1 scalar per node)
+Target: 1 scalar per node (delta_tmax, delta_log_ea, ...)
 Loss: Huber (delta=1.0)
-Metrics: tmax_mae, tmax_rmse, tmax_r2, tmax_bias, baseline_mae
+Metrics: target_mae, target_rmse, target_r2, target_bias, baseline_mae
 """
 
 from __future__ import annotations
@@ -16,7 +16,7 @@ from torchmetrics import MeanAbsoluteError, MeanSquaredError, R2Score
 from models.wind_bias.gnn import WindBiasGNN
 
 
-class LitTmaxGNN(L.LightningModule):
+class LitScalarGNN(L.LightningModule):
     def __init__(
         self,
         node_dim: int,
@@ -61,41 +61,48 @@ class LitTmaxGNN(L.LightningModule):
 
     def training_step(self, batch, batch_idx):
         pred = self(batch).squeeze(-1)
-        loss = self.huber(pred, batch.y)
-        self.log("train_loss", loss, prog_bar=True, batch_size=batch.num_nodes)
+        mask = batch.loss_mask
+        loss = self.huber(pred[mask], batch.y[mask])
+        self.log("train_loss", loss, prog_bar=True, batch_size=mask.sum().item())
         return loss
 
     def validation_step(self, batch, batch_idx):
         pred = self(batch).squeeze(-1)
-        target = batch.y
-        loss = self.huber(pred, target)
+        mask = batch.loss_mask
+        pred_m = pred[mask]
+        target_m = batch.y[mask]
+        loss = self.huber(pred_m, target_m)
         self.log(
-            "val_loss", loss, prog_bar=True, batch_size=batch.num_nodes, sync_dist=True
+            "val_loss",
+            loss,
+            prog_bar=True,
+            batch_size=mask.sum().item(),
+            sync_dist=True,
         )
 
-        self.val_mae.update(pred, target)
-        self.val_rmse.update(pred, target)
-        self.val_r2.update(pred, target)
+        self.val_mae.update(pred_m, target_m)
+        self.val_rmse.update(pred_m, target_m)
+        self.val_r2.update(pred_m, target_m)
 
         # Bias: mean(pred - target)
-        self.val_bias_sum += (pred - target).sum().item()
-        self.val_bias_count += target.numel()
+        self.val_bias_sum += (pred_m - target_m).sum().item()
+        self.val_bias_count += target_m.numel()
 
-        # Baseline MAE: MAE of the uncorrected URMA (i.e., target = delta_tmax,
-        # baseline prediction is 0 correction)
-        self.val_baseline_ae_sum += target.abs().sum().item()
-        self.val_baseline_count += target.numel()
+        # Baseline MAE: MAE of the uncorrected gridded product
+        # (baseline prediction is 0 correction)
+        self.val_baseline_ae_sum += target_m.abs().sum().item()
+        self.val_baseline_count += target_m.numel()
 
         return loss
 
     def on_validation_epoch_end(self):
-        self.log("val/tmax_mae", self.val_mae, prog_bar=True)
-        self.log("val/tmax_rmse", self.val_rmse)
-        self.log("val/tmax_r2", self.val_r2)
+        self.log("val/target_mae", self.val_mae, prog_bar=True)
+        self.log("val/target_rmse", self.val_rmse)
+        self.log("val/target_r2", self.val_r2)
 
         if self.val_bias_count > 0:
             bias = self.val_bias_sum / self.val_bias_count
-            self.log("val/tmax_bias", bias)
+            self.log("val/target_bias", bias)
             baseline_mae = self.val_baseline_ae_sum / self.val_baseline_count
             self.log("val/baseline_mae", baseline_mae)
 

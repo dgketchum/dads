@@ -32,7 +32,7 @@ import torch
 from pyproj import Transformer
 from sklearn.neighbors import BallTree
 
-from models.rtma_bias.lit_tmax_gnn import LitTmaxGNN
+from models.rtma_bias.lit_scalar_gnn import LitScalarGNN
 from models.rtma_bias.patch_dataset import _date_to_period
 from models.wind_bias.wind_dataset import (
     build_knn_map,
@@ -479,7 +479,7 @@ def _build_tile_graph(
 
 def predict_day(
     day: pd.Timestamp,
-    model: LitTmaxGNN,
+    model: LitScalarGNN,
     urma_dir: str,
     terrain_data: np.ndarray,
     terrain_tf: np.ndarray,
@@ -749,7 +749,7 @@ def main() -> None:
     device = torch.device(args.device)
 
     print("Loading model checkpoint...", flush=True)
-    lit_model = LitTmaxGNN.load_from_checkpoint(args.checkpoint, map_location=device)
+    lit_model = LitScalarGNN.load_from_checkpoint(args.checkpoint, map_location=device)
     lit_model.eval()
     lit_model.to(device)
 

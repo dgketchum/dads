@@ -1,8 +1,8 @@
 """
-Train tmax bias correction GNN.
+Train scalar bias-correction GNN (tmax, EA, etc.).
 
 TOML config + CLI overrides. Uses precomputed per-day .pt graphs
-built by prep/build_tmax_graphs.py.
+built by prep/build_graphs.py.
 """
 
 from __future__ import annotations
@@ -24,8 +24,8 @@ from lightning.pytorch.callbacks import (
 )
 from torch_geometric.loader import DataLoader
 
-from models.rtma_bias.lit_tmax_gnn import LitTmaxGNN
-from models.rtma_bias.tmax_gnn_dataset import PrecomputedTmaxDataset
+from models.rtma_bias.lit_scalar_gnn import LitScalarGNN
+from models.rtma_bias.scalar_gnn_dataset import PrecomputedGraphDataset
 
 
 # ---------------------------------------------------------------------------
@@ -34,7 +34,7 @@ from models.rtma_bias.tmax_gnn_dataset import PrecomputedTmaxDataset
 
 
 @dataclass
-class TmaxGNNConfig:
+class ScalarGNNConfig:
     name: str = "e2_tmax_gnn"
     description: str = ""
 
@@ -72,7 +72,7 @@ class TmaxGNNConfig:
             tomli_w.dump(d, f)
 
     @classmethod
-    def from_toml(cls, path: str) -> TmaxGNNConfig:
+    def from_toml(cls, path: str) -> ScalarGNNConfig:
         with open(path, "rb") as f:
             d = tomllib.load(f)
         return cls(**d)
@@ -84,7 +84,7 @@ class TmaxGNNConfig:
 
 
 def _parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(description="Train tmax bias GNN.")
+    p = argparse.ArgumentParser(description="Train scalar bias-correction GNN.")
     p.add_argument("--config", default=None, help="TOML config path")
     p.add_argument("--graph-dir", default=None)
     p.add_argument("--val-graph-dir", default=None)
@@ -101,11 +101,11 @@ def _parse_args() -> argparse.Namespace:
     return p.parse_args()
 
 
-def _build_config(args: argparse.Namespace) -> TmaxGNNConfig:
+def _build_config(args: argparse.Namespace) -> ScalarGNNConfig:
     if args.config:
-        cfg = TmaxGNNConfig.from_toml(args.config)
+        cfg = ScalarGNNConfig.from_toml(args.config)
     else:
-        cfg = TmaxGNNConfig()
+        cfg = ScalarGNNConfig()
 
     cli_map = {
         "graph_dir": "graph_dir",
@@ -162,39 +162,46 @@ def main() -> None:
     with open(os.path.join(cfg.out_dir, "holdout_fids.json"), "w") as f:
         json.dump(sorted(holdout_fids), f)
 
-    # ---- Build datasets ----
-    # All days in the graph_dir are 2024 (no temporal split needed — spatial only)
+    # ---- Build datasets (transductive spatial holdout) ----
+    # All nodes stay in every graph for message passing; loss_mask selects
+    # which nodes contribute to the loss.
     val_gdir = cfg.val_graph_dir or cfg.graph_dir
     print(f"Loading training graphs from {cfg.graph_dir}")
     if cfg.val_graph_dir:
         print(f"Loading validation graphs from {val_gdir}")
 
-    print("Building training dataset...")
-    train_ds = PrecomputedTmaxDataset(
-        graph_dir=cfg.graph_dir,
-        use_graph=cfg.use_graph,
-        exclude_fids=holdout_fids if holdout_fids else None,
-    )
+    # Determine train loss fids (all fids minus holdout)
+    train_loss_fids = None
+    if holdout_fids:
+        print("Building training dataset (transductive, all nodes in graph)...")
+        train_ds = PrecomputedGraphDataset(
+            graph_dir=cfg.graph_dir,
+            use_graph=cfg.use_graph,
+        )
+        all_fids = set()
+        for g in train_ds._graphs:
+            all_fids.update(g.fids)
+        train_loss_fids = all_fids - holdout_fids
+        train_ds.loss_fids = train_loss_fids
+        print(
+            f"  {len(train_loss_fids)} train loss fids, "
+            f"{len(holdout_fids)} holdout fids, "
+            f"{len(all_fids)} total"
+        )
+    else:
+        print("Building training dataset...")
+        train_ds = PrecomputedGraphDataset(
+            graph_dir=cfg.graph_dir,
+            use_graph=cfg.use_graph,
+        )
     train_ds.save_norm_stats(os.path.join(cfg.out_dir, "norm_stats.json"))
 
-    print("Building validation dataset...")
-    # Val: only holdout stations, all days
-    # Collect all fids from the val graph source to compute exclude set
-    val_ds_tmp = PrecomputedTmaxDataset(
+    print("Building validation dataset (transductive, loss on holdout only)...")
+    val_ds = PrecomputedGraphDataset(
         graph_dir=val_gdir,
         use_graph=cfg.use_graph,
         norm_stats=train_ds.norm_stats,
-    )
-    all_val_fids = set()
-    for g in val_ds_tmp._graphs:
-        all_val_fids.update(g.fids)
-    val_exclude = all_val_fids - holdout_fids if holdout_fids else None
-
-    val_ds = PrecomputedTmaxDataset(
-        graph_dir=val_gdir,
-        use_graph=cfg.use_graph,
-        norm_stats=train_ds.norm_stats,
-        exclude_fids=val_exclude,
+        loss_fids=holdout_fids if holdout_fids else None,
     )
 
     print(f"Train: {len(train_ds)} days, Val: {len(val_ds)} days")
@@ -213,7 +220,7 @@ def main() -> None:
         num_workers=cfg.num_workers,
     )
 
-    model = LitTmaxGNN(
+    model = LitScalarGNN(
         node_dim=train_ds.node_dim,
         edge_dim=train_ds.edge_dim,
         hidden_dim=cfg.hidden_dim,

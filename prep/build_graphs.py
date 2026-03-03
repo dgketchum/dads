@@ -1,20 +1,17 @@
 """
-Precompute per-day PyG graph files for the tmax GNN.
+Precompute per-day PyG graph files for scalar bias-correction GNNs.
 
 Reads the station-day Parquet + station CSV + static TIFs, builds per-day
 graphs with raw (unnormalized) node features for ALL stations, and saves
 each as a .pt file. Normalization, feature selection, and holdout filtering
-happen at load time in PrecomputedTmaxDataset.
+happen at load time in PrecomputedGraphDataset.
 
-Node features (29):
-  - URMA weather: 11 (tmp, tmax, tmin, pres, ugrd, vgrd, wind, tcdc, gust, ea, wdir)
-  - terrain: 6 (elevation, slope, aspect_sin, aspect_cos, tpi_4, tpi_10)
-  - rsun: 1 (DOY-indexed)
-  - landsat: 7 (period-indexed)
-  - temporal: 2 (doy_sin, doy_cos)
-  - location: 2 (latitude, longitude)
+Weather columns are discovered dynamically from --model-prefix (e.g. "urma"
+finds all *_urma columns, "rtma" finds all *_rtma columns). Columns listed
+in --drop-features are excluded.
 
-Target: delta_tmax (1 scalar per node)
+Target: configurable via --target-col (default: delta_tmax).
+When --log-target is set, computes log(y_obs) - log({prefix}_col) in-place.
 
 Edge construction: reuses build_knn_map, build_static_edge_attrs,
 build_edges_for_day from models/wind_bias/wind_dataset.py.
@@ -59,20 +56,6 @@ from models.wind_bias.wind_dataset import (
 # Feature definitions
 # ---------------------------------------------------------------------------
 
-URMA_WEATHER_COLS = [
-    "tmp_urma",
-    "tmax_urma",
-    "tmin_urma",
-    "pres_urma",
-    "ugrd_urma",
-    "vgrd_urma",
-    "wind_urma",
-    "tcdc_urma",
-    "gust_urma",
-    "ea_urma",
-    "wdir_urma",
-]
-
 TERRAIN_COLS = [
     "elevation",
     "slope",
@@ -87,7 +70,16 @@ LOCATION_COLS = ["latitude", "longitude"]
 RSUN_COL = "rsun"
 LANDSAT_COLS = ["ls_b2", "ls_b3", "ls_b4", "ls_b5", "ls_b6", "ls_b7", "ls_b10"]
 
-TARGET_COLS = ["delta_tmax"]
+
+def _discover_weather_cols(
+    df: pd.DataFrame, prefix: str, drop: list[str] | None = None
+) -> list[str]:
+    """Find all _{prefix} columns in df, excluding any in *drop*."""
+    suffix = f"_{prefix}"
+    cols = sorted(c for c in df.columns if c.endswith(suffix))
+    if drop:
+        cols = [c for c in cols if c not in drop]
+    return cols
 
 
 # ---------------------------------------------------------------------------
@@ -294,7 +286,7 @@ def build_covariate_knn_map(
 
 
 def _parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(description="Precompute tmax GNN graphs.")
+    p = argparse.ArgumentParser(description="Precompute GNN graphs.")
     p.add_argument(
         "--table-path",
         default="/nas/dads/mvp/station_day_e1_tmax_dailyall.parquet",
@@ -321,12 +313,43 @@ def _parse_args() -> argparse.Namespace:
         default=0.7,
         help="Fraction of k neighbors chosen by covariate similarity (covariate mode)",
     )
+    # --- target / variable selection ---
+    p.add_argument(
+        "--target-col",
+        default="delta_tmax",
+        help="Name of the target column (default: delta_tmax)",
+    )
+    p.add_argument(
+        "--model-prefix",
+        default="urma",
+        help="Column suffix for weather vars, e.g. 'urma' or 'rtma'",
+    )
+    p.add_argument(
+        "--drop-features",
+        nargs="*",
+        default=None,
+        help="Weather columns to exclude from node features (e.g. ea_rtma)",
+    )
+    p.add_argument(
+        "--log-target",
+        action="store_true",
+        help="Compute log-space residual: log(y_obs) - log({base}_col)",
+    )
+    p.add_argument(
+        "--required-col",
+        default=None,
+        help="Column that must be non-null (default: tmp_{model-prefix})",
+    )
     return p.parse_args()
 
 
 def main() -> None:
     args = _parse_args()
     os.makedirs(args.out_dir, exist_ok=True)
+
+    target_col = args.target_col
+    prefix = args.model_prefix
+    required_col = args.required_col or f"tmp_{prefix}"
 
     # ------------------------------------------------------------------
     # Load station-day table
@@ -338,10 +361,23 @@ def main() -> None:
     df["fid"] = df["fid"].astype(str)
     df["day"] = pd.to_datetime(df["day"])
 
-    # Drop rows without URMA data or target
+    # --- Discover weather columns from prefix ---
+    weather_cols = _discover_weather_cols(df, prefix, drop=args.drop_features)
+    print(f"Weather cols ({prefix}): {weather_cols}")
+
+    # --- Optional log-space target ---
+    if args.log_target:
+        base_col = f"ea_{prefix}"
+        print(f"Computing log-space residual: log(y_obs) - log({base_col})")
+        valid = (df["y_obs"] > 1e-4) & (df[base_col] > 1e-4)
+        df = df[valid].copy()
+        df[target_col] = np.log(df["y_obs"]) - np.log(df[base_col])
+        print(f"  {len(df)} rows after filtering y_obs, {base_col} > 1e-4 kPa")
+
+    # Drop rows without required weather data or target
     before = len(df)
-    df = df.dropna(subset=["tmp_urma", "delta_tmax"])
-    print(f"Kept {len(df)} of {before} rows with URMA + delta_tmax")
+    df = df.dropna(subset=[required_col, target_col])
+    print(f"Kept {len(df)} of {before} rows with {required_col} + {target_col}")
 
     # ------------------------------------------------------------------
     # Load station inventory for lat/lon/elevation
@@ -448,9 +484,9 @@ def main() -> None:
     }
 
     # ------------------------------------------------------------------
-    # Fill NaN in URMA columns
+    # Fill NaN in weather columns
     # ------------------------------------------------------------------
-    for c in URMA_WEATHER_COLS:
+    for c in weather_cols:
         if c in df.columns:
             df[c] = df[c].fillna(0.0)
 
@@ -458,7 +494,7 @@ def main() -> None:
     # Build all feature column names
     # ------------------------------------------------------------------
     all_feature_cols = (
-        URMA_WEATHER_COLS
+        weather_cols
         + TERRAIN_COLS
         + [RSUN_COL]
         + LANDSAT_COLS
@@ -482,16 +518,16 @@ def main() -> None:
         n_stations = len(fid_list)
 
         # --- Build node feature matrix ---
-        # URMA weather (11 cols from table)
-        urma_cols_present = [c for c in URMA_WEATHER_COLS if c in day_df.columns]
-        urma_arr = day_df[urma_cols_present].values.astype("float32")
+        # Weather columns (dynamic, from prefix)
+        wx_cols_present = [c for c in weather_cols if c in day_df.columns]
+        wx_arr = day_df[wx_cols_present].values.astype("float32")
         # Pad missing columns with zeros
-        if len(urma_cols_present) < len(URMA_WEATHER_COLS):
-            full_urma = np.zeros((n_stations, len(URMA_WEATHER_COLS)), dtype="float32")
-            for j, c in enumerate(URMA_WEATHER_COLS):
-                if c in urma_cols_present:
-                    full_urma[:, j] = urma_arr[:, urma_cols_present.index(c)]
-            urma_arr = full_urma
+        if len(wx_cols_present) < len(weather_cols):
+            full_wx = np.zeros((n_stations, len(weather_cols)), dtype="float32")
+            for j, c in enumerate(weather_cols):
+                if c in wx_cols_present:
+                    full_wx[:, j] = wx_arr[:, wx_cols_present.index(c)]
+            wx_arr = full_wx
 
         # Terrain (6 per station, static)
         terrain_arr = np.stack(
@@ -532,19 +568,21 @@ def main() -> None:
             ]
         )
 
-        # Concatenate all features: 11 + 6 + 1 + 7 + 2 + 2 = 29
+        # Concatenate all features
         x = np.concatenate(
-            [urma_arr, terrain_arr, rsun_arr, landsat_arr, temporal_arr, loc_arr],
+            [wx_arr, terrain_arr, rsun_arr, landsat_arr, temporal_arr, loc_arr],
             axis=1,
         )
         x = np.nan_to_num(x, nan=0.0, posinf=0.0, neginf=0.0)
 
         # Target
-        y = day_df["delta_tmax"].values.astype("float32")
+        y = day_df[target_col].values.astype("float32")
 
         # --- Build edges ---
-        ugrd = day_df["ugrd_urma"].values if "ugrd_urma" in day_df.columns else None
-        vgrd = day_df["vgrd_urma"].values if "vgrd_urma" in day_df.columns else None
+        ugrd_col = f"ugrd_{prefix}"
+        vgrd_col = f"vgrd_{prefix}"
+        ugrd = day_df[ugrd_col].values if ugrd_col in day_df.columns else None
+        vgrd = day_df[vgrd_col].values if vgrd_col in day_df.columns else None
         edge_index, edge_attr = build_edges_for_day(
             fids=fid_list,
             ugrd=ugrd,
@@ -582,7 +620,7 @@ def main() -> None:
     # Save metadata
     meta = {
         "all_feature_cols": all_feature_cols,
-        "target_cols": TARGET_COLS,
+        "target_cols": [target_col],
         "edge_dim": 7,
         "n_days": len(days),
         "n_features": len(all_feature_cols),
@@ -591,6 +629,8 @@ def main() -> None:
         "neighbor_mode": args.neighbor_mode,
         "similarity_fraction": args.similarity_fraction,
         "edge_norm": edge_norm,
+        "model_prefix": prefix,
+        "log_target": args.log_target,
     }
     with open(os.path.join(args.out_dir, "meta.json"), "w") as f:
         json.dump(meta, f, indent=2)
