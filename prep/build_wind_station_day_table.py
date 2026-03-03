@@ -111,6 +111,7 @@ def build_wind_station_day_table(
     out_path: str,
     overwrite: bool = False,
     synoptic_crosswalk_path: str | None = None,
+    most_factors_path: str | None = None,
 ) -> str:
     if os.path.exists(out_path) and not overwrite:
         print(f"Output exists: {out_path}")
@@ -131,6 +132,15 @@ def build_wind_station_day_table(
         wind_ht = dict(zip(xw["stationId"], xw["wind_sensor_ht"]))
         n_non10 = sum(1 for v in wind_ht.values() if v != 10.0)
         print(f"Wind height crosswalk: {len(wind_ht)} stations ({n_non10} non-10m)")
+
+    # Load MOST stability-corrected factors (optional)
+    most_factors: pd.DataFrame | None = None
+    if most_factors_path is not None and os.path.exists(most_factors_path):
+        most_factors = pd.read_parquet(most_factors_path)
+        most_factors["fid"] = most_factors["fid"].astype(str)
+        most_factors["day"] = pd.to_datetime(most_factors["day"]).dt.normalize()
+        most_factors = most_factors.set_index(["fid", "day"])
+        print(f"MOST factors: {len(most_factors)} station-days")
 
     # Load Sx table
     sx_df = pd.read_parquet(sx_path)
@@ -183,11 +193,24 @@ def build_wind_station_day_table(
 
         # Wind height correction: adjust from sensor height to 10 m AGL
         zw = wind_ht.get(fid, 10.0)
+        fid_has_most = False
+        fao56_factor = 1.0
         if zw != 10.0 and zw > 0.2:
-            factor = ln_10m / np.log(67.8 * zw - 5.42)
-            for col in ("u", "v", "wind"):
-                if col in obs.columns:
-                    obs[col] = obs[col] * factor
+            # Check for per-day MOST stability-corrected factors
+            fid_has_most = (
+                most_factors is not None
+                and fid in most_factors.index.get_level_values(0)
+            )
+            if fid_has_most:
+                # Per-day MOST correction: apply after joining obs+rtma
+                # (deferred below, after merge)
+                fao56_factor = ln_10m / np.log(67.8 * zw - 5.42)
+            else:
+                # Pure FAO-56 neutral fallback
+                factor = ln_10m / np.log(67.8 * zw - 5.42)
+                for col in ("u", "v", "wind"):
+                    if col in obs.columns:
+                        obs[col] = obs[col] * factor
             n_ht_corrected += 1
 
         # Join obs + rtma on day
@@ -204,6 +227,27 @@ def build_wind_station_day_table(
                 "wind_dir": "wdir_obs",
             }
         )
+
+        # Apply per-day MOST correction (deferred from above)
+        if zw != 10.0 and zw > 0.2 and fid_has_most:
+            sta_most = (
+                most_factors.loc[fid]
+                if fid in most_factors.index.get_level_values(0)
+                else None
+            )
+            if sta_most is not None and not sta_most.empty:
+                # Join MOST factor on day index
+                mf = sta_most["most_factor"].reindex(merged.index)
+                # Fill missing days with FAO-56 neutral
+                mf = mf.fillna(fao56_factor)
+                for col in ("u_obs", "v_obs", "wind_obs"):
+                    if col in merged.columns:
+                        merged[col] = merged[col] * mf.values
+            else:
+                # No MOST rows found — full FAO-56 fallback
+                for col in ("u_obs", "v_obs", "wind_obs"):
+                    if col in merged.columns:
+                        merged[col] = merged[col] * fao56_factor
 
         # QC filters
         # Drop NaN wind
@@ -373,6 +417,11 @@ def _parse_args() -> argparse.Namespace:
         default=None,
         help="Synoptic wind height crosswalk CSV for FAO-56 correction.",
     )
+    p.add_argument(
+        "--most-factors",
+        default=None,
+        help="MOST stability-corrected factors parquet (from HRRR T_skin).",
+    )
     p.add_argument("--overwrite", action="store_true")
     return p.parse_args()
 
@@ -388,6 +437,7 @@ def main() -> None:
         out_path=a.out,
         overwrite=a.overwrite,
         synoptic_crosswalk_path=a.synoptic_crosswalk,
+        most_factors_path=a.most_factors,
     )
 
 
