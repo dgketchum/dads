@@ -110,6 +110,7 @@ def build_wind_station_day_table(
     stations_csv: str,
     out_path: str,
     overwrite: bool = False,
+    synoptic_crosswalk_path: str | None = None,
 ) -> str:
     if os.path.exists(out_path) and not overwrite:
         print(f"Output exists: {out_path}")
@@ -120,6 +121,16 @@ def build_wind_station_day_table(
     id_col = "station_id" if "station_id" in stations.columns else "fid"
     fids = set(stations[id_col].astype(str))
     print(f"Stations: {len(fids)}")
+
+    # Load Synoptic wind height crosswalk for FAO-56 correction
+    wind_ht: dict[str, float] = {}
+    if synoptic_crosswalk_path is not None:
+        xw = pd.read_csv(
+            synoptic_crosswalk_path, usecols=["stationId", "wind_sensor_ht"]
+        )
+        wind_ht = dict(zip(xw["stationId"], xw["wind_sensor_ht"]))
+        n_non10 = sum(1 for v in wind_ht.values() if v != 10.0)
+        print(f"Wind height crosswalk: {len(wind_ht)} stations ({n_non10} non-10m)")
 
     # Load Sx table
     sx_df = pd.read_parquet(sx_path)
@@ -146,6 +157,10 @@ def build_wind_station_day_table(
     station_static = sx_df.join(terrain_df, how="inner")
     print(f"Stations with Sx + terrain: {len(station_static)}")
 
+    # FAO-56 neutral log-law: ln(67.8 * 10 - 5.42)
+    ln_10m = np.log(67.8 * 10 - 5.42)
+    n_ht_corrected = 0
+
     # Process station by station
     all_rows = []
     n_dropped = {"wind_range": 0, "delta_range": 0, "nan_wind": 0}
@@ -165,6 +180,15 @@ def build_wind_station_day_table(
         # Require wind obs columns
         if "u" not in obs.columns or "v" not in obs.columns:
             continue
+
+        # Wind height correction: adjust from sensor height to 10 m AGL
+        zw = wind_ht.get(fid, 10.0)
+        if zw != 10.0 and zw > 0.2:
+            factor = ln_10m / np.log(67.8 * zw - 5.42)
+            for col in ("u", "v", "wind"):
+                if col in obs.columns:
+                    obs[col] = obs[col] * factor
+            n_ht_corrected += 1
 
         # Join obs + rtma on day
         merged = obs[["u", "v", "wind", "wind_dir"]].join(rtma, how="inner")
@@ -312,6 +336,7 @@ def build_wind_station_day_table(
             print(f"  {processed} stations processed")
 
     print(f"Processed {processed} stations")
+    print(f"Wind height-corrected: {n_ht_corrected} stations")
     print(f"Dropped rows: {n_dropped}")
 
     if not all_rows:
@@ -343,6 +368,11 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument(
         "--out", default="/nas/dads/mvp/station_day_wind_pnw_2018_2024.parquet"
     )
+    p.add_argument(
+        "--synoptic-crosswalk",
+        default=None,
+        help="Synoptic wind height crosswalk CSV for FAO-56 correction.",
+    )
     p.add_argument("--overwrite", action="store_true")
     return p.parse_args()
 
@@ -357,6 +387,7 @@ def main() -> None:
         stations_csv=a.stations_csv,
         out_path=a.out,
         overwrite=a.overwrite,
+        synoptic_crosswalk_path=a.synoptic_crosswalk,
     )
 
 

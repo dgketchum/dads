@@ -69,6 +69,7 @@ class Inputs:
     stations_csv: str | None = None
     station_id_col: str = "fid"
     provider_heights_path: str | None = None
+    synoptic_crosswalk_path: str | None = None
 
     @property
     def obs_cols(self) -> list[str]:
@@ -126,6 +127,7 @@ def _read_daily_all_obs(
     start_date: str = "2024-01-01",
     end_date: str = "2024-12-31",
     provider_heights_path: str | None = None,
+    synoptic_crosswalk_path: str | None = None,
 ) -> pd.DataFrame:
     """Aggregate hourly obs from per-day parquets into station-day rows.
 
@@ -145,6 +147,20 @@ def _read_daily_all_obs(
         prov_ht = _load_provider_wind_heights(provider_heights_path)
         print(
             f"  wind height correction: loaded {len(prov_ht)} provider entries",
+            flush=True,
+        )
+
+    # Synoptic crosswalk: stationId → wind_sensor_ht (overrides provider default
+    # for MesoWest sub-networks like AGRIMET, PGN, MT-MESO)
+    synoptic_ht: dict[str, float] | None = None
+    if synoptic_crosswalk_path is not None and "wind" in obs_cols:
+        xw = pd.read_csv(
+            synoptic_crosswalk_path, usecols=["stationId", "wind_sensor_ht"]
+        )
+        synoptic_ht = dict(zip(xw["stationId"], xw["wind_sensor_ht"]))
+        print(
+            f"  synoptic crosswalk: {len(synoptic_ht)} stations "
+            f"({sum(1 for v in synoptic_ht.values() if v != 10.0)} non-10m)",
             flush=True,
         )
 
@@ -186,6 +202,11 @@ def _read_daily_all_obs(
         ):
             prov8 = df["dataProvider"].str[:8]
             df["wind_sensor_ht"] = prov8.map(prov_ht).fillna(10.0)
+            # Override with Synoptic crosswalk (handles MesoWest sub-networks)
+            if synoptic_ht is not None:
+                xw_ht = df["fid"].map(synoptic_ht)
+                has_xw = xw_ht.notna()
+                df.loc[has_xw, "wind_sensor_ht"] = xw_ht[has_xw]
             needs_adj = df["wind_sensor_ht"] != 10.0
             if needs_adj.any():
                 df.loc[needs_adj, "windSpeed"] = _adjust_wind_to_10m(
@@ -338,6 +359,7 @@ def build_station_day_table(
             start_date=start_date,
             end_date=end_date,
             provider_heights_path=inputs.provider_heights_path,
+            synoptic_crosswalk_path=inputs.synoptic_crosswalk_path,
         )
         # For backward compat: first obs col maps to y_obs
         if obs_cols[0] in obs_all.columns:
@@ -547,6 +569,11 @@ def _parse_args() -> argparse.Namespace:
         help="Path to urma2p5_provider_windheight file for wind sensor height lookup.",
     )
     p.add_argument(
+        "--synoptic-crosswalk",
+        default=None,
+        help="Path to Synoptic wind height crosswalk CSV (overrides provider defaults for MesoWest sub-networks).",
+    )
+    p.add_argument(
         "--obs-day-mode",
         default="local",
         choices=["local", "utc_midpoint", "utc_start"],
@@ -584,6 +611,7 @@ def main() -> None:
         stations_csv=a.stations_csv,
         station_id_col=str(a.station_id_col),
         provider_heights_path=a.provider_heights,
+        synoptic_crosswalk_path=a.synoptic_crosswalk,
     )
     build_station_day_table(
         inputs=inputs,
