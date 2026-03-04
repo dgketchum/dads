@@ -59,6 +59,48 @@ def _adjust_wind_to_10m(wind: pd.Series, zw: pd.Series) -> pd.Series:
     return wind * factor
 
 
+def _compute_doorenbos_rsds(
+    tcdc: pd.Series, lat: pd.Series, doy: pd.Series
+) -> pd.Series:
+    """Doorenbos & Pruitt (1977) solar radiation from cloud cover + FAO-56 Ra.
+
+    Parameters
+    ----------
+    tcdc : Series, cloud cover 0–100 %
+    lat  : Series, latitude in degrees
+    doy  : Series, day-of-year (1–366)
+
+    Returns
+    -------
+    Rs in W/m² (daily mean equivalent).
+    """
+    # Sunshine fraction from cloud cover (Doorenbos & Pruitt 1977)
+    n_over_N = (-0.0083 * tcdc + 0.9659).clip(0, 1)
+
+    # FAO-56 extraterrestrial radiation Ra (MJ/m²/day)
+    lat_rad = np.radians(lat)
+    decl = 0.409 * np.sin(2 * np.pi / 365 * doy - 1.39)
+    cos_ws = (-np.tan(lat_rad) * np.tan(decl)).clip(-1.0, 1.0)
+    ws = np.arccos(cos_ws)
+    dr = 1 + 0.033 * np.cos(2 * np.pi / 365 * doy)
+    Gsc = 0.0820  # MJ/m²/min
+    Ra_mj = (
+        (24 * 60 / np.pi)
+        * Gsc
+        * dr
+        * (
+            ws * np.sin(lat_rad) * np.sin(decl)
+            + np.cos(lat_rad) * np.cos(decl) * np.sin(ws)
+        )
+    ).clip(lower=0)
+
+    # Angstrom–Prescott: Rs = (a + b * n/N) * Ra
+    Rs_mj = (0.25 + 0.50 * n_over_N) * Ra_mj
+
+    # MJ/m²/day → W/m²  (1 MJ/m²/day = 1e6 / 86400 W/m² ≈ 11.574)
+    return Rs_mj / 0.0864
+
+
 @dataclass(frozen=True)
 class Inputs:
     obs_dir: str
@@ -66,6 +108,7 @@ class Inputs:
     obs_format: str = "station_por"  # "station_por" or "daily_all"
     rtma_daily_dir: str | None = None
     urma_daily_dir: str | None = None
+    cdr_daily_dir: str | None = None
     stations_csv: str | None = None
     station_id_col: str = "fid"
     provider_heights_path: str | None = None
@@ -230,6 +273,11 @@ def _read_daily_all_obs(
             agg["wind"] = ("windSpeed", "mean")
             if "wind_sensor_ht" in df.columns:
                 agg["wind_sensor_ht"] = ("wind_sensor_ht", "first")
+        if "rsds" in obs_cols and "solarRadiation" in df.columns:
+            sr = df["solarRadiation"].copy()
+            sr[~sr.between(0, 1500)] = np.nan
+            df["rsds_inst"] = sr
+            agg["rsds"] = ("rsds_inst", "mean")
         if not agg:
             continue
 
@@ -244,6 +292,8 @@ def _read_daily_all_obs(
             grouped.loc[~grouped["ea"].between(0.0001, 8.0), "ea"] = np.nan
         if "wind" in grouped.columns:
             grouped.loc[~grouped["wind"].between(0, 35), "wind"] = np.nan
+        if "rsds" in grouped.columns:
+            grouped.loc[~grouped["rsds"].between(0, 500), "rsds"] = np.nan
 
         grouped["day"] = day_ts
         all_chunks.append(grouped.reset_index())
@@ -316,6 +366,15 @@ def _compute_residuals(
             wind_baseline = pd.to_numeric(out[wind_base_col], errors="coerce")
             out["delta_wind"] = wind_obs - wind_baseline
 
+    # rsds residuals
+    if "rsds" in obs_cols:
+        for cand in ("rsds_urma", "rsds_rtma"):
+            if cand in out.columns:
+                rsds_obs = pd.to_numeric(out["rsds"], errors="coerce")
+                rsds_baseline = pd.to_numeric(out[cand], errors="coerce")
+                out["delta_rsds"] = rsds_obs - rsds_baseline
+                break
+
     return out
 
 
@@ -381,6 +440,11 @@ def build_station_day_table(
                 if os.path.exists(p):
                     urma = _read_station_daily_parquet(p)
                     merged = merged.join(urma, how="left")
+            if inputs.cdr_daily_dir:
+                p = os.path.join(inputs.cdr_daily_dir, f"{fid}.parquet")
+                if os.path.exists(p):
+                    cdr = _read_station_daily_parquet(p)
+                    merged = merged.join(cdr, how="left")
             merged = merged.reset_index(level="fid", drop=True)
             merged["fid"] = str(fid)
             merged["day"] = merged.index.normalize()
@@ -428,6 +492,11 @@ def build_station_day_table(
                 if os.path.exists(p):
                     urma = _read_station_daily_parquet(p)
                     merged = merged.join(urma, how="left")
+            if inputs.cdr_daily_dir:
+                p = os.path.join(inputs.cdr_daily_dir, f"{fid}.parquet")
+                if os.path.exists(p):
+                    cdr = _read_station_daily_parquet(p)
+                    merged = merged.join(cdr, how="left")
 
             merged = merged.copy()
             merged["fid"] = fid
@@ -439,6 +508,21 @@ def build_station_day_table(
             raise RuntimeError("no station rows written; check input dirs and obs_col")
 
         out = pd.concat(rows, axis=0, ignore_index=True)
+
+    # --- Doorenbos (1977) synthetic rsds baseline from URMA cloud cover ---
+    if "rsds" in obs_cols and "tcdc_urma" in out.columns:
+        lat_map = None
+        if inputs.stations_csv and stations is not None:
+            sid = inputs.station_id_col
+            if sid in stations.columns and "latitude" in stations.columns:
+                lat_map = stations.set_index(sid)["latitude"].to_dict()
+        if lat_map is not None:
+            out["_lat"] = out["fid"].map(lat_map)
+            out["_doy"] = pd.to_datetime(out["day"]).dt.dayofyear
+            out["rsds_urma"] = _compute_doorenbos_rsds(
+                out["tcdc_urma"], out["_lat"], out["_doy"]
+            )
+            out.drop(columns=["_lat", "_doy"], inplace=True)
 
     # --- Residuals (shared for both modes) ---
     out = _compute_residuals(out, obs_cols, multi_target)
@@ -465,6 +549,9 @@ def build_station_day_table(
             "delta_tmax",
             "delta_tmin",
             "delta_wind",
+            "rsds_urma",
+            "rsds_rtma",
+            "delta_rsds",
             "wind_sensor_ht",
             "tmax_baseline_source",
         }
@@ -552,6 +639,11 @@ def _parse_args() -> argparse.Namespace:
         default=None,
         help="Directory of per-station daily URMA Parquets.",
     )
+    p.add_argument(
+        "--cdr-daily-dir",
+        default=None,
+        help="Directory of per-station daily CDR Parquets (NOAA CDR surface reflectance).",
+    )
     p.add_argument("--out-file", required=True, help="Output Parquet path.")
     p.add_argument(
         "--stations-csv",
@@ -608,6 +700,7 @@ def main() -> None:
         obs_format=str(a.obs_format),
         rtma_daily_dir=a.rtma_daily_dir,
         urma_daily_dir=a.urma_daily_dir,
+        cdr_daily_dir=a.cdr_daily_dir,
         stations_csv=a.stations_csv,
         station_id_col=str(a.station_id_col),
         provider_heights_path=a.provider_heights,
