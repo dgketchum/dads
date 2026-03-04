@@ -74,9 +74,15 @@ LANDSAT_COLS = ["ls_b2", "ls_b3", "ls_b4", "ls_b5", "ls_b6", "ls_b7", "ls_b10"]
 def _discover_weather_cols(
     df: pd.DataFrame, prefix: str, drop: list[str] | None = None
 ) -> list[str]:
-    """Find all _{prefix} columns in df, excluding any in *drop*."""
+    """Find all _{prefix} columns in df, excluding any in *drop*.
+
+    Columns starting with ``delta_`` are always excluded — they are derived
+    targets, not raw gridded features.
+    """
     suffix = f"_{prefix}"
-    cols = sorted(c for c in df.columns if c.endswith(suffix))
+    cols = sorted(
+        c for c in df.columns if c.endswith(suffix) and not c.startswith("delta_")
+    )
     if drop:
         cols = [c for c in cols if c not in drop]
     return cols
@@ -325,6 +331,12 @@ def _parse_args() -> argparse.Namespace:
         help="Column suffix for weather vars, e.g. 'urma' or 'rtma'",
     )
     p.add_argument(
+        "--extra-prefix",
+        nargs="*",
+        default=None,
+        help="Additional column prefixes to include as features (e.g. cdr)",
+    )
+    p.add_argument(
         "--drop-features",
         nargs="*",
         default=None,
@@ -339,6 +351,12 @@ def _parse_args() -> argparse.Namespace:
         "--required-col",
         default=None,
         help="Column that must be non-null (default: tmp_{model-prefix})",
+    )
+    p.add_argument(
+        "--max-abs-target",
+        type=float,
+        default=None,
+        help="Drop rows where |target| exceeds this value (outlier filter)",
     )
     return p.parse_args()
 
@@ -365,6 +383,14 @@ def main() -> None:
     weather_cols = _discover_weather_cols(df, prefix, drop=args.drop_features)
     print(f"Weather cols ({prefix}): {weather_cols}")
 
+    # --- Discover extra-prefix columns ---
+    extra_prefixes = args.extra_prefix or []
+    extra_cols: list[str] = []
+    for ep in extra_prefixes:
+        ep_cols = _discover_weather_cols(df, ep)
+        print(f"Extra cols ({ep}): {ep_cols}")
+        extra_cols.extend(ep_cols)
+
     # --- Optional log-space target ---
     if args.log_target:
         base_col = f"ea_{prefix}"
@@ -378,6 +404,14 @@ def main() -> None:
     before = len(df)
     df = df.dropna(subset=[required_col, target_col])
     print(f"Kept {len(df)} of {before} rows with {required_col} + {target_col}")
+
+    # Optional outlier filter on target
+    if args.max_abs_target is not None:
+        before = len(df)
+        df = df[df[target_col].abs() <= args.max_abs_target]
+        print(
+            f"Target filter |{target_col}| <= {args.max_abs_target}: kept {len(df)} of {before} ({before - len(df)} dropped)"
+        )
 
     # ------------------------------------------------------------------
     # Load station inventory for lat/lon/elevation
@@ -484,9 +518,12 @@ def main() -> None:
     }
 
     # ------------------------------------------------------------------
-    # Fill NaN in weather columns
+    # Fill NaN in weather + extra columns
     # ------------------------------------------------------------------
     for c in weather_cols:
+        if c in df.columns:
+            df[c] = df[c].fillna(0.0)
+    for c in extra_cols:
         if c in df.columns:
             df[c] = df[c].fillna(0.0)
 
@@ -495,6 +532,7 @@ def main() -> None:
     # ------------------------------------------------------------------
     all_feature_cols = (
         weather_cols
+        + extra_cols
         + TERRAIN_COLS
         + [RSUN_COL]
         + LANDSAT_COLS
@@ -528,6 +566,23 @@ def main() -> None:
                 if c in wx_cols_present:
                     full_wx[:, j] = wx_arr[:, wx_cols_present.index(c)]
             wx_arr = full_wx
+
+        # Extra-prefix columns (e.g. CDR)
+        if extra_cols:
+            ex_present = [c for c in extra_cols if c in day_df.columns]
+            extra_arr = (
+                day_df[ex_present].values.astype("float32")
+                if ex_present
+                else np.zeros((n_stations, 0), dtype="float32")
+            )
+            if len(ex_present) < len(extra_cols):
+                full_ex = np.zeros((n_stations, len(extra_cols)), dtype="float32")
+                for j, c in enumerate(extra_cols):
+                    if c in ex_present:
+                        full_ex[:, j] = extra_arr[:, ex_present.index(c)]
+                extra_arr = full_ex
+        else:
+            extra_arr = np.zeros((n_stations, 0), dtype="float32")
 
         # Terrain (6 per station, static)
         terrain_arr = np.stack(
@@ -569,10 +624,11 @@ def main() -> None:
         )
 
         # Concatenate all features
-        x = np.concatenate(
-            [wx_arr, terrain_arr, rsun_arr, landsat_arr, temporal_arr, loc_arr],
-            axis=1,
-        )
+        parts = [wx_arr]
+        if extra_arr.shape[1] > 0:
+            parts.append(extra_arr)
+        parts.extend([terrain_arr, rsun_arr, landsat_arr, temporal_arr, loc_arr])
+        x = np.concatenate(parts, axis=1)
         x = np.nan_to_num(x, nan=0.0, posinf=0.0, neginf=0.0)
 
         # Target
@@ -630,6 +686,7 @@ def main() -> None:
         "similarity_fraction": args.similarity_fraction,
         "edge_norm": edge_norm,
         "model_prefix": prefix,
+        "extra_prefixes": extra_prefixes,
         "log_target": args.log_target,
     }
     with open(os.path.join(args.out_dir, "meta.json"), "w") as f:

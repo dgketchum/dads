@@ -13,7 +13,7 @@ import torch
 from torch import nn
 from torchmetrics import MeanAbsoluteError, MeanSquaredError, R2Score
 
-from models.wind_bias.gnn import WindBiasGNN
+from models.wind_bias.gnn import EdgeGatedGNN
 
 
 class LitScalarGNN(L.LightningModule):
@@ -32,7 +32,7 @@ class LitScalarGNN(L.LightningModule):
         super().__init__()
         self.save_hyperparameters()
 
-        self.model = WindBiasGNN(
+        self.model = EdgeGatedGNN(
             node_dim=node_dim,
             edge_dim=edge_dim,
             hidden_dim=hidden_dim,

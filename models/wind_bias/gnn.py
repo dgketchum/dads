@@ -43,8 +43,8 @@ class EdgeGatedAttention(MessagePassing):
         return alpha.unsqueeze(-1) * h_j
 
 
-class WindBiasGNN(nn.Module):
-    """Edge-gated neighbor attention GNN for wind bias correction.
+class EdgeGatedGNN(nn.Module):
+    """Edge-gated neighbor attention GNN for scalar bias correction.
 
     Parameters
     ----------
@@ -59,7 +59,7 @@ class WindBiasGNN(nn.Module):
     use_graph : bool
         If False, skip attention — pure local MLP (experiment step 1).
     out_dim : int
-        Number of output scalars per node (default 2 for wind par/perp).
+        Number of output scalars per node.
     """
 
     def __init__(
