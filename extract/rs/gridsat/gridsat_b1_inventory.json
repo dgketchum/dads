@@ -1,0 +1,514 @@
+{
+  "bucket": "noaa-cdr-gridsat-b1-pds",
+  "temporal_range": {
+    "start_year": 1980,
+    "end_year": 2025
+  },
+  "files_per_year": {
+    "1980": 2905,
+    "1981": 2913,
+    "1983": 2920,
+    "1984": 2921,
+    "1985": 2920,
+    "1986": 2920,
+    "1987": 2920,
+    "1988": 2928,
+    "1989": 2920,
+    "1990": 2920,
+    "1991": 2920,
+    "1992": 2928,
+    "1993": 2920,
+    "1994": 2920,
+    "1995": 2920,
+    "1996": 2928,
+    "1997": 2920,
+    "1998": 2920,
+    "1999": 2920,
+    "2000": 2928,
+    "2001": 2920,
+    "2002": 2920,
+    "2003": 2920,
+    "2004": 2928,
+    "2005": 2920,
+    "2006": 2920,
+    "2007": 2920,
+    "2008": 2928,
+    "2009": 2920,
+    "2010": 2920,
+    "2011": 2920,
+    "2012": 2928,
+    "2013": 2920,
+    "2014": 2920,
+    "2015": 2920,
+    "2016": 2928,
+    "2018": 2920,
+    "2019": 2920,
+    "2020": 2928,
+    "2021": 2920,
+    "2022": 2920,
+    "2023": 2920,
+    "2024": 2928,
+    "2025": 1944
+  },
+  "total_files": 127563,
+  "sample_file": {
+    "key": "data/2020/GRIDSAT-B1.2020.01.01.00.v02r01.nc",
+    "size_bytes": 52079152
+  },
+  "variables": {
+    "satlat": {
+      "long_name": "Sub-Satellite Latitude",
+      "units": "degrees_north",
+      "dtype": "float32",
+      "dimensions": [
+        "time",
+        "Ngeo"
+      ],
+      "shape": [
+        1,
+        6
+      ],
+      "scale_factor": null,
+      "add_offset": null,
+      "_FillValue": null
+    },
+    "satlon": {
+      "long_name": "Sub-Satellite Longitude",
+      "units": "degrees_east",
+      "dtype": "float32",
+      "dimensions": [
+        "time",
+        "Ngeo"
+      ],
+      "shape": [
+        1,
+        6
+      ],
+      "scale_factor": null,
+      "add_offset": null,
+      "_FillValue": null
+    },
+    "satrad": {
+      "long_name": "Sub-Satellite Orbital Radius",
+      "units": "km",
+      "dtype": "float32",
+      "dimensions": [
+        "time",
+        "Ngeo"
+      ],
+      "shape": [
+        1,
+        6
+      ],
+      "scale_factor": null,
+      "add_offset": null,
+      "_FillValue": null
+    },
+    "satname": {
+      "long_name": "Satellite Name",
+      "units": "",
+      "dtype": "|S50",
+      "dimensions": [
+        "time",
+        "Ngeo"
+      ],
+      "shape": [
+        1,
+        6
+      ],
+      "scale_factor": null,
+      "add_offset": null,
+      "_FillValue": null
+    },
+    "b1ufile": {
+      "long_name": "B1U File Name",
+      "units": "",
+      "dtype": "|S50",
+      "dimensions": [
+        "time",
+        "Ngeo"
+      ],
+      "shape": [
+        1,
+        6
+      ],
+      "scale_factor": null,
+      "add_offset": null,
+      "_FillValue": null
+    },
+    "b1file": {
+      "long_name": "B1 Filename",
+      "units": "",
+      "dtype": "|S50",
+      "dimensions": [
+        "time",
+        "Ngeo"
+      ],
+      "shape": [
+        1,
+        6
+      ],
+      "scale_factor": null,
+      "add_offset": null,
+      "_FillValue": null
+    },
+    "calslp_irwin": {
+      "long_name": "Slope used in IRWIN_cdr calibration correction",
+      "units": "",
+      "dtype": "float32",
+      "dimensions": [
+        "time",
+        "Ngeo"
+      ],
+      "shape": [
+        1,
+        6
+      ],
+      "scale_factor": null,
+      "add_offset": null,
+      "_FillValue": null
+    },
+    "caloff_irwin": {
+      "long_name": "Offset used in IRWIN calibration correction",
+      "units": "kelvin",
+      "dtype": "float32",
+      "dimensions": [
+        "time",
+        "Ngeo"
+      ],
+      "shape": [
+        1,
+        6
+      ],
+      "scale_factor": null,
+      "add_offset": null,
+      "_FillValue": null
+    },
+    "calslp_irwvp": {
+      "long_name": "Slope used in IRWVP calibration correction",
+      "units": "",
+      "dtype": "float32",
+      "dimensions": [
+        "time",
+        "Ngeo"
+      ],
+      "shape": [
+        1,
+        6
+      ],
+      "scale_factor": null,
+      "add_offset": null,
+      "_FillValue": null
+    },
+    "caloff_irwvp": {
+      "long_name": "Offset used in IRWVP calibration correction",
+      "units": "kelvin",
+      "dtype": "float32",
+      "dimensions": [
+        "time",
+        "Ngeo"
+      ],
+      "shape": [
+        1,
+        6
+      ],
+      "scale_factor": null,
+      "add_offset": null,
+      "_FillValue": null
+    },
+    "vis_rad_slope": {
+      "long_name": "Conversion factor to calculate radiance from reflectance",
+      "units": "watts m-2 sr-1",
+      "dtype": "float32",
+      "dimensions": [
+        "Ngeo"
+      ],
+      "shape": [
+        6
+      ],
+      "scale_factor": null,
+      "add_offset": null,
+      "_FillValue": null
+    },
+    "vis_dc_slope": {
+      "long_name": "Conversion factor to calculate original digital count from reflectance",
+      "units": "",
+      "dtype": "float32",
+      "dimensions": [
+        "Ngeo"
+      ],
+      "shape": [
+        6
+      ],
+      "scale_factor": null,
+      "add_offset": null,
+      "_FillValue": null
+    },
+    "vis_dc_offset": {
+      "long_name": "Conversion offset to calculate original digital count from reflectance",
+      "units": "",
+      "dtype": "float32",
+      "dimensions": [
+        "Ngeo"
+      ],
+      "shape": [
+        6
+      ],
+      "scale_factor": null,
+      "add_offset": null,
+      "_FillValue": null
+    },
+    "irwin_cdr": {
+      "long_name": "NOAA FCDR of Brightness Temperature near 11 microns (Nadir-most observations)",
+      "units": "Kelvin",
+      "dtype": "float32",
+      "dimensions": [
+        "time",
+        "lat",
+        "lon"
+      ],
+      "shape": [
+        1,
+        2000,
+        5143
+      ],
+      "scale_factor": null,
+      "add_offset": null,
+      "_FillValue": null
+    },
+    "irwin_2": {
+      "long_name": "Brightness Temperature near 11 microns (Second nadir-most from overlap regions)",
+      "units": "Kelvin",
+      "dtype": "float32",
+      "dimensions": [
+        "time",
+        "lat",
+        "lon"
+      ],
+      "shape": [
+        1,
+        2000,
+        5143
+      ],
+      "scale_factor": null,
+      "add_offset": null,
+      "_FillValue": null
+    },
+    "irwin_3": {
+      "long_name": "Brightness Temperature near 11 microns (Third nadir-most from overlap regions)",
+      "units": "Kelvin",
+      "dtype": "float32",
+      "dimensions": [
+        "time",
+        "sparse3ir"
+      ],
+      "shape": [
+        1,
+        1008762
+      ],
+      "scale_factor": null,
+      "add_offset": null,
+      "_FillValue": null
+    },
+    "irwvp": {
+      "long_name": "Brightness Temperature near 6.7 microns (Nadir-most observations)",
+      "units": "Kelvin",
+      "dtype": "float32",
+      "dimensions": [
+        "time",
+        "lat",
+        "lon"
+      ],
+      "shape": [
+        1,
+        2000,
+        5143
+      ],
+      "scale_factor": null,
+      "add_offset": null,
+      "_FillValue": null
+    },
+    "irwvp_2": {
+      "long_name": "Brightness Temperature near 6.7 microns (Second nadir-most from overlap regions)",
+      "units": "Kelvin",
+      "dtype": "float32",
+      "dimensions": [
+        "time",
+        "lat",
+        "lon"
+      ],
+      "shape": [
+        1,
+        2000,
+        5143
+      ],
+      "scale_factor": null,
+      "add_offset": null,
+      "_FillValue": null
+    },
+    "vschn": {
+      "long_name": "Visible reflectance near 0.6 microns (Nadir-most observations)",
+      "units": "1",
+      "dtype": "float32",
+      "dimensions": [
+        "time",
+        "lat",
+        "lon"
+      ],
+      "shape": [
+        1,
+        2000,
+        5143
+      ],
+      "scale_factor": null,
+      "add_offset": null,
+      "_FillValue": null
+    },
+    "vschn_2": {
+      "long_name": "Visible reflectance near 0.6 microns (Second nadir-most from overlap regions)",
+      "units": "1",
+      "dtype": "float32",
+      "dimensions": [
+        "time",
+        "sparse2vs"
+      ],
+      "shape": [
+        1,
+        1749641
+      ],
+      "scale_factor": null,
+      "add_offset": null,
+      "_FillValue": null
+    },
+    "satid_ir": {
+      "long_name": "IRWIN_CDR Satellite Index (packed)",
+      "units": "",
+      "dtype": "float32",
+      "dimensions": [
+        "time",
+        "lat",
+        "lon"
+      ],
+      "shape": [
+        1,
+        2000,
+        5143
+      ],
+      "scale_factor": null,
+      "add_offset": null,
+      "_FillValue": null
+    },
+    "satid_wv": {
+      "long_name": "IRWVP Satellite Index (packed)",
+      "units": "",
+      "dtype": "int8",
+      "dimensions": [
+        "time",
+        "lat",
+        "lon"
+      ],
+      "shape": [
+        1,
+        2000,
+        5143
+      ],
+      "scale_factor": null,
+      "add_offset": null,
+      "_FillValue": null
+    },
+    "satid_vs": {
+      "long_name": "VSCHN Satellite Index (packed)",
+      "units": "",
+      "dtype": "int8",
+      "dimensions": [
+        "time",
+        "lat",
+        "lon"
+      ],
+      "shape": [
+        1,
+        2000,
+        5143
+      ],
+      "scale_factor": null,
+      "add_offset": null,
+      "_FillValue": null
+    },
+    "satid_ir3": {
+      "long_name": "IRWIN_3 Satellite Index (packed)",
+      "units": "",
+      "dtype": "int8",
+      "dimensions": [
+        "sparse3ir"
+      ],
+      "shape": [
+        1008762
+      ],
+      "scale_factor": null,
+      "add_offset": null,
+      "_FillValue": null
+    },
+    "irwin_vza_adj": {
+      "long_name": "Adjustment made to all IRWIN channels for view zenith angle effects",
+      "units": "Kelvin",
+      "dtype": "float32",
+      "dimensions": [
+        "time",
+        "lat",
+        "lon"
+      ],
+      "shape": [
+        1,
+        2000,
+        5143
+      ],
+      "scale_factor": null,
+      "add_offset": null,
+      "_FillValue": null
+    }
+  },
+  "coordinates": {
+    "lat": {
+      "size": 2000,
+      "min": -70.0,
+      "max": 69.93000793457031,
+      "units": "degrees_north"
+    },
+    "lon": {
+      "size": 5143,
+      "min": -180.0,
+      "max": 179.94000244140625,
+      "units": "degrees_east"
+    },
+    "time": {
+      "size": 1,
+      "min": 1.5778368e+18,
+      "max": 1.5778368e+18,
+      "units": ""
+    },
+    "sparse2ir": {
+      "size": 2,
+      "min": 0.0,
+      "max": 1.0,
+      "units": ""
+    },
+    "sparse2wv": {
+      "size": 2,
+      "min": 0.0,
+      "max": 1.0,
+      "units": ""
+    },
+    "sparse2vs": {
+      "size": 1749641,
+      "min": 934.0,
+      "max": 10271520.0,
+      "units": ""
+    },
+    "sparse3ir": {
+      "size": 1008762,
+      "min": 850943.0,
+      "max": 9465465.0,
+      "units": ""
+    }
+  }
+}

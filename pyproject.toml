@@ -19,6 +19,11 @@ dependencies = [
   "xarray>=2026.1.0",
   "netcdf4>=1.7.4",
   "earthengine-api>=1.7.14",
+  "eccodes>=2.46.0",
+  "herbie-data>=2026.1.1",
+  "cfgrib>=0.9.15.1",
+  "boto3>=1.38.0",
+  "rioxarray>=0.18.0",
 ]
 
 [dependency-groups]
