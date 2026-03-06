@@ -78,7 +78,7 @@ flowchart TD
 
 | Artifact | Format | Purpose | Build Script |
 |----------|--------|---------|-------------|
-| Per-station daily RTMA parquets | Parquet (one per station) | RTMA values at station locations | `process/gridded/rtma_station_daily.py` |
+| Per-station daily RTMA parquets | Parquet (one per station) | RTMA values at station locations | `grid/sources/rtma_station_daily.py` |
 | Sx parquet | Parquet (9,168 rows, 36 cols) | Winstral Sx + derived terrain openness | `prep/build_station_sx.py` |
 | Station-day wind table | Parquet (fid x day, ~5M rows) | Joined obs + RTMA + terrain + Sx + targets | `prep/build_wind_station_day_table.py` |
 | Precomputed graphs dir | `.pt` files (one per day, ~3.7 GB) | Raw features + edges for all stations | `prep/build_wind_graphs.py` |
@@ -93,7 +93,7 @@ flowchart TD
 
 ## GNN Architecture
 
-`WindBiasGNN` (`models/wind_bias/gnn.py`) implements edge-gated neighbor attention:
+`WindBiasGNN` (`models/components/edge_gated_gnn.py`) implements edge-gated neighbor attention:
 
 ```
 Input: x_i (node features, dim=node_dim)

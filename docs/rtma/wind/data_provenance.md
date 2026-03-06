@@ -27,7 +27,7 @@ The Wind MVP uses the same RTMA COG archive as the [Humidity MVP](../humidity/da
 | 9 | TCDC | / 100 | % | Weather context |
 | 10 | ACPC01 | / 100 | mm/day | Weather context |
 
-All 10 bands are sampled at station locations via `process/gridded/rtma_station_daily.py`, then `ea` (vapor pressure from Magnus formula) and `tmp_dpt_diff` are derived.
+All 10 bands are sampled at station locations via `grid/sources/rtma_station_daily.py`, then `ea` (vapor pressure from Magnus formula) and `tmp_dpt_diff` are derived.
 
 ---
 

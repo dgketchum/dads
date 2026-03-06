@@ -72,7 +72,7 @@ Edge features combine static geometry (distance, bearing, delta-elevation) with 
 
 The key distinction from standard graph attention (like GAT) is that **edge features directly participate in computing attention weights**. The model doesn't just ask "how similar are stations i and j?" — it asks "how similar are they *given that j is 12 km away, bearing northwest, 300 m higher, and directly upwind?*" The spatial and topographic relationship between two stations modulates how much one should influence the other. This is what "edge-gated" means: the edge attributes gate the flow of information between nodes.
 
-The core spatial aggregation layer (`models/wind_bias/gnn.py`):
+The core spatial aggregation layer (`models/components/edge_gated_gnn.py`):
 
 ### Message Computation
 

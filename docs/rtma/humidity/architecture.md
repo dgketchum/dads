@@ -74,7 +74,7 @@ flowchart TD
 
 | Artifact | Format | Purpose | Build Script |
 |----------|--------|---------|-------------|
-| Per-station daily RTMA parquets | Parquet (one per station) | RTMA values at station locations | `process/gridded/rtma_station_daily.py` |
+| Per-station daily RTMA parquets | Parquet (one per station) | RTMA values at station locations | `grid/sources/rtma_station_daily.py` |
 | Station-day table | Parquet (fid × day) | Joined MADIS obs + RTMA baseline + residuals | `prep/build_station_day_table.py` |
 | Patch index | Parquet (fid, day, $\Delta\!\log e_a$, lat, lon) | Training sample roster after outlier filtering | `prep/build_rtma_patch_index.py` |
 | `norm_stats.json` | JSON | Per-channel mean/std for input normalization | Computed during dataset init |
