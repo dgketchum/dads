@@ -38,7 +38,7 @@ $$
 
 ### Why Bias-Correction?
 
-The same argument as the [Humidity MVP](../mvp/algorithms.md#why-bias-correction-not-direct-prediction): by providing the RTMA estimate as input, the model only needs to learn the *residual error structure*, not reconstruct the full wind field from scratch. This makes the task much easier and the corrections more stable.
+The same argument as the [Humidity MVP](../humidity/algorithms.md#why-bias-correction-not-direct-prediction): by providing the RTMA estimate as input, the model only needs to learn the *residual error structure*, not reconstruct the full wind field from scratch. This makes the task much easier and the corrections more stable.
 
 ---
 
@@ -160,7 +160,7 @@ An optional correction magnitude penalty ($\lambda \cdot \|\hat{y}\|^2$) is avai
 
 ## Normalization
 
-Z-score normalization per feature, same approach as the [Humidity MVP](../mvp/algorithms.md#normalization):
+Z-score normalization per feature, same approach as the [Humidity MVP](../humidity/algorithms.md#normalization):
 
 - Statistics computed from the training set only (exclude val days and holdout stations)
 - Standard deviation clamped to $\geq 10^{-8}$

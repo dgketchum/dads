@@ -6,7 +6,7 @@ Every input to the Wind MVP traces to a direct observation, a direct measurement
 
 ## RTMA COG Archive
 
-The Wind MVP uses the same RTMA COG archive as the [Humidity MVP](../mvp/data_provenance.md#rtma-cog-archive). Key properties are summarized here; see the humidity docs for full details on format, coverage, and day boundary alignment.
+The Wind MVP uses the same RTMA COG archive as the [Humidity MVP](../humidity/data_provenance.md#rtma-cog-archive). Key properties are summarized here; see the humidity docs for full details on format, coverage, and day boundary alignment.
 
 | Property | Value |
 |----------|-------|
@@ -33,7 +33,7 @@ All 10 bands are sampled at station locations via `process/gridded/rtma_station_
 
 ## MADIS Station Observations
 
-Same source as the [Humidity MVP](../mvp/data_provenance.md#madis-station-observations), but different variables are used:
+Same source as the [Humidity MVP](../humidity/data_provenance.md#madis-station-observations), but different variables are used:
 
 | Property | Value |
 |----------|-------|
@@ -55,7 +55,7 @@ Observations are joined to RTMA-sampled values to compute parallel and perpendic
 
 ## Station Inventory
 
-Same as the [Humidity MVP](../mvp/data_provenance.md#station-inventory):
+Same as the [Humidity MVP](../humidity/data_provenance.md#station-inventory):
 
 | Property | Value |
 |----------|-------|
@@ -68,7 +68,7 @@ Same as the [Humidity MVP](../mvp/data_provenance.md#station-inventory):
 
 ## Terrain
 
-Same 6-band GeoTIFF as the [Humidity MVP](../mvp/data_provenance.md#terrain), sampled at station points rather than as gridded patches:
+Same 6-band GeoTIFF as the [Humidity MVP](../humidity/data_provenance.md#terrain), sampled at station points rather than as gridded patches:
 
 | Channel | Method | Notes |
 |---------|--------|-------|

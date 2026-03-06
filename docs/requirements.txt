@@ -1,2 +1,1 @@
-mkdocs-material
-pymdownx-extensions
+mkdocs-material<10
