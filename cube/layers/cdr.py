@@ -15,41 +15,44 @@ Input format: Monthly NetCDF files with naming convention:
 The layer harmonizes AVHRR and VIIRS variable names and applies basic
 cross-calibration normalization.
 """
+
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional
 import logging
-from datetime import datetime
 
 import numpy as np
 import pandas as pd
 
 try:
     import xarray as xr
+
     HAS_XARRAY = True
 except ImportError:
     HAS_XARRAY = False
 
 try:
     import zarr
+
     HAS_ZARR = True
 except ImportError:
     HAS_ZARR = False
 
 from cube.layers.base import BaseLayer
-from cube.grid import MasterGrid
-from cube.config import CubeConfig, CHUNKS, CDR_FEATURES
+from cube.config import CubeConfig, CHUNKS
 
 logger = logging.getLogger(__name__)
 
 # Variable name mappings
-AVHRR_VARS = ['SREFL_CH1', 'SREFL_CH2', 'SREFL_CH3', 'BT_CH3', 'BT_CH4', 'BT_CH5']
+AVHRR_VARS = ["SREFL_CH1", "SREFL_CH2", "SREFL_CH3", "BT_CH3", "BT_CH4", "BT_CH5"]
 VIIRS_VARS = [
-    'BRDF_corrected_I1_SurfRefl_CMG',
-    'BRDF_corrected_I2_SurfRefl_CMG',
-    'BRDF_corrected_I3_SurfRefl_CMG',
-    'BT_CH12', 'BT_CH15', 'BT_CH16'
+    "BRDF_corrected_I1_SurfRefl_CMG",
+    "BRDF_corrected_I2_SurfRefl_CMG",
+    "BRDF_corrected_I3_SurfRefl_CMG",
+    "BT_CH12",
+    "BT_CH15",
+    "BT_CH16",
 ]
-HARMONIZED_VARS = ['sr1', 'sr2', 'sr3', 'bt1', 'bt2', 'bt3']
+HARMONIZED_VARS = ["sr1", "sr2", "sr3", "bt1", "bt2", "bt3"]
 
 # Transition year from AVHRR to VIIRS
 VIIRS_START_YEAR = 2014
@@ -67,7 +70,7 @@ class CDRLayer(BaseLayer):
 
     @property
     def name(self) -> str:
-        return 'daily'
+        return "daily"
 
     @property
     def variables(self) -> List[str]:
@@ -75,11 +78,11 @@ class CDRLayer(BaseLayer):
 
     @property
     def dimensions(self) -> Tuple[str, ...]:
-        return ('time', 'lat', 'lon')
+        return ("time", "lat", "lon")
 
     @property
     def chunks(self) -> Dict[str, int]:
-        return CHUNKS['daily']
+        return CHUNKS["daily"]
 
     def build(
         self,
@@ -103,7 +106,7 @@ class CDRLayer(BaseLayer):
             raise ImportError("xarray required for CDR layer building")
 
         source_paths = source_paths or self.config.source_paths
-        cdr_dir = source_paths.get('cdr_dir')
+        cdr_dir = source_paths.get("cdr_dir")
 
         if cdr_dir is None:
             raise ValueError("cdr_dir path not provided in source_paths['cdr_dir']")
@@ -120,20 +123,20 @@ class CDRLayer(BaseLayer):
         logger.info(f"Date range: {start.date()} to {end.date()}")
 
         # Build date index
-        dates = pd.date_range(start, end, freq='D')
+        dates = pd.date_range(start, end, freq="D")
         n_times = len(dates)
 
         logger.info(f"Total time steps: {n_times:,}")
 
         # Open store and create group
-        store = self._open_store('a')
+        store = self._open_store("a")
         self._write_coords(store)
-        self._write_time_coord(store, dates.values.astype('datetime64[D]'))
+        self._write_time_coord(store, dates.values.astype("datetime64[D]"))
         group = self._ensure_group(store)
 
         # Create output arrays for each variable
         shape = (n_times, self.grid.n_lat, self.grid.n_lon)
-        chunks = (self.chunks['time'], self.chunks['lat'], self.chunks['lon'])
+        chunks = (self.chunks["time"], self.chunks["lat"], self.chunks["lon"])
 
         arrays = {}
         for var in self.variables:
@@ -145,7 +148,7 @@ class CDRLayer(BaseLayer):
                     var,
                     shape=shape,
                     chunks=chunks,
-                    dtype='float32',
+                    dtype="float32",
                     compressor=self.compression,
                     fill_value=np.nan,
                     overwrite=overwrite,
@@ -154,10 +157,13 @@ class CDRLayer(BaseLayer):
         # Compute AVHRR statistics for VIIRS normalization
         avhrr_stats = None
         if normalize_viirs:
-            avhrr_stats = self._compute_avhrr_stats(cdr_dir, start, min(end, pd.Timestamp('2013-12-31')))
+            avhrr_stats = self._compute_avhrr_stats(
+                cdr_dir, start, min(end, pd.Timestamp("2013-12-31"))
+            )
 
         # Process by month for memory efficiency
         from cube.builders.resampler import GridResampler
+
         resampler = GridResampler(self.grid)
 
         for year in range(start.year, end.year + 1):
@@ -175,7 +181,10 @@ class CDRLayer(BaseLayer):
                 try:
                     # Load month's data
                     month_data = self._load_month(
-                        cdr_dir, year, month, resampler,
+                        cdr_dir,
+                        year,
+                        month,
+                        resampler,
                         normalize_viirs=normalize_viirs,
                         avhrr_stats=avhrr_stats,
                     )
@@ -185,7 +194,7 @@ class CDRLayer(BaseLayer):
                         continue
 
                     # Find time indices for this month
-                    month_dates = month_data['time']
+                    month_dates = month_data["time"]
                     for var in self.variables:
                         if var not in month_data:
                             continue
@@ -196,17 +205,19 @@ class CDRLayer(BaseLayer):
                         for i, date in enumerate(month_dates):
                             t_idx = (date - dates[0]).days
                             if 0 <= t_idx < n_times:
-                                arrays[var][t_idx, :, :] = var_data[i].astype(np.float32)
+                                arrays[var][t_idx, :, :] = var_data[i].astype(
+                                    np.float32
+                                )
 
                 except Exception as e:
                     logger.error(f"Error processing {year}-{month:02d}: {e}")
                     continue
 
         # Store metadata
-        store.attrs['cdr_source'] = str(cdr_dir)
-        store.attrs['cdr_start_date'] = str(start.date())
-        store.attrs['cdr_end_date'] = str(end.date())
-        store.attrs['cdr_viirs_normalized'] = normalize_viirs
+        store.attrs["cdr_source"] = str(cdr_dir)
+        store.attrs["cdr_start_date"] = str(start.date())
+        store.attrs["cdr_end_date"] = str(end.date())
+        store.attrs["cdr_viirs_normalized"] = normalize_viirs
 
         logger.info("CDR layer complete")
 
@@ -215,7 +226,7 @@ class CDRLayer(BaseLayer):
         cdr_dir: Path,
         year: int,
         month: int,
-        resampler: 'GridResampler',
+        resampler: "GridResampler",  # noqa: F821
         normalize_viirs: bool = True,
         avhrr_stats: Optional[Dict] = None,
     ) -> Optional[Dict[str, np.ndarray]]:
@@ -233,12 +244,12 @@ class CDRLayer(BaseLayer):
         Returns:
             Dict with 'time' and variable arrays, or None if no data
         """
-        date_string = f'{year}{month:02d}'
+        date_string = f"{year}{month:02d}"
 
         # Find NetCDF files for this month
-        nc_files = list(cdr_dir.glob(f'*_{date_string}*.nc'))
+        nc_files = list(cdr_dir.glob(f"*_{date_string}*.nc"))
         if not nc_files:
-            nc_files = list(cdr_dir.glob(f'*{date_string}*.nc'))
+            nc_files = list(cdr_dir.glob(f"*{date_string}*.nc"))
 
         if not nc_files:
             return None
@@ -251,7 +262,7 @@ class CDRLayer(BaseLayer):
         datasets = []
         for f in sorted(nc_files):
             try:
-                ds = xr.open_dataset(f, engine='netcdf4', decode_cf=False)
+                ds = xr.open_dataset(f, engine="netcdf4", decode_cf=False)
                 # Subset to approximate CONUS bounds
                 w, s, e, n = self.grid.bounds
                 ds = ds.sel(latitude=slice(n + 1, s - 1), longitude=slice(w - 1, e + 1))
@@ -264,18 +275,16 @@ class CDRLayer(BaseLayer):
             return None
 
         # Concatenate along time
-        ds = xr.concat(datasets, dim='time')
+        ds = xr.concat(datasets, dim="time")
 
         # Convert time coordinate
         time_values = pd.to_datetime(
-            ds['time'].values,
-            unit='D',
-            origin=pd.Timestamp('1981-01-01')
+            ds["time"].values, unit="D", origin=pd.Timestamp("1981-01-01")
         )
         ds = ds.assign_coords(time=time_values)
 
         # Extract and resample each variable
-        result = {'time': time_values.values}
+        result = {"time": time_values.values}
 
         for in_var, out_var in zip(input_vars, HARMONIZED_VARS):
             if in_var not in ds:
@@ -285,38 +294,40 @@ class CDRLayer(BaseLayer):
             var_data = ds[in_var].values
 
             # Handle fill values / negative values for reflectance
-            if out_var.startswith('sr'):
+            if out_var.startswith("sr"):
                 var_data = np.where(var_data < 0, np.nan, var_data)
 
             # Resample each timestep
             resampled = np.empty(
-                (len(time_values), self.grid.n_lat, self.grid.n_lon),
-                dtype=np.float32
+                (len(time_values), self.grid.n_lat, self.grid.n_lon), dtype=np.float32
             )
 
             for t in range(len(time_values)):
                 # Get source transform and CRS
-                lat = ds['latitude'].values
-                lon = ds['longitude'].values
+                lat = ds["latitude"].values
+                lon = ds["longitude"].values
 
                 # Create affine transform from coordinates
                 import rasterio
-                from rasterio.crs import CRS
 
                 # Assume regular grid
                 lat_res = abs(lat[1] - lat[0]) if len(lat) > 1 else 0.05
                 lon_res = abs(lon[1] - lon[0]) if len(lon) > 1 else 0.05
 
                 src_transform = rasterio.Affine(
-                    lon_res, 0, lon.min() - lon_res / 2,
-                    0, -lat_res, lat.max() + lat_res / 2
+                    lon_res,
+                    0,
+                    lon.min() - lon_res / 2,
+                    0,
+                    -lat_res,
+                    lat.max() + lat_res / 2,
                 )
 
                 resampled[t] = resampler.resample_array(
                     var_data[t],
                     src_transform=src_transform,
-                    src_crs='EPSG:4326',
-                    method='bilinear',
+                    src_crs="EPSG:4326",
+                    method="bilinear",
                 )
 
             # Normalize VIIRS to AVHRR scale
@@ -364,14 +375,14 @@ class CDRLayer(BaseLayer):
 
         for year in sample_years[-3:]:  # Last 3 years of AVHRR
             for month in sample_months:
-                date_string = f'{year}{month:02d}'
-                nc_files = list(cdr_dir.glob(f'*_{date_string}*.nc'))
+                date_string = f"{year}{month:02d}"
+                nc_files = list(cdr_dir.glob(f"*_{date_string}*.nc"))
 
                 if not nc_files:
                     continue
 
                 try:
-                    ds = xr.open_dataset(nc_files[0], engine='netcdf4', decode_cf=False)
+                    ds = xr.open_dataset(nc_files[0], engine="netcdf4", decode_cf=False)
 
                     for in_var, out_var in zip(AVHRR_VARS, HARMONIZED_VARS):
                         if in_var in ds:
@@ -391,7 +402,9 @@ class CDRLayer(BaseLayer):
             if values[var]:
                 arr = np.array(values[var])
                 stats[var] = (np.mean(arr), np.std(arr))
-                logger.info(f"  {var}: mean={stats[var][0]:.2f}, std={stats[var][1]:.2f}")
+                logger.info(
+                    f"  {var}: mean={stats[var][0]:.2f}, std={stats[var][1]:.2f}"
+                )
 
         return stats
 
@@ -403,13 +416,13 @@ class CDRLayer(BaseLayer):
             return checks
 
         try:
-            store = zarr.open(str(self.store_path), mode='r')
+            store = zarr.open(str(self.store_path), mode="r")
             group = store[self.name]
 
             # Check each variable
             for var in self.variables:
                 if var not in group:
-                    checks[f'{var}_exists'] = False
+                    checks[f"{var}_exists"] = False
                     continue
 
                 data = group[var]
@@ -418,20 +431,20 @@ class CDRLayer(BaseLayer):
                 sample = data[0:365, ::10, ::10]
                 valid = sample[~np.isnan(sample)]
 
-                if var.startswith('sr'):
+                if var.startswith("sr"):
                     # Surface reflectance: 0-10000 (scaled) or 0-1
-                    checks[f'{var}_range'] = valid.min() >= 0 and valid.max() <= 15000
+                    checks[f"{var}_range"] = valid.min() >= 0 and valid.max() <= 15000
                 else:
                     # Brightness temperature: typically 200-350 K
-                    checks[f'{var}_range'] = valid.min() > 150 and valid.max() < 400
+                    checks[f"{var}_range"] = valid.min() > 150 and valid.max() < 400
 
             # Check temporal continuity (sample)
-            time_valid = np.sum(~np.isnan(group['sr1'][:, 100, 100])) > 0
-            checks['temporal_data'] = time_valid
+            time_valid = np.sum(~np.isnan(group["sr1"][:, 100, 100])) > 0
+            checks["temporal_data"] = time_valid
 
         except Exception as e:
             logger.error(f"Validation error: {e}")
-            checks['validation_error'] = False
+            checks["validation_error"] = False
 
         return checks
 
@@ -453,7 +466,7 @@ def build_cdr_layer(
         end_date: End date (default: config.end_date)
         overwrite: Whether to overwrite existing data
     """
-    config.source_paths['cdr_dir'] = cdr_dir
+    config.source_paths["cdr_dir"] = cdr_dir
     layer = CDRLayer(config)
     layer.build(
         start_date=start_date,
@@ -462,15 +475,15 @@ def build_cdr_layer(
     )
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     import sys
 
     if len(sys.argv) > 2:
         cdr_dir = sys.argv[1]
         cube_path = sys.argv[2]
     else:
-        cdr_dir = '/nas/dads/rs/cdr/nc'
-        cube_path = '/data/ssd2/dads_cube/cube.zarr'
+        cdr_dir = "/nas/dads/rs/cdr/nc"
+        cube_path = "/data/ssd2/dads_cube/cube.zarr"
 
     if Path(cdr_dir).exists():
         from cube.config import default_conus_config

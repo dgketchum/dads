@@ -10,6 +10,7 @@ The sampler maintains:
     - Precomputed neighbor relationships for those cells
     - Edge attributes (terrain differences, bearing, distance)
 """
+
 import numpy as np
 from typing import Dict, List, Tuple, Optional
 from dataclasses import dataclass, field
@@ -30,6 +31,7 @@ class EpochSample:
         distance_map: target_idx -> list of distances (km)
         terrain_delta_map: target_idx -> (k, D) array of terrain differences
     """
+
     target_indices: np.ndarray
     neighbor_map: Dict[int, List[int]] = field(default_factory=dict)
     bearing_map: Dict[int, List[float]] = field(default_factory=dict)
@@ -39,7 +41,9 @@ class EpochSample:
     def __len__(self) -> int:
         return len(self.target_indices)
 
-    def get_neighbors(self, target_idx: int) -> Tuple[List[int], List[float], List[float], np.ndarray]:
+    def get_neighbors(
+        self, target_idx: int
+    ) -> Tuple[List[int], List[float], List[float], np.ndarray]:
         """
         Get neighbor info for a target cell.
 
@@ -187,8 +191,6 @@ class EpochSampler:
         Returns:
             EpochSample with specified targets
         """
-        rng = np.random.default_rng(seed)
-
         target_set = set(target_indices.tolist())
         query_k = self.config.n_neighbors * self.config.neighbor_pool_factor
 
@@ -267,13 +269,17 @@ def _compute_bearing(lat1: float, lon1: float, lat2: float, lon2: float) -> floa
     dlon = lon2_rad - lon1_rad
 
     x = np.sin(dlon) * np.cos(lat2_rad)
-    y = np.cos(lat1_rad) * np.sin(lat2_rad) - np.sin(lat1_rad) * np.cos(lat2_rad) * np.cos(dlon)
+    y = np.cos(lat1_rad) * np.sin(lat2_rad) - np.sin(lat1_rad) * np.cos(
+        lat2_rad
+    ) * np.cos(dlon)
 
     bearing = np.degrees(np.arctan2(x, y))
     return (bearing + 360.0) % 360.0
 
 
-def compute_haversine_distance(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+def compute_haversine_distance(
+    lat1: float, lon1: float, lat2: float, lon2: float
+) -> float:
     """
     Compute haversine distance between two points.
 
@@ -292,7 +298,10 @@ def compute_haversine_distance(lat1: float, lon1: float, lat2: float, lon2: floa
     dlat = lat2_rad - lat1_rad
     dlon = lon2_rad - lon1_rad
 
-    a = np.sin(dlat / 2)**2 + np.cos(lat1_rad) * np.cos(lat2_rad) * np.sin(dlon / 2)**2
+    a = (
+        np.sin(dlat / 2) ** 2
+        + np.cos(lat1_rad) * np.cos(lat2_rad) * np.sin(dlon / 2) ** 2
+    )
     c = 2 * np.arctan2(np.sqrt(a), np.sqrt(1 - a))
 
     return 6371.0 * c  # Earth radius in km
@@ -328,10 +337,10 @@ class ValidationSampler:
         # Identify cells in holdout region
         w, s, e, n = holdout_bounds
         mask = (
-            (grid_index.coords[:, 0] >= s) &
-            (grid_index.coords[:, 0] <= n) &
-            (grid_index.coords[:, 1] >= w) &
-            (grid_index.coords[:, 1] <= e)
+            (grid_index.coords[:, 0] >= s)
+            & (grid_index.coords[:, 0] <= n)
+            & (grid_index.coords[:, 1] >= w)
+            & (grid_index.coords[:, 1] <= e)
         )
         self.val_indices = np.where(mask)[0]
         self.train_indices = np.where(~mask)[0]
@@ -355,7 +364,7 @@ class ValidationSampler:
         rng = np.random.default_rng(seed)
         n = min(self.config.n_cells_per_epoch, len(self.train_indices))
 
-        if self.config.sampling_strategy == 'uniform':
+        if self.config.sampling_strategy == "uniform":
             sampled = rng.choice(self.train_indices, size=n, replace=False)
         else:
             # Use poisson disk on training subset
@@ -392,7 +401,7 @@ class ValidationSampler:
         return sampler.create_fixed_sample(self.val_indices, seed=seed)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     # Example usage
     from pretrain_build.config import PretrainConfig
     from pretrain_build.grid_index import GridIndex
@@ -406,7 +415,7 @@ if __name__ == '__main__':
     config = PretrainConfig(
         n_cells_per_epoch=1000,
         n_neighbors=10,
-        sampling_strategy='poisson_disk',
+        sampling_strategy="poisson_disk",
         min_cell_spacing_km=20.0,
     )
 
@@ -415,7 +424,9 @@ if __name__ == '__main__':
 
     print(f"Sampled {len(sample)} valid targets")
     print(f"Example target {sample.target_indices[0]}:")
-    neighbors, bearings, distances, terrain = sample.get_neighbors(sample.target_indices[0])
+    neighbors, bearings, distances, terrain = sample.get_neighbors(
+        sample.target_indices[0]
+    )
     print(f"  Neighbors: {neighbors}")
     print(f"  Distances: {[f'{d:.1f}km' for d in distances]}")
     print(f"  Bearings: {[f'{b:.0f}°' for b in bearings]}")

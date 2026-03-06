@@ -12,13 +12,13 @@ from concurrent.futures import ProcessPoolExecutor
 
 
 def _load_json(path: str) -> dict:
-    with open(path, 'r') as f:
+    with open(path, "r") as f:
         return json.load(f)
 
 
 def _write_json(path: str, obj: dict):
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path, 'w') as f:
+    with open(path, "w") as f:
         json.dump(obj, f)
 
 
@@ -38,12 +38,12 @@ def _stations_in_bounds_from_parquet(
         if not os.path.exists(fp):
             continue
         try:
-            df = pd.read_parquet(fp, columns=['lat', 'lon'])
-            if 'lat' not in df.columns or 'lon' not in df.columns or df.empty:
+            df = pd.read_parquet(fp, columns=["lat", "lon"])
+            if "lat" not in df.columns or "lon" not in df.columns or df.empty:
                 continue
             # first valid row is fine for static lat/lon
-            lat = float(df['lat'].iloc[0])
-            lon = float(df['lon'].iloc[0])
+            lat = float(df["lat"].iloc[0])
+            lon = float(df["lon"].iloc[0])
             if (s <= lat <= n) and (w <= lon <= e):
                 keep.add(str(sid))
         except Exception:
@@ -59,7 +59,9 @@ def _filter_neighbors(
     in_bounds: Set[str],
     ensure_min_k: int = 1,
     include_border: bool = True,
-) -> Tuple[Dict[str, List[str]], Dict[str, List[float]], Dict[str, List[float]], Set[str]]:
+) -> Tuple[
+    Dict[str, List[str]], Dict[str, List[float]], Dict[str, List[float]], Set[str]
+]:
     """Filter neighbor dicts to keep only in-bounds neighbors, with optional border inclusion.
 
     Returns: (edges_out, bearings_out, distances_out, used_nodes)
@@ -163,7 +165,9 @@ def _filter_neighbors_parallel(
         L = min(len(nbrs), len(bs), len(ds))
         if L == 0:
             continue
-        tasks.append((to_id, nbrs[:L], bs[:L], ds[:L], in_bounds, ensure_min_k, include_border))
+        tasks.append(
+            (to_id, nbrs[:L], bs[:L], ds[:L], in_bounds, ensure_min_k, include_border)
+        )
     edges_out: Dict[str, List[str]] = {}
     bearings_out: Dict[str, List[float]] = {}
     distances_out: Dict[str, List[float]] = {}
@@ -172,12 +176,16 @@ def _filter_neighbors_parallel(
         return edges_out, bearings_out, distances_out, used_nodes
     if int(num_workers) == 1:
         results = []
-        for t in tqdm(tasks, total=len(tasks), desc='Train: filtering neighbors'):
+        for t in tqdm(tasks, total=len(tasks), desc="Train: filtering neighbors"):
             results.append(_filter_neighbors_one(t))
     else:
         with ProcessPoolExecutor(max_workers=int(num_workers)) as ex:
             results = []
-            for r in tqdm(ex.map(_filter_neighbors_one, tasks), total=len(tasks), desc='Train: filtering neighbors'):
+            for r in tqdm(
+                ex.map(_filter_neighbors_one, tasks),
+                total=len(tasks),
+                desc="Train: filtering neighbors",
+            ):
                 results.append(r)
     for r in results:
         if not r:
@@ -191,21 +199,20 @@ def _filter_neighbors_parallel(
     return edges_out, bearings_out, distances_out, used_nodes
 
 
-    
-
-
-def _read_latlon(parquet_dir: str, station_ids: List[str]) -> Dict[str, Tuple[float, float]]:
+def _read_latlon(
+    parquet_dir: str, station_ids: List[str]
+) -> Dict[str, Tuple[float, float]]:
     out: Dict[str, Tuple[float, float]] = {}
     for sid in station_ids:
         fp = os.path.join(parquet_dir, f"{sid}.parquet")
         if not os.path.exists(fp):
             continue
         try:
-            df = pd.read_parquet(fp, columns=['lat', 'lon'])
+            df = pd.read_parquet(fp, columns=["lat", "lon"])
             if df.empty:
                 continue
-            lat = float(df['lat'].iloc[0])
-            lon = float(df['lon'].iloc[0])
+            lat = float(df["lat"].iloc[0])
+            lon = float(df["lon"].iloc[0])
             out[str(sid)] = (lat, lon)
         except Exception:
             continue
@@ -219,7 +226,10 @@ def _haversine_bearing(lat1, lon1, lat2, lon2) -> Tuple[float, float]:
     rlon2 = np.radians(lon2)
     dlon = rlon2 - rlon1
     dlat = rlat2 - rlat1
-    a = np.sin(dlat / 2.0) ** 2 + np.cos(rlat1) * np.cos(rlat2) * np.sin(dlon / 2.0) ** 2
+    a = (
+        np.sin(dlat / 2.0) ** 2
+        + np.cos(rlat1) * np.cos(rlat2) * np.sin(dlon / 2.0) ** 2
+    )
     c = 2.0 * np.arctan2(np.sqrt(a), np.sqrt(1.0 - a))
     dist_km = 6371.0088 * c
     x = np.sin(dlon) * np.cos(rlat2)
@@ -232,8 +242,10 @@ def _haversine_bearing(lat1, lon1, lat2, lon2) -> Tuple[float, float]:
 def _looks_like_polygon(spec) -> bool:
     try:
         return (
-            hasattr(spec, '__len__') and len(spec) >= 3 and
-            hasattr(spec[0], '__len__') and len(spec[0]) == 2
+            hasattr(spec, "__len__")
+            and len(spec) >= 3
+            and hasattr(spec[0], "__len__")
+            and len(spec[0]) == 2
         )
     except Exception:
         return False
@@ -265,7 +277,10 @@ def _build_val_edges_for_target(task):
     rlon2 = np.radians(ctx_lon)
     dlon = rlon2 - rlon1
     dlat = rlat2 - rlat1
-    a = np.sin(dlat / 2.0) ** 2 + np.cos(rlat1) * np.cos(rlat2) * np.sin(dlon / 2.0) ** 2
+    a = (
+        np.sin(dlat / 2.0) ** 2
+        + np.cos(rlat1) * np.cos(rlat2) * np.sin(dlon / 2.0) ** 2
+    )
     c = 2.0 * np.arctan2(np.sqrt(a), np.sqrt(1.0 - a))
     dist_km = 6371.0088 * c
     x = np.sin(dlon) * np.cos(rlat2)
@@ -293,7 +308,21 @@ def _edge_records_for_target(task):
             continue
         lat_nb, lon_nb = ll_all[nb]
         dk, br = _haversine_bearing(lat_nb, lon_nb, lat_to, lon_to)
-        rlist.append((str(to_id), str(nb), float(br), float((br + 180.0) % 360.0), float(dk), float((dk - d_bias) / d_scale + 5e-8), float(lon_nb), float(lat_nb), float(lon_to), float(lat_to), int(is_train)))
+        rlist.append(
+            (
+                str(to_id),
+                str(nb),
+                float(br),
+                float((br + 180.0) % 360.0),
+                float(dk),
+                float((dk - d_bias) / d_scale + 5e-8),
+                float(lon_nb),
+                float(lat_nb),
+                float(lon_to),
+                float(lat_to),
+                int(is_train),
+            )
+        )
     return rlist
 
 
@@ -309,24 +338,26 @@ def write_tiered_val_subgraph(
     num_workers: int = 12,
 ) -> None:
     # load source artifacts
-    t_idx = _load_json(os.path.join(source_graph_dir, 'train_edge_index.json'))
-    t_bear = _load_json(os.path.join(source_graph_dir, 'train_edge_bearing.json'))
-    t_dist = _load_json(os.path.join(source_graph_dir, 'train_edge_distance.json'))
-    t_attr = _load_json(os.path.join(source_graph_dir, 'train_edge_attr.json'))
-    v_attr = _load_json(os.path.join(source_graph_dir, 'val_edge_attr.json'))
+    t_idx = _load_json(os.path.join(source_graph_dir, "train_edge_index.json"))
+    t_bear = _load_json(os.path.join(source_graph_dir, "train_edge_bearing.json"))
+    t_dist = _load_json(os.path.join(source_graph_dir, "train_edge_distance.json"))
+    t_attr = _load_json(os.path.join(source_graph_dir, "train_edge_attr.json"))
+    v_attr = _load_json(os.path.join(source_graph_dir, "val_edge_attr.json"))
 
-    meta_path = os.path.join(source_graph_dir, 'graph_meta.json')
+    meta_path = os.path.join(source_graph_dir, "graph_meta.json")
     meta = _load_json(meta_path) if os.path.exists(meta_path) else {}
-    ds = meta.get('distance_scaler', {'bias': 0.0, 'scale': 1.0})
-    d_bias = float(ds.get('bias', 0.0))
-    d_scale = float(ds.get('scale', 1.0)) or 1.0  # likely error if zero scale
+    ds = meta.get("distance_scaler", {"bias": 0.0, "scale": 1.0})
+    d_bias = float(ds.get("bias", 0.0))
+    d_scale = float(ds.get("scale", 1.0)) or 1.0  # likely error if zero scale
 
     # membership by bounds
     attr_nodes = set(t_attr.keys()) | set(v_attr.keys())
-    in_outer = _stations_in_bounds_from_parquet(parquet_dir, list(attr_nodes), outer_bounds)
+    in_outer = _stations_in_bounds_from_parquet(
+        parquet_dir, list(attr_nodes), outer_bounds
+    )
 
     # Determine validation targets
-    explicit_targets = (val_target_ids is not None and len(val_target_ids) > 0)
+    explicit_targets = val_target_ids is not None and len(val_target_ids) > 0
     if explicit_targets:
         val_targets = set(str(s) for s in val_target_ids)
         val_targets = val_targets & set(in_outer)
@@ -351,17 +382,35 @@ def write_tiered_val_subgraph(
             tasks = []
             for to_id in targets_sorted:
                 tlat, tlon = ll[to_id]
-                tasks.append((to_id, tlat, tlon, ctx_ids, ctx_lat, ctx_lon, k_val, d_bias, d_scale))
+                tasks.append(
+                    (
+                        to_id,
+                        tlat,
+                        tlon,
+                        ctx_ids,
+                        ctx_lat,
+                        ctx_lon,
+                        k_val,
+                        d_bias,
+                        d_scale,
+                    )
+                )
             if int(num_workers) == 1:
                 results = []
-                for t in tqdm(tasks, total=len(tasks), desc='Val: computing neighbor lists'):
+                for t in tqdm(
+                    tasks, total=len(tasks), desc="Val: computing neighbor lists"
+                ):
                     results.append(_build_val_edges_for_target(t))
             else:
                 with ProcessPoolExecutor(max_workers=int(num_workers)) as ex:
                     results = []
-                    for r in tqdm(ex.map(_build_val_edges_for_target, tasks), total=len(tasks), desc='Val: computing neighbor lists'):
+                    for r in tqdm(
+                        ex.map(_build_val_edges_for_target, tasks),
+                        total=len(tasks),
+                        desc="Val: computing neighbor lists",
+                    ):
                         results.append(r)
-            for res in tqdm(results, total=len(results), desc='Val: collating'):
+            for res in tqdm(results, total=len(results), desc="Val: collating"):
                 if not res:
                     continue
                 to_id, nbrs, bears, d_scaled = res
@@ -379,17 +428,31 @@ def write_tiered_val_subgraph(
     else:
         # polygon/rect bounds path
         if _looks_like_polygon(val_bounds):
-            in_val = _stations_in_polygon_from_parquet(parquet_dir, list(in_outer), val_bounds)
+            in_val = _stations_in_polygon_from_parquet(
+                parquet_dir, list(in_outer), val_bounds
+            )
         else:
-            in_val = _stations_in_bounds_from_parquet(parquet_dir, list(in_outer), val_bounds)
+            in_val = _stations_in_bounds_from_parquet(
+                parquet_dir, list(in_outer), val_bounds
+            )
         train_set = in_outer - in_val
         val_set = in_val
 
     # filter train edges strictly to train_set (no border fill)
     tr_idx_out, tr_bear_out, tr_dist_out, used_tr = _filter_neighbors_parallel(
-        t_idx, t_bear, t_dist, in_bounds=train_set, ensure_min_k=ensure_min_k_train, include_border=False, num_workers=num_workers
+        t_idx,
+        t_bear,
+        t_dist,
+        in_bounds=train_set,
+        ensure_min_k=ensure_min_k_train,
+        include_border=False,
+        num_workers=num_workers,
     )
-    tr_attr_out = {k: (t_attr[k] if k in t_attr else v_attr[k]) for k in used_tr if (k in t_attr or k in v_attr)}
+    tr_attr_out = {
+        k: (t_attr[k] if k in t_attr else v_attr[k])
+        for k in used_tr
+        if (k in t_attr or k in v_attr)
+    }
 
     # determine validation target/context sets and build val edges
     if not explicit_targets:
@@ -422,17 +485,35 @@ def write_tiered_val_subgraph(
             tasks = []
             for to_id in targets_sorted:
                 tlat, tlon = ll[to_id]
-                tasks.append((to_id, tlat, tlon, ctx_ids, ctx_lat, ctx_lon, k_val, d_bias, d_scale))
+                tasks.append(
+                    (
+                        to_id,
+                        tlat,
+                        tlon,
+                        ctx_ids,
+                        ctx_lat,
+                        ctx_lon,
+                        k_val,
+                        d_bias,
+                        d_scale,
+                    )
+                )
             if int(num_workers) == 1:
                 results = []
-                for t in tqdm(tasks, total=len(tasks), desc='Val: computing neighbor lists'):
+                for t in tqdm(
+                    tasks, total=len(tasks), desc="Val: computing neighbor lists"
+                ):
                     results.append(_build_val_edges_for_target(t))
             else:
                 with ProcessPoolExecutor(max_workers=int(num_workers)) as ex:
                     results = []
-                    for r in tqdm(ex.map(_build_val_edges_for_target, tasks), total=len(tasks), desc='Val: computing neighbor lists'):
+                    for r in tqdm(
+                        ex.map(_build_val_edges_for_target, tasks),
+                        total=len(tasks),
+                        desc="Val: computing neighbor lists",
+                    ):
                         results.append(r)
-            for res in tqdm(results, total=len(results), desc='Val: collating'):
+            for res in tqdm(results, total=len(results), desc="Val: collating"):
                 if not res:
                     continue
                 to_id, nbrs, bears, d_scaled = res
@@ -455,20 +536,20 @@ def write_tiered_val_subgraph(
     val_target_ids_out = sorted(list(set(va_idx_out.keys())))
 
     os.makedirs(output_dir, exist_ok=True)
-    _write_json(os.path.join(output_dir, 'train_edge_index.json'), tr_idx_out)
-    _write_json(os.path.join(output_dir, 'train_edge_bearing.json'), tr_bear_out)
-    _write_json(os.path.join(output_dir, 'train_edge_distance.json'), tr_dist_out)
-    _write_json(os.path.join(output_dir, 'train_edge_attr.json'), tr_attr_out)
+    _write_json(os.path.join(output_dir, "train_edge_index.json"), tr_idx_out)
+    _write_json(os.path.join(output_dir, "train_edge_bearing.json"), tr_bear_out)
+    _write_json(os.path.join(output_dir, "train_edge_distance.json"), tr_dist_out)
+    _write_json(os.path.join(output_dir, "train_edge_attr.json"), tr_attr_out)
 
-    _write_json(os.path.join(output_dir, 'val_edge_index.json'), va_idx_out)
-    _write_json(os.path.join(output_dir, 'val_edge_bearing.json'), va_bear_out)
-    _write_json(os.path.join(output_dir, 'val_edge_distance.json'), va_dist_out)
-    _write_json(os.path.join(output_dir, 'val_edge_attr.json'), va_attr_out)
+    _write_json(os.path.join(output_dir, "val_edge_index.json"), va_idx_out)
+    _write_json(os.path.join(output_dir, "val_edge_bearing.json"), va_bear_out)
+    _write_json(os.path.join(output_dir, "val_edge_distance.json"), va_dist_out)
+    _write_json(os.path.join(output_dir, "val_edge_attr.json"), va_attr_out)
 
-    _write_json(os.path.join(output_dir, 'node_index.json'), node_index)
-    _write_json(os.path.join(output_dir, 'train_ids.json'), train_ids)
-    _write_json(os.path.join(output_dir, 'val_ids.json'), val_ids)
-    _write_json(os.path.join(output_dir, 'val_target_ids.json'), val_target_ids_out)
+    _write_json(os.path.join(output_dir, "node_index.json"), node_index)
+    _write_json(os.path.join(output_dir, "train_ids.json"), train_ids)
+    _write_json(os.path.join(output_dir, "val_ids.json"), val_ids)
+    _write_json(os.path.join(output_dir, "val_target_ids.json"), val_target_ids_out)
 
     # build shapefile with edge geometries and attributes
     ll_all = _read_latlon(parquet_dir, list(used_tr | used_va))
@@ -480,11 +561,15 @@ def write_tiered_val_subgraph(
         tasks.append((to_id, nbrs, ll_all, 0, d_bias, d_scale))
     if tasks:
         if int(num_workers) == 1:
-            for t in tqdm(tasks, total=len(tasks), desc='Edges: computing records'):
+            for t in tqdm(tasks, total=len(tasks), desc="Edges: computing records"):
                 recs.extend(_edge_records_for_target(t))
         else:
             with ProcessPoolExecutor(max_workers=int(num_workers)) as ex:
-                for part in tqdm(ex.map(_edge_records_for_target, tasks), total=len(tasks), desc='Edges: computing records'):
+                for part in tqdm(
+                    ex.map(_edge_records_for_target, tasks),
+                    total=len(tasks),
+                    desc="Edges: computing records",
+                ):
                     if part:
                         recs.extend(part)
     if recs:
@@ -501,18 +586,26 @@ def write_tiered_val_subgraph(
         lats_to = [r[9] for r in recs]
         train_flag = [r[10] for r in recs]
         edge_lines = []
-        for i in tqdm(range(len(recs)), total=len(recs), desc='Edges: building geometries'):
-            edge_lines.append(LineString([Point(lons_from[i], lats_from[i]), Point(lons_to[i], lats_to[i])]))
-        gdf_edges = gpd.GeoDataFrame({'geometry': edge_lines})
-        gdf_edges['to'] = to_
-        gdf_edges['from'] = from_
-        gdf_edges['train'] = train_flag
-        gdf_edges['bearing'] = bearing
-        gdf_edges['bearing_to_neighbor'] = bearing_out
-        gdf_edges['distance_km'] = distance_km
-        gdf_edges['distance_scaled'] = distance_scaled
+        for i in tqdm(
+            range(len(recs)), total=len(recs), desc="Edges: building geometries"
+        ):
+            edge_lines.append(
+                LineString(
+                    [Point(lons_from[i], lats_from[i]), Point(lons_to[i], lats_to[i])]
+                )
+            )
+        gdf_edges = gpd.GeoDataFrame({"geometry": edge_lines})
+        gdf_edges["to"] = to_
+        gdf_edges["from"] = from_
+        gdf_edges["train"] = train_flag
+        gdf_edges["bearing"] = bearing
+        gdf_edges["bearing_to_neighbor"] = bearing_out
+        gdf_edges["distance_km"] = distance_km
+        gdf_edges["distance_scaled"] = distance_scaled
         gdf_edges.crs = CRS.from_epsg(4326)
-        gdf_edges.to_file(os.path.join(output_dir, 'edges.shp'), epsg='EPSG:4326', engine='fiona')
+        gdf_edges.to_file(
+            os.path.join(output_dir, "edges.shp"), epsg="EPSG:4326", engine="fiona"
+        )
 
     # nodes shapefile to aid inspection
     all_nodes = list(set(used_tr) | set(used_va))
@@ -524,53 +617,69 @@ def write_tiered_val_subgraph(
         # derive roles from outputs to avoid relying on earlier branch vars
         val_targets_set = set(val_target_ids_out)
         val_context_set = set(used_va) - val_targets_set
-        for sid in tqdm(all_nodes, total=len(all_nodes), desc='Nodes: building geometries'):
+        for sid in tqdm(
+            all_nodes, total=len(all_nodes), desc="Nodes: building geometries"
+        ):
             if sid not in ll_nodes:
                 continue
             lat, lon = ll_nodes[sid]
             pts.append(Point(float(lon), float(lat)))
             ids.append(str(sid))
             if sid in val_targets_set:
-                roles.append('val_tgt')
+                roles.append("val_tgt")
             elif sid in val_context_set:
-                roles.append('val_ctx')
+                roles.append("val_ctx")
             elif sid in used_tr:
-                roles.append('train')
+                roles.append("train")
             else:
-                roles.append('other')  # likely error if surfaced
+                roles.append("other")  # likely error if surfaced
         if pts:
-            gdf_nodes = gpd.GeoDataFrame({'geometry': pts})
-            gdf_nodes['id'] = ids
-            gdf_nodes['role'] = roles
+            gdf_nodes = gpd.GeoDataFrame({"geometry": pts})
+            gdf_nodes["id"] = ids
+            gdf_nodes["role"] = roles
             gdf_nodes.crs = CRS.from_epsg(4326)
-            gdf_nodes.to_file(os.path.join(output_dir, 'nodes.shp'), epsg='EPSG:4326', engine='fiona')
+            gdf_nodes.to_file(
+                os.path.join(output_dir, "nodes.shp"), epsg="EPSG:4326", engine="fiona"
+            )
 
     meta_out = dict(meta) if isinstance(meta, dict) else {}
     three = {
-        'outer_bounds': {'west': outer_bounds[0], 'south': outer_bounds[1], 'east': outer_bounds[2], 'north': outer_bounds[3]},
-        'k_val': int(k_val),
-        'ensure_min_k_train': int(ensure_min_k_train),
-        'val_targets': val_target_ids_out,
-        'source_graph_dir': os.path.abspath(source_graph_dir),
-        'parquet_dir': os.path.abspath(parquet_dir),
+        "outer_bounds": {
+            "west": outer_bounds[0],
+            "south": outer_bounds[1],
+            "east": outer_bounds[2],
+            "north": outer_bounds[3],
+        },
+        "k_val": int(k_val),
+        "ensure_min_k_train": int(ensure_min_k_train),
+        "val_targets": val_target_ids_out,
+        "source_graph_dir": os.path.abspath(source_graph_dir),
+        "parquet_dir": os.path.abspath(parquet_dir),
     }
     if val_bounds is not None:
         if _looks_like_polygon(val_bounds):
-            three['val_polygon'] = [(float(lat), float(lon)) for (lat, lon) in val_bounds]
+            three["val_polygon"] = [
+                (float(lat), float(lon)) for (lat, lon) in val_bounds
+            ]
         else:
-            three['val_bounds'] = {'west': val_bounds[0], 'south': val_bounds[1], 'east': val_bounds[2], 'north': val_bounds[3]}
+            three["val_bounds"] = {
+                "west": val_bounds[0],
+                "south": val_bounds[1],
+                "east": val_bounds[2],
+                "north": val_bounds[3],
+            }
     else:
-        three['val_selection'] = 'explicit_targets'
-    meta_out['three_tier_subgraph'] = three
-    _write_json(os.path.join(output_dir, 'graph_meta.json'), meta_out)
+        three["val_selection"] = "explicit_targets"
+    meta_out["three_tier_subgraph"] = three
+    _write_json(os.path.join(output_dir, "graph_meta.json"), meta_out)
 
 
-if __name__ == '__main__':
-    target_var = 'tmax'
-    training = '/data/ssd2/dads/training'
-    source_graph_dir_ = os.path.join(training, 'graph', f'{target_var}_obs')
-    parquet_dir_ = os.path.join(training, 'parquet', f'{target_var}_obs')
-    sub_graph_dir_= os.path.join(training, 'subgraph', f'{target_var}_obs')
+if __name__ == "__main__":
+    target_var = "tmax"
+    training = "/data/ssd2/dads/training"
+    source_graph_dir_ = os.path.join(training, "graph", f"{target_var}_obs")
+    parquet_dir_ = os.path.join(training, "parquet", f"{target_var}_obs")
+    sub_graph_dir_ = os.path.join(training, "subgraph", f"{target_var}_obs")
 
     # training domain (CA and NV)
     west, south, east, north = (-124.5, 32.0, -112.0, 42.0)
@@ -586,9 +695,11 @@ if __name__ == '__main__':
     k_val_ = 10
     ensure_min_k_train_ = 1
 
-    validation_target_shp = os.path.join(sub_graph_dir_, 'validation_targets_30OCT2025.shp')
+    validation_target_shp = os.path.join(
+        sub_graph_dir_, "validation_targets_30OCT2025.shp"
+    )
     val_target_gdf = gpd.read_file(validation_target_shp)
-    val_target_ids_ = val_target_gdf['fid'].to_list()
+    val_target_ids_ = val_target_gdf["fid"].to_list()
 
     write_tiered_val_subgraph(
         source_graph_dir=source_graph_dir_,

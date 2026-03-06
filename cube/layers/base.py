@@ -4,6 +4,7 @@ Abstract base class for data cube layers.
 All layer builders inherit from BaseLayer and implement the build() method
 to construct their specific data layer from source files.
 """
+
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Tuple, Dict, List, Optional, Any
@@ -13,12 +14,14 @@ import numpy as np
 
 try:
     import zarr
+
     HAS_ZARR = True
 except ImportError:
     HAS_ZARR = False
 
 try:
-    import xarray as xr
+    import xarray as xr  # noqa: F401
+
     HAS_XARRAY = True
 except ImportError:
     HAS_XARRAY = False
@@ -54,10 +57,14 @@ class BaseLayer(ABC):
             raise ImportError("zarr is required for layer building")
 
         self.config = config
-        self.grid = grid if grid is not None else MasterGrid(
-            bounds=config.bounds,
-            resolution_deg=config.resolution_deg,
-            crs=config.crs,
+        self.grid = (
+            grid
+            if grid is not None
+            else MasterGrid(
+                bounds=config.bounds,
+                resolution_deg=config.resolution_deg,
+                crs=config.crs,
+            )
         )
         self.store_path = config.cube_path
 
@@ -99,12 +106,12 @@ class BaseLayer(ABC):
     @property
     def dtype(self) -> str:
         """Data type for layer arrays."""
-        return 'float32'
+        return "float32"
 
     @property
     def compression(self) -> Optional[Any]:
         """Compression configuration for zarr arrays."""
-        return COMPRESSION.get('float')
+        return COMPRESSION.get("float")
 
     @property
     def fill_value(self) -> float:
@@ -139,37 +146,37 @@ class BaseLayer(ABC):
         checks = {}
 
         if not self.store_path.exists():
-            checks['store_exists'] = False
+            checks["store_exists"] = False
             return checks
 
         try:
-            store = zarr.open(str(self.store_path), mode='r')
+            store = zarr.open(str(self.store_path), mode="r")
 
             # Check group exists
             if self.name not in store:
-                checks['group_exists'] = False
+                checks["group_exists"] = False
                 return checks
-            checks['group_exists'] = True
+            checks["group_exists"] = True
 
             group = store[self.name]
 
             # Check each variable exists
             for var in self.variables:
                 var_exists = var in group
-                checks[f'{var}_exists'] = var_exists
+                checks[f"{var}_exists"] = var_exists
 
                 if var_exists:
                     arr = group[var]
                     # Check shape
                     expected_shape = self._get_expected_shape()
-                    checks[f'{var}_shape'] = arr.shape == expected_shape
+                    checks[f"{var}_shape"] = arr.shape == expected_shape
 
                     # Check dtype
-                    checks[f'{var}_dtype'] = str(arr.dtype) == self.dtype
+                    checks[f"{var}_dtype"] = str(arr.dtype) == self.dtype
 
         except Exception as e:
             logger.error(f"Validation error: {e}")
-            checks['error'] = False
+            checks["error"] = False
 
         return checks
 
@@ -177,21 +184,23 @@ class BaseLayer(ABC):
         """Get expected array shape based on dimensions."""
         shape = []
         for dim in self.dimensions:
-            if dim == 'lat':
+            if dim == "lat":
                 shape.append(self.grid.n_lat)
-            elif dim == 'lon':
+            elif dim == "lon":
                 shape.append(self.grid.n_lon)
-            elif dim == 'doy':
+            elif dim == "doy":
                 shape.append(365)
-            elif dim == 'time':
+            elif dim == "time":
                 # Estimate from date range
                 import pandas as pd
+
                 start = pd.Timestamp(self.config.start_date)
                 end = pd.Timestamp(self.config.end_date)
                 shape.append((end - start).days + 1)
-            elif dim == 'composite_time':
+            elif dim == "composite_time":
                 # 16-day composites
                 import pandas as pd
+
                 start = pd.Timestamp(self.config.start_date)
                 end = pd.Timestamp(self.config.end_date)
                 n_days = (end - start).days + 1
@@ -200,7 +209,7 @@ class BaseLayer(ABC):
                 raise ValueError(f"Unknown dimension: {dim}")
         return tuple(shape)
 
-    def _open_store(self, mode: str = 'a') -> zarr.hierarchy.Group:
+    def _open_store(self, mode: str = "a") -> zarr.hierarchy.Group:
         """
         Open or create the zarr store.
 
@@ -244,8 +253,9 @@ class BaseLayer(ABC):
         Returns:
             Zarr array
         """
-        chunks = tuple(self.chunks.get(dim, shape[i])
-                      for i, dim in enumerate(self.dimensions))
+        chunks = tuple(
+            self.chunks.get(dim, shape[i]) for i, dim in enumerate(self.dimensions)
+        )
 
         return group.create_dataset(
             name,
@@ -276,8 +286,9 @@ class BaseLayer(ABC):
         Returns:
             Zarr array
         """
-        chunks = tuple(self.chunks.get(dim, data.shape[i])
-                      for i, dim in enumerate(self.dimensions))
+        chunks = tuple(
+            self.chunks.get(dim, data.shape[i]) for i, dim in enumerate(self.dimensions)
+        )
 
         return group.create_dataset(
             name,
@@ -297,21 +308,21 @@ class BaseLayer(ABC):
             store: Root zarr group
         """
         # Latitude
-        if 'lat' not in store:
+        if "lat" not in store:
             store.create_dataset(
-                'lat',
+                "lat",
                 data=self.grid.lat.astype(np.float64),
                 chunks=(len(self.grid.lat),),
-                dtype='float64',
+                dtype="float64",
             )
 
         # Longitude
-        if 'lon' not in store:
+        if "lon" not in store:
             store.create_dataset(
-                'lon',
+                "lon",
                 data=self.grid.lon.astype(np.float64),
                 chunks=(len(self.grid.lon),),
-                dtype='float64',
+                dtype="float64",
             )
 
     def _write_time_coord(
@@ -326,17 +337,17 @@ class BaseLayer(ABC):
             store: Root zarr group
             times: Array of datetime64 values
         """
-        if 'time' not in store:
+        if "time" not in store:
             # Store as int64 (days since epoch) for zarr compatibility
-            times_int = times.astype('datetime64[D]').astype(np.int64)
+            times_int = times.astype("datetime64[D]").astype(np.int64)
             store.create_dataset(
-                'time',
+                "time",
                 data=times_int,
                 chunks=(365,),
-                dtype='int64',
+                dtype="int64",
             )
-            store['time'].attrs['units'] = 'days since 1970-01-01'
-            store['time'].attrs['calendar'] = 'standard'
+            store["time"].attrs["units"] = "days since 1970-01-01"
+            store["time"].attrs["calendar"] = "standard"
 
     def _write_doy_coord(self, store: zarr.hierarchy.Group) -> None:
         """
@@ -345,12 +356,12 @@ class BaseLayer(ABC):
         Args:
             store: Root zarr group
         """
-        if 'doy' not in store:
+        if "doy" not in store:
             store.create_dataset(
-                'doy',
+                "doy",
                 data=np.arange(1, 366, dtype=np.int16),
                 chunks=(365,),
-                dtype='int16',
+                dtype="int16",
             )
 
     def exists(self) -> bool:
@@ -359,7 +370,7 @@ class BaseLayer(ABC):
             return False
 
         try:
-            store = zarr.open(str(self.store_path), mode='r')
+            store = zarr.open(str(self.store_path), mode="r")
             if self.name not in store:
                 return False
 

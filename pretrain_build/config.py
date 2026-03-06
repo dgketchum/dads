@@ -5,6 +5,7 @@ Uses existing extracted data where available (parquet files in
 extract/met_data/grid outputs), plus native Zarr/NetCDF for
 direct grid sampling.
 """
+
 from dataclasses import dataclass, field
 from typing import Tuple, List, Optional, Dict
 from pathlib import Path
@@ -25,15 +26,16 @@ class GridSource:
         lon_var: Name of longitude coordinate variable
         time_var: Name of time coordinate variable
     """
+
     name: str
     zarr_path: Optional[Path] = None
     netcdf_dir: Optional[Path] = None
     variables: List[str] = field(default_factory=list)
     resolution_deg: float = 0.04166667  # ~4km (PRISM resolution)
-    temporal_resolution: str = 'daily'
-    lat_var: str = 'lat'
-    lon_var: str = 'lon'
-    time_var: str = 'time'
+    temporal_resolution: str = "daily"
+    lat_var: str = "lat"
+    lon_var: str = "lon"
+    time_var: str = "time"
 
     def __post_init__(self):
         if self.zarr_path is not None and not isinstance(self.zarr_path, Path):
@@ -65,12 +67,13 @@ class PretrainConfig:
         cache_dir: Directory for spatial index and other caches
         variable_map: Map target variable to source name
     """
+
     # Spatial domain (CONUS default)
     bounds: Tuple[float, float, float, float] = (-125.0, 25.0, -67.0, 49.5)
 
     # Grid sampling
     n_cells_per_epoch: int = 8000
-    sampling_strategy: str = 'poisson_disk'
+    sampling_strategy: str = "poisson_disk"
     min_cell_spacing_km: float = 20.0
     resample_each_epoch: bool = True
 
@@ -81,7 +84,7 @@ class PretrainConfig:
 
     # Temporal
     seq_len: int = 12
-    date_range: Tuple[str, str] = ('1990-01-01', '2023-12-31')
+    date_range: Tuple[str, str] = ("1990-01-01", "2023-12-31")
 
     # Synthetic missingness injection
     neighbor_drop_prob: float = 0.1
@@ -98,16 +101,18 @@ class PretrainConfig:
     cache_dir: Optional[Path] = None
 
     # Variable to source mapping
-    variable_map: Dict[str, str] = field(default_factory=lambda: {
-        'tmax': 'prism',
-        'tmin': 'prism',
-        'ppt': 'prism',
-        'rsds': 'gridmet',
-        'srad': 'gridmet',
-        'ea': 'gridmet',
-        'vpd': 'gridmet',
-        'wind': 'gridmet',
-    })
+    variable_map: Dict[str, str] = field(
+        default_factory=lambda: {
+            "tmax": "prism",
+            "tmin": "prism",
+            "ppt": "prism",
+            "rsds": "gridmet",
+            "srad": "gridmet",
+            "ea": "gridmet",
+            "vpd": "gridmet",
+            "wind": "gridmet",
+        }
+    )
 
     def __post_init__(self):
         if self.dem_path is not None and not isinstance(self.dem_path, Path):
@@ -138,44 +143,48 @@ def default_western_us_config(
     sources = []
 
     if prism_zarr:
-        sources.append(GridSource(
-            name='prism',
-            zarr_path=Path(prism_zarr),
-            variables=['tmax', 'tmin', 'ppt'],
-            resolution_deg=0.04166667,  # 4km
-            temporal_resolution='daily',
-        ))
+        sources.append(
+            GridSource(
+                name="prism",
+                zarr_path=Path(prism_zarr),
+                variables=["tmax", "tmin", "ppt"],
+                resolution_deg=0.04166667,  # 4km
+                temporal_resolution="daily",
+            )
+        )
 
     if gridmet_zarr:
-        sources.append(GridSource(
-            name='gridmet',
-            zarr_path=Path(gridmet_zarr),
-            variables=['srad', 'vpd', 'th', 'vs'],  # GridMET variable names
-            resolution_deg=0.04166667,  # 4km
-            temporal_resolution='daily',
-        ))
+        sources.append(
+            GridSource(
+                name="gridmet",
+                zarr_path=Path(gridmet_zarr),
+                variables=["srad", "vpd", "th", "vs"],  # GridMET variable names
+                resolution_deg=0.04166667,  # 4km
+                temporal_resolution="daily",
+            )
+        )
 
     return PretrainConfig(
         bounds=(-125.0, 31.0, -102.0, 49.0),  # Western US
         n_cells_per_epoch=8000,
-        sampling_strategy='poisson_disk',
+        sampling_strategy="poisson_disk",
         min_cell_spacing_km=20.0,
         n_neighbors=10,
         max_distance_km=400.0,
         seq_len=12,
-        date_range=('1990-01-01', '2023-12-31'),
+        date_range=("1990-01-01", "2023-12-31"),
         sources=sources,
         dem_path=Path(dem_path) if dem_path else None,
         cache_dir=Path(cache_dir) if cache_dir else None,
     )
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     # Example usage
     config = default_western_us_config(
-        prism_zarr='/data/gridded/prism.zarr',
-        gridmet_zarr='/data/gridded/gridmet.zarr',
-        dem_path='/data/dem/conus_dem.tif',
-        cache_dir='/data/pretrain_cache',
+        prism_zarr="/data/gridded/prism.zarr",
+        gridmet_zarr="/data/gridded/gridmet.zarr",
+        dem_path="/data/dem/conus_dem.tif",
+        cache_dir="/data/pretrain_cache",
     )
     print(config)

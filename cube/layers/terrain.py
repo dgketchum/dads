@@ -10,6 +10,7 @@ Builds static terrain features from DEM:
 
 These features match TERRAIN_FEATURES from prep/columns_desc.py.
 """
+
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional
 import logging
@@ -18,26 +19,28 @@ import numpy as np
 
 try:
     import rasterio
-    from rasterio.warp import reproject, Resampling
+    from rasterio.warp import reproject, Resampling  # noqa: F401
+
     HAS_RASTERIO = True
 except ImportError:
     HAS_RASTERIO = False
 
 try:
-    from scipy.ndimage import uniform_filter, generic_filter
+    from scipy.ndimage import uniform_filter, generic_filter  # noqa: F401
+
     HAS_SCIPY = True
 except ImportError:
     HAS_SCIPY = False
 
 try:
     import zarr
+
     HAS_ZARR = True
 except ImportError:
     HAS_ZARR = False
 
 from cube.layers.base import BaseLayer
-from cube.grid import MasterGrid
-from cube.config import CubeConfig, CHUNKS, TERRAIN_FEATURES
+from cube.config import CHUNKS
 
 logger = logging.getLogger(__name__)
 
@@ -67,29 +70,36 @@ class TerrainLayer(BaseLayer):
 
     # TPI radii in km -> pixels at 1km resolution
     TPI_RADII_KM = {
-        'tpi_500': 0.5,     # ~0.5 pixel, use 1
-        'tpi_2500': 2.5,    # ~3 pixels
-        'tpi_10000': 10.0,  # ~10 pixels
-        'tpi_22500': 22.5,  # ~23 pixels
+        "tpi_500": 0.5,  # ~0.5 pixel, use 1
+        "tpi_2500": 2.5,  # ~3 pixels
+        "tpi_10000": 10.0,  # ~10 pixels
+        "tpi_22500": 22.5,  # ~23 pixels
     }
 
     @property
     def name(self) -> str:
-        return 'static'
+        return "static"
 
     @property
     def variables(self) -> List[str]:
-        return ['elevation', 'slope', 'aspect',
-                'tpi_500', 'tpi_2500', 'tpi_10000', 'tpi_22500',
-                'land_mask']
+        return [
+            "elevation",
+            "slope",
+            "aspect",
+            "tpi_500",
+            "tpi_2500",
+            "tpi_10000",
+            "tpi_22500",
+            "land_mask",
+        ]
 
     @property
     def dimensions(self) -> Tuple[str, ...]:
-        return ('lat', 'lon')
+        return ("lat", "lon")
 
     @property
     def chunks(self) -> Dict[str, int]:
-        return CHUNKS['static']
+        return CHUNKS["static"]
 
     def build(
         self,
@@ -109,7 +119,7 @@ class TerrainLayer(BaseLayer):
             raise ImportError("rasterio required for terrain building")
 
         source_paths = source_paths or self.config.source_paths
-        dem_path = source_paths.get('dem')
+        dem_path = source_paths.get("dem")
 
         if dem_path is None:
             raise ValueError("DEM path not provided in source_paths['dem']")
@@ -121,7 +131,7 @@ class TerrainLayer(BaseLayer):
         logger.info(f"Building terrain layer from {dem_path}")
 
         # Open store and create group
-        store = self._open_store('a')
+        store = self._open_store("a")
         self._write_coords(store)
         group = self._ensure_group(store)
 
@@ -134,22 +144,22 @@ class TerrainLayer(BaseLayer):
 
         # Write elevation and land_mask
         logger.info("Writing elevation...")
-        self._write_array(group, 'elevation', elevation.astype(np.float32), overwrite)
+        self._write_array(group, "elevation", elevation.astype(np.float32), overwrite)
 
         logger.info("Writing land_mask...")
         group.create_dataset(
-            'land_mask',
+            "land_mask",
             data=land_mask,
             chunks=tuple(self.chunks.values()),
-            dtype='uint8',
+            dtype="uint8",
             overwrite=overwrite,
         )
 
         # Compute slope and aspect
         logger.info("Computing slope and aspect...")
         slope, aspect = self._compute_slope_aspect(elevation, cell_size)
-        self._write_array(group, 'slope', slope.astype(np.float32), overwrite)
-        self._write_array(group, 'aspect', aspect.astype(np.float32), overwrite)
+        self._write_array(group, "slope", slope.astype(np.float32), overwrite)
+        self._write_array(group, "aspect", aspect.astype(np.float32), overwrite)
 
         # Compute TPI at multiple scales
         if compute_tpi and HAS_SCIPY:
@@ -167,8 +177,8 @@ class TerrainLayer(BaseLayer):
                 self._write_array(group, tpi_name, zeros, overwrite)
 
         # Store metadata
-        store.attrs['terrain_dem_source'] = str(dem_path)
-        store.attrs['terrain_cell_size_m'] = float(cell_size)
+        store.attrs["terrain_dem_source"] = str(dem_path)
+        store.attrs["terrain_cell_size_m"] = float(cell_size)
 
         logger.info("Terrain layer complete")
 
@@ -191,13 +201,15 @@ class TerrainLayer(BaseLayer):
             # (at grid center latitude)
             center_lat = (self.grid.north + self.grid.south) / 2
             # degrees to meters (approximate)
-            cell_size_m = self.grid.resolution_deg * 111320 * np.cos(np.radians(center_lat))
+            cell_size_m = (
+                self.grid.resolution_deg * 111320 * np.cos(np.radians(center_lat))
+            )
 
             # Read source nodata
             nodata = src.nodata
 
         # Resample using average (aggregation from high-res DEM)
-        elevation = resampler.resample_raster(dem_path, method='average')
+        elevation = resampler.resample_raster(dem_path, method="average")
 
         # Handle nodata
         if nodata is not None:
@@ -221,7 +233,7 @@ class TerrainLayer(BaseLayer):
             (slope_degrees, aspect_degrees)
         """
         # Pad edges for boundary handling
-        padded = np.pad(elevation, 1, mode='edge')
+        padded = np.pad(elevation, 1, mode="edge")
 
         # Extract 3x3 neighborhood values
         # z1 z2 z3
@@ -238,8 +250,8 @@ class TerrainLayer(BaseLayer):
         z9 = padded[2:, 2:]
 
         # Horn's method for gradient
-        dzdx = ((z3 + 2*z6 + z9) - (z1 + 2*z4 + z7)) / (8 * cell_size)
-        dzdy = ((z7 + 2*z8 + z9) - (z1 + 2*z2 + z3)) / (8 * cell_size)
+        dzdx = ((z3 + 2 * z6 + z9) - (z1 + 2 * z4 + z7)) / (8 * cell_size)
+        dzdy = ((z7 + 2 * z8 + z9) - (z1 + 2 * z2 + z3)) / (8 * cell_size)
 
         # Slope in degrees
         slope = np.degrees(np.arctan(np.sqrt(dzdx**2 + dzdy**2)))
@@ -288,7 +300,7 @@ class TerrainLayer(BaseLayer):
 
         # Compute mean of neighborhood using uniform filter
         # This is much faster than generic_filter for simple mean
-        with np.errstate(invalid='ignore'):
+        with np.errstate(invalid="ignore"):
             # Create mask for valid values
             valid_mask = ~np.isnan(elevation)
 
@@ -299,23 +311,21 @@ class TerrainLayer(BaseLayer):
             window_sum = uniform_filter(
                 elev_filled.astype(np.float64),
                 size=window_size,
-                mode='constant',
-                cval=0.0
+                mode="constant",
+                cval=0.0,
             )
 
             # Count of valid values in window
             valid_count = uniform_filter(
                 valid_mask.astype(np.float64),
                 size=window_size,
-                mode='constant',
-                cval=0.0
+                mode="constant",
+                cval=0.0,
             )
 
             # Mean = sum / count (avoid division by zero)
             neighborhood_mean = np.where(
-                valid_count > 0,
-                window_sum / valid_count,
-                np.nan
+                valid_count > 0, window_sum / valid_count, np.nan
             )
 
         # TPI = elevation - neighborhood mean
@@ -331,47 +341,43 @@ class TerrainLayer(BaseLayer):
             return checks
 
         try:
-            store = zarr.open(str(self.store_path), mode='r')
+            store = zarr.open(str(self.store_path), mode="r")
             group = store[self.name]
 
             # Physical range checks
-            elev = group['elevation'][:]
+            elev = group["elevation"][:]
             valid_elev = elev[~np.isnan(elev)]
-            checks['elevation_range'] = (
+            checks["elevation_range"] = (
                 valid_elev.min() > -500 and valid_elev.max() < 9000
             )
 
-            slope = group['slope'][:]
+            slope = group["slope"][:]
             valid_slope = slope[~np.isnan(slope)]
-            checks['slope_range'] = (
-                valid_slope.min() >= 0 and valid_slope.max() <= 90
-            )
+            checks["slope_range"] = valid_slope.min() >= 0 and valid_slope.max() <= 90
 
-            aspect = group['aspect'][:]
+            aspect = group["aspect"][:]
             valid_aspect = aspect[(~np.isnan(aspect)) & (aspect >= 0)]
-            checks['aspect_range'] = (
+            checks["aspect_range"] = (
                 valid_aspect.min() >= 0 and valid_aspect.max() <= 360
             )
 
             # Land mask coverage
-            land_mask = group['land_mask'][:]
+            land_mask = group["land_mask"][:]
             land_fraction = land_mask.mean()
-            checks['land_coverage'] = 0.3 < land_fraction < 0.9  # Reasonable for CONUS
+            checks["land_coverage"] = 0.3 < land_fraction < 0.9  # Reasonable for CONUS
 
         except Exception as e:
             logger.error(f"Validation error: {e}")
-            checks['validation_error'] = False
+            checks["validation_error"] = False
 
         return checks
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     # Example usage
     from cube.config import default_conus_config
 
-    config = default_conus_config(
-        dem_path='/data/dem/conus_dem.tif'
-    )
+    config = default_conus_config(dem_path="/data/dem/conus_dem.tif")
 
     layer = TerrainLayer(config)
     print(layer)

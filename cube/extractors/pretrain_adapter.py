@@ -4,6 +4,7 @@ Adapter classes for integration with pretrain_build pipeline.
 Provides drop-in replacements for pretrain_build/sequences.py and
 pretrain_build/grid_index.py that source data from the unified cube.
 """
+
 from pathlib import Path
 from typing import Tuple, Optional, Dict
 import logging
@@ -12,12 +13,12 @@ import numpy as np
 
 try:
     from sklearn.neighbors import BallTree
+
     HAS_SKLEARN = True
 except ImportError:
     HAS_SKLEARN = False
 
 from cube.extractors.data_cube_extractor import DataCubeExtractor
-from cube.grid import MasterGrid
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +37,7 @@ class CubeSequenceExtractor:
     def __init__(
         self,
         cube_path: str,
-        config: 'PretrainConfig',
+        config: "PretrainConfig",  # noqa: F821
     ):
         """
         Initialize adapter.
@@ -127,7 +128,9 @@ class CubeSequenceExtractor:
         """Close underlying cube extractor."""
         self.cube.close()
 
-    def get_available_dates(self, source_name: str = None) -> Tuple[np.datetime64, np.datetime64]:
+    def get_available_dates(
+        self, source_name: str = None
+    ) -> Tuple[np.datetime64, np.datetime64]:
         """Get available date range."""
         return self.cube.get_date_range()
 
@@ -160,20 +163,22 @@ class CubeGridIndex:
         self.grid_indices = valid_cells  # (N, 2) [row, col]
 
         # Store coordinates
-        self.coords = np.stack([
-            self.cube.lat[valid_cells[:, 0]],
-            self.cube.lon[valid_cells[:, 1]],
-        ], axis=-1)  # (N, 2) [lat, lon]
+        self.coords = np.stack(
+            [
+                self.cube.lat[valid_cells[:, 0]],
+                self.cube.lon[valid_cells[:, 1]],
+            ],
+            axis=-1,
+        )  # (N, 2) [lat, lon]
 
         # Cell IDs (simple sequential)
         self.cell_ids = np.arange(self.n_cells)
 
         # Extract terrain for all valid cells
         logger.info(f"Extracting terrain for {self.n_cells:,} valid cells...")
-        self.terrain = np.array([
-            self.cube._get_terrain(int(r), int(c))
-            for r, c in valid_cells
-        ])
+        self.terrain = np.array(
+            [self.cube._get_terrain(int(r), int(c)) for r, c in valid_cells]
+        )
 
         # Build spatial tree
         self._build_tree()
@@ -181,7 +186,7 @@ class CubeGridIndex:
     def _build_tree(self):
         """Build BallTree for neighbor queries using haversine metric."""
         coords_rad = np.deg2rad(self.coords)
-        self.tree = BallTree(coords_rad, metric='haversine')
+        self.tree = BallTree(coords_rad, metric="haversine")
 
     def __len__(self) -> int:
         return self.n_cells
@@ -235,7 +240,7 @@ class CubeGridIndex:
     def sample_cells(
         self,
         n: int,
-        strategy: str = 'uniform',
+        strategy: str = "uniform",
         min_spacing_km: Optional[float] = None,
         rng: Optional[np.random.Generator] = None,
     ) -> np.ndarray:
@@ -256,13 +261,13 @@ class CubeGridIndex:
 
         n = min(n, len(self.cell_ids))
 
-        if strategy == 'uniform':
+        if strategy == "uniform":
             return rng.choice(len(self.cell_ids), size=n, replace=False)
 
-        elif strategy == 'poisson_disk':
+        elif strategy == "poisson_disk":
             return self._sample_poisson_disk(n, min_spacing_km or 20.0, rng)
 
-        elif strategy == 'stratified':
+        elif strategy == "stratified":
             return self._sample_stratified(n, rng)
 
         else:
@@ -291,7 +296,9 @@ class CubeGridIndex:
 
             # Remove cells within min_spacing_km
             lat, lon = self.coords[idx]
-            nbr_idx, nbr_dist = self.query_neighbors(lat, lon, k=min(500, len(available) + 1))
+            nbr_idx, nbr_dist = self.query_neighbors(
+                lat, lon, k=min(500, len(available) + 1)
+            )
             for ni, nd in zip(nbr_idx, nbr_dist):
                 if nd < min_spacing_km and ni in available:
                     available.discard(ni)
@@ -322,10 +329,10 @@ class CubeGridIndex:
                 lon_hi = lon_min + (j + 1) * lon_step
 
                 mask = (
-                    (self.coords[:, 0] >= lat_lo) &
-                    (self.coords[:, 0] < lat_hi) &
-                    (self.coords[:, 1] >= lon_lo) &
-                    (self.coords[:, 1] < lon_hi)
+                    (self.coords[:, 0] >= lat_lo)
+                    & (self.coords[:, 0] < lat_hi)
+                    & (self.coords[:, 1] >= lon_lo)
+                    & (self.coords[:, 1] < lon_hi)
                 )
                 tile_indices = np.where(mask)[0]
 
@@ -339,7 +346,9 @@ class CubeGridIndex:
             remaining = set(range(len(self.cell_ids))) - set(selected)
             needed = n - len(selected)
             if remaining:
-                extra = rng.choice(list(remaining), size=min(needed, len(remaining)), replace=False)
+                extra = rng.choice(
+                    list(remaining), size=min(needed, len(remaining)), replace=False
+                )
                 selected.extend(extra.tolist())
 
         return np.array(selected[:n])
@@ -349,7 +358,10 @@ class CubeGridIndex:
         self.cube.close()
 
 
-def create_cube_adapter(cube_path: str, config: 'PretrainConfig') -> Tuple[CubeGridIndex, CubeSequenceExtractor]:
+def create_cube_adapter(
+    cube_path: str,
+    config: "PretrainConfig",  # noqa: F821
+) -> Tuple[CubeGridIndex, CubeSequenceExtractor]:
     """
     Create cube-based replacements for GridIndex and SequenceExtractor.
 
@@ -367,23 +379,25 @@ def create_cube_adapter(cube_path: str, config: 'PretrainConfig') -> Tuple[CubeG
     return grid_index, seq_extractor
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     import sys
 
     if len(sys.argv) > 1:
         cube_path = sys.argv[1]
     else:
-        cube_path = '/data/ssd2/dads_cube/cube.zarr'
+        cube_path = "/data/ssd2/dads_cube/cube.zarr"
 
     if Path(cube_path).exists():
         print("Testing CubeGridIndex...")
         index = CubeGridIndex(cube_path)
         print(f"  {len(index):,} valid cells")
-        print(f"  Coordinate range: lat [{index.coords[:, 0].min():.2f}, {index.coords[:, 0].max():.2f}]")
+        print(
+            f"  Coordinate range: lat [{index.coords[:, 0].min():.2f}, {index.coords[:, 0].max():.2f}]"
+        )
         print(f"  Terrain shape: {index.terrain.shape}")
 
         # Test sampling
-        sample = index.sample_cells(100, strategy='poisson_disk', min_spacing_km=50)
+        sample = index.sample_cells(100, strategy="poisson_disk", min_spacing_km=50)
         print(f"  Sampled {len(sample)} cells with poisson_disk")
 
         index.close()

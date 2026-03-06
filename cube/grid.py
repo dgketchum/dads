@@ -4,19 +4,21 @@ Master grid definition for DADS data cube.
 Defines the unified 1km WGS84 coordinate system used by all cube layers.
 Provides utilities for coordinate conversion, cell lookup, and spatial queries.
 """
+
 import numpy as np
 from dataclasses import dataclass, field
 from typing import Tuple, Optional, Union
-from pathlib import Path
 
 try:
     from affine import Affine
+
     HAS_AFFINE = True
 except ImportError:
     HAS_AFFINE = False
 
 try:
     from sklearn.neighbors import BallTree
+
     HAS_SKLEARN = True
 except ImportError:
     HAS_SKLEARN = False
@@ -41,14 +43,15 @@ class MasterGrid:
         - Longitude increasing eastward (column index increases)
         - Cell coordinates refer to cell centers
     """
+
     bounds: Tuple[float, float, float, float] = (-125.0, 24.0, -66.0, 50.0)
     resolution_deg: float = 0.008333333  # ~1km (1/120 degree)
-    crs: str = 'EPSG:4326'
+    crs: str = "EPSG:4326"
 
     # Computed arrays (lazy initialization)
     _lat: np.ndarray = field(default=None, repr=False, compare=False)
     _lon: np.ndarray = field(default=None, repr=False, compare=False)
-    _tree: 'BallTree' = field(default=None, repr=False, compare=False)
+    _tree: "BallTree" = field(default=None, repr=False, compare=False)
 
     def __post_init__(self):
         # Ensure bounds are in correct order
@@ -114,9 +117,7 @@ class MasterGrid:
             # Cell centers, starting from north
             half_res = self.resolution_deg / 2
             self._lat = np.linspace(
-                self.north - half_res,
-                self.south + half_res,
-                self.n_lat
+                self.north - half_res, self.south + half_res, self.n_lat
             )
         return self._lat
 
@@ -131,14 +132,12 @@ class MasterGrid:
         if self._lon is None:
             half_res = self.resolution_deg / 2
             self._lon = np.linspace(
-                self.west + half_res,
-                self.east - half_res,
-                self.n_lon
+                self.west + half_res, self.east - half_res, self.n_lon
             )
         return self._lon
 
     @property
-    def transform(self) -> 'Affine':
+    def transform(self) -> "Affine":
         """
         Affine transform for georeferencing (rasterio convention).
 
@@ -149,12 +148,12 @@ class MasterGrid:
             raise ImportError("affine package required for transform property")
 
         return Affine(
-            self.resolution_deg,   # a: pixel width
-            0.0,                   # b: row rotation (0 for north-up)
-            self.west,             # c: x-coordinate of upper-left corner
-            0.0,                   # d: column rotation (0 for north-up)
+            self.resolution_deg,  # a: pixel width
+            0.0,  # b: row rotation (0 for north-up)
+            self.west,  # c: x-coordinate of upper-left corner
+            0.0,  # d: column rotation (0 for north-up)
             -self.resolution_deg,  # e: pixel height (negative for north-up)
-            self.north,            # f: y-coordinate of upper-left corner
+            self.north,  # f: y-coordinate of upper-left corner
         )
 
     def rowcol_to_latlon(
@@ -226,10 +225,7 @@ class MasterGrid:
         row = np.asarray(row)
         col = np.asarray(col)
 
-        valid = (
-            (row >= 0) & (row < self.n_lat) &
-            (col >= 0) & (col < self.n_lon)
-        )
+        valid = (row >= 0) & (row < self.n_lat) & (col >= 0) & (col < self.n_lon)
         return valid
 
     def _build_tree(self, valid_mask: Optional[np.ndarray] = None):
@@ -243,14 +239,16 @@ class MasterGrid:
             raise ImportError("sklearn required for spatial queries")
 
         # Create coordinate pairs for all cells
-        lat_grid, lon_grid = np.meshgrid(self.lat, self.lon, indexing='ij')
+        lat_grid, lon_grid = np.meshgrid(self.lat, self.lon, indexing="ij")
 
         if valid_mask is not None:
             valid_rows, valid_cols = np.where(valid_mask)
-            coords = np.column_stack([
-                lat_grid[valid_rows, valid_cols],
-                lon_grid[valid_rows, valid_cols],
-            ])
+            coords = np.column_stack(
+                [
+                    lat_grid[valid_rows, valid_cols],
+                    lon_grid[valid_rows, valid_cols],
+                ]
+            )
             self._valid_indices = np.column_stack([valid_rows, valid_cols])
         else:
             coords = np.column_stack([lat_grid.ravel(), lon_grid.ravel()])
@@ -258,7 +256,7 @@ class MasterGrid:
 
         # Convert to radians for haversine
         coords_rad = np.deg2rad(coords)
-        self._tree = BallTree(coords_rad, metric='haversine')
+        self._tree = BallTree(coords_rad, metric="haversine")
 
     def query_nearest(
         self,
@@ -326,27 +324,27 @@ class MasterGrid:
             Dict with 'lat', 'lon' arrays suitable for zarr
         """
         return {
-            'lat': self.lat.astype(np.float64),
-            'lon': self.lon.astype(np.float64),
+            "lat": self.lat.astype(np.float64),
+            "lon": self.lon.astype(np.float64),
         }
 
     def to_dict(self) -> dict:
         """Serialize grid parameters to dict."""
         return {
-            'bounds': list(self.bounds),
-            'resolution_deg': self.resolution_deg,
-            'crs': self.crs,
-            'shape': list(self.shape),
-            'n_cells': self.n_cells,
+            "bounds": list(self.bounds),
+            "resolution_deg": self.resolution_deg,
+            "crs": self.crs,
+            "shape": list(self.shape),
+            "n_cells": self.n_cells,
         }
 
     @classmethod
-    def from_dict(cls, d: dict) -> 'MasterGrid':
+    def from_dict(cls, d: dict) -> "MasterGrid":
         """Create MasterGrid from dict."""
         return cls(
-            bounds=tuple(d['bounds']),
-            resolution_deg=d['resolution_deg'],
-            crs=d.get('crs', 'EPSG:4326'),
+            bounds=tuple(d["bounds"]),
+            resolution_deg=d["resolution_deg"],
+            crs=d.get("crs", "EPSG:4326"),
         )
 
     def __repr__(self) -> str:
@@ -363,7 +361,7 @@ def create_conus_grid() -> MasterGrid:
     return MasterGrid(
         bounds=(-125.0, 24.0, -66.0, 50.0),
         resolution_deg=0.008333333,
-        crs='EPSG:4326',
+        crs="EPSG:4326",
     )
 
 
@@ -372,23 +370,27 @@ def create_western_us_grid() -> MasterGrid:
     return MasterGrid(
         bounds=(-125.0, 31.0, -102.0, 49.0),
         resolution_deg=0.008333333,
-        crs='EPSG:4326',
+        crs="EPSG:4326",
     )
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     # Demo
     grid = create_conus_grid()
     print(grid)
-    print(f"\nCoordinate arrays:")
-    print(f"  lat: [{grid.lat[0]:.4f}, ..., {grid.lat[-1]:.4f}] ({len(grid.lat)} values)")
-    print(f"  lon: [{grid.lon[0]:.4f}, ..., {grid.lon[-1]:.4f}] ({len(grid.lon)} values)")
+    print("\nCoordinate arrays:")
+    print(
+        f"  lat: [{grid.lat[0]:.4f}, ..., {grid.lat[-1]:.4f}] ({len(grid.lat)} values)"
+    )
+    print(
+        f"  lon: [{grid.lon[0]:.4f}, ..., {grid.lon[-1]:.4f}] ({len(grid.lon)} values)"
+    )
 
     # Test coordinate conversion
     test_lat, test_lon = 40.0, -105.0
     row, col = grid.latlon_to_rowcol(test_lat, test_lon)
     lat_back, lon_back = grid.rowcol_to_latlon(row, col)
-    print(f"\nCoordinate conversion test:")
+    print("\nCoordinate conversion test:")
     print(f"  Input: ({test_lat}, {test_lon})")
     print(f"  Row/Col: ({row}, {col})")
     print(f"  Recovered: ({lat_back:.4f}, {lon_back:.4f})")

@@ -37,7 +37,12 @@ def clip_stations(
     out[lon_col] = pd.to_numeric(out[lon_col], errors="coerce")
     out = out.dropna(subset=[lat_col, lon_col])
 
-    out = out[(out[lat_col] >= s) & (out[lat_col] <= n) & (out[lon_col] >= w) & (out[lon_col] <= e)].copy()
+    out = out[
+        (out[lat_col] >= s)
+        & (out[lat_col] <= n)
+        & (out[lon_col] >= w)
+        & (out[lon_col] <= e)
+    ].copy()
     out = out.drop_duplicates(subset=[id_col]).reset_index(drop=True)
 
     if limit is not None:
@@ -55,12 +60,21 @@ def clip_stations(
 def _parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Clip station inventory CSV by bounds.")
     p.add_argument("--in", dest="in_csv", required=True, help="Input stations CSV.")
-    p.add_argument("--out", dest="out_csv", required=True, help="Output clipped stations CSV.")
-    p.add_argument("--bounds", nargs=4, type=float, metavar=("W", "S", "E", "N"), required=True)
+    p.add_argument(
+        "--out", dest="out_csv", required=True, help="Output clipped stations CSV."
+    )
+    p.add_argument(
+        "--bounds", nargs=4, type=float, metavar=("W", "S", "E", "N"), required=True
+    )
     p.add_argument("--id-col", default="fid")
     p.add_argument("--lat-col", default="latitude")
     p.add_argument("--lon-col", default="longitude")
-    p.add_argument("--limit", type=int, default=None, help="Optional max stations to keep (random sample).")
+    p.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        help="Optional max stations to keep (random sample).",
+    )
     p.add_argument("--seed", type=int, default=0)
     return p.parse_args()
 
@@ -81,4 +95,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

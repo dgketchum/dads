@@ -10,14 +10,15 @@ The sequence format matches DadsDataset:
     - Target column (pseudo-observation)
     - Exogenous columns (rsun, doy_sin, doy_cos, terrain features)
 """
+
 import numpy as np
 from typing import Dict, Tuple, Optional, List
 from pathlib import Path
-from functools import lru_cache
 from datetime import datetime
 
 try:
     import xarray as xr
+
     HAS_XARRAY = True
 except ImportError:
     HAS_XARRAY = False
@@ -65,14 +66,16 @@ class SequenceExtractor:
                     self._datasets[name] = xr.open_zarr(src.zarr_path)
                     print(f"[SequenceExtractor] Opened Zarr: {src.zarr_path}")
                 elif src.netcdf_dir and src.netcdf_dir.exists():
-                    nc_files = sorted(src.netcdf_dir.glob('*.nc'))
+                    nc_files = sorted(src.netcdf_dir.glob("*.nc"))
                     if nc_files:
                         self._datasets[name] = xr.open_mfdataset(
                             nc_files,
-                            combine='by_coords',
-                            chunks={'time': 365},
+                            combine="by_coords",
+                            chunks={"time": 365},
                         )
-                        print(f"[SequenceExtractor] Opened {len(nc_files)} NetCDF files from {src.netcdf_dir}")
+                        print(
+                            f"[SequenceExtractor] Opened {len(nc_files)} NetCDF files from {src.netcdf_dir}"
+                        )
             except Exception as e:
                 print(f"[SequenceExtractor] Failed to open {name}: {e}")
 
@@ -81,7 +84,7 @@ class SequenceExtractor:
         for name, ds in self._datasets.items():
             try:
                 ds.close()
-            except:
+            except Exception:
                 pass
         self._datasets.clear()
 
@@ -127,8 +130,8 @@ class SequenceExtractor:
         n_features = 1 + 3 + n_terrain  # target + rsun + doy_sin/cos + terrain
 
         # Compute date range
-        end_dt = end_date.astype('datetime64[D]')
-        start_dt = end_dt - np.timedelta64(seq_len - 1, 'D')
+        end_dt = end_date.astype("datetime64[D]")
+        start_dt = end_dt - np.timedelta64(seq_len - 1, "D")
 
         # Find source for this variable
         source_name = self._variable_to_source(variable)
@@ -151,14 +154,11 @@ class SequenceExtractor:
             else:
                 # Use lat/lon selection (slower but more flexible)
                 cell_data = ds.sel(
-                    {src.lat_var: lat, src.lon_var: lon},
-                    method='nearest'
+                    {src.lat_var: lat, src.lon_var: lon}, method="nearest"
                 )
 
             # Select time range
-            time_data = cell_data.sel(
-                {src.time_var: slice(str(start_dt), str(end_dt))}
-            )
+            time_data = cell_data.sel({src.time_var: slice(str(start_dt), str(end_dt))})
 
             # Load target variable
             var_data = time_data[src_var].values
@@ -171,12 +171,14 @@ class SequenceExtractor:
             if np.any(np.isnan(var_data)):
                 return np.zeros((seq_len, n_features), dtype=np.float32), False
 
-        except Exception as e:
+        except Exception:
             return np.zeros((seq_len, n_features), dtype=np.float32), False
 
         # Compute exogenous features
         # DOY from dates
-        dates = np.arange(start_dt, end_dt + np.timedelta64(1, 'D'), dtype='datetime64[D]')
+        dates = np.arange(
+            start_dt, end_dt + np.timedelta64(1, "D"), dtype="datetime64[D]"
+        )
         doys = _compute_doy(dates)
 
         # rsun (clear-sky irradiance)
@@ -190,13 +192,15 @@ class SequenceExtractor:
         terrain_rep = np.tile(terrain_vec, (seq_len, 1))
 
         # Assemble sequence
-        sequence = np.column_stack([
-            var_data.astype(np.float32),
-            rsun.astype(np.float32),
-            doy_sin.astype(np.float32),
-            doy_cos.astype(np.float32),
-            terrain_rep.astype(np.float32),
-        ])
+        sequence = np.column_stack(
+            [
+                var_data.astype(np.float32),
+                rsun.astype(np.float32),
+                doy_sin.astype(np.float32),
+                doy_cos.astype(np.float32),
+                terrain_rep.astype(np.float32),
+            ]
+        )
 
         return sequence, True
 
@@ -212,24 +216,24 @@ class SequenceExtractor:
         """
         # Variable name mappings for common sources
         mappings = {
-            'prism': {
-                'tmax': 'tmax',
-                'tmin': 'tmin',
-                'ppt': 'ppt',
+            "prism": {
+                "tmax": "tmax",
+                "tmin": "tmin",
+                "ppt": "ppt",
             },
-            'gridmet': {
-                'tmax': 'tmmx',
-                'tmin': 'tmmn',
-                'rsds': 'srad',
-                'srad': 'srad',
-                'vpd': 'vpd',
-                'wind': 'vs',
-                'ea': 'etr',  # Reference ET as proxy
+            "gridmet": {
+                "tmax": "tmmx",
+                "tmin": "tmmn",
+                "rsds": "srad",
+                "srad": "srad",
+                "vpd": "vpd",
+                "wind": "vs",
+                "ea": "etr",  # Reference ET as proxy
             },
-            'era5': {
-                'tmax': 't2m',
-                'tmin': 't2m',
-                'rsds': 'ssrd',
+            "era5": {
+                "tmax": "t2m",
+                "tmin": "t2m",
+                "rsds": "ssrd",
             },
         }
 
@@ -237,7 +241,9 @@ class SequenceExtractor:
             return mappings[source_name].get(variable, variable)
         return variable
 
-    def get_available_dates(self, source_name: str) -> Tuple[np.datetime64, np.datetime64]:
+    def get_available_dates(
+        self, source_name: str
+    ) -> Tuple[np.datetime64, np.datetime64]:
         """
         Get the available date range for a source.
 
@@ -254,7 +260,7 @@ class SequenceExtractor:
         src = self.sources[source_name]
 
         times = ds[src.time_var].values
-        return np.datetime64(times[0], 'D'), np.datetime64(times[-1], 'D')
+        return np.datetime64(times[0], "D"), np.datetime64(times[-1], "D")
 
 
 def _compute_doy(dates: np.ndarray) -> np.ndarray:
@@ -262,7 +268,7 @@ def _compute_doy(dates: np.ndarray) -> np.ndarray:
     # Convert to Python dates and extract DOY
     doys = []
     for d in dates:
-        dt = d.astype('datetime64[D]').astype(datetime)
+        dt = d.astype("datetime64[D]").astype(datetime)
         doys.append(dt.timetuple().tm_yday)
     return np.array(doys)
 
@@ -296,9 +302,14 @@ def _compute_rsun(lat: float, doys: np.ndarray) -> np.ndarray:
 
     # Extraterrestrial radiation (MJ/m²/day)
     Gsc = 0.0820  # Solar constant (MJ/m²/min)
-    Ra = (24 * 60 / np.pi) * Gsc * dr * (
-        ws * np.sin(lat_rad) * np.sin(decl) +
-        np.cos(lat_rad) * np.cos(decl) * np.sin(ws)
+    Ra = (
+        (24 * 60 / np.pi)
+        * Gsc
+        * dr
+        * (
+            ws * np.sin(lat_rad) * np.sin(decl)
+            + np.cos(lat_rad) * np.cos(decl) * np.sin(ws)
+        )
     )
 
     # Clear-sky radiation (Rs0 ≈ 0.75 * Ra for sea level)
@@ -396,7 +407,6 @@ class ParquetSequenceExtractor:
             config: PretrainConfig
             variable: Target variable name
         """
-        import pandas as pd
 
         self.parquet_dir = Path(parquet_dir)
         self.config = config
@@ -443,7 +453,7 @@ class ParquetSequenceExtractor:
         values, dates = self._cache[cell_id]
 
         # Find end date index
-        end_dt = end_date.astype('datetime64[D]')
+        end_dt = end_date.astype("datetime64[D]")
         end_idx = np.searchsorted(dates, end_dt)
 
         if end_idx < seq_len - 1 or end_idx >= len(dates):
@@ -451,11 +461,11 @@ class ParquetSequenceExtractor:
 
         # Check consecutive days
         start_idx = end_idx - seq_len + 1
-        window_dates = dates[start_idx:end_idx + 1]
-        if not np.all(np.diff(window_dates.astype('datetime64[D]').astype(int)) == 1):
+        window_dates = dates[start_idx : end_idx + 1]
+        if not np.all(np.diff(window_dates.astype("datetime64[D]").astype(int)) == 1):
             return np.zeros((seq_len, n_features), dtype=np.float32), False
 
-        var_data = values[start_idx:end_idx + 1]
+        var_data = values[start_idx : end_idx + 1]
         if np.any(np.isnan(var_data)):
             return np.zeros((seq_len, n_features), dtype=np.float32), False
 
@@ -468,18 +478,20 @@ class ParquetSequenceExtractor:
         doy_cos = np.cos(2 * np.pi * doys / 365.25)
         terrain_rep = np.tile(terrain_vec, (seq_len, 1))
 
-        sequence = np.column_stack([
-            var_data,
-            rsun,
-            doy_sin,
-            doy_cos,
-            terrain_rep,
-        ]).astype(np.float32)
+        sequence = np.column_stack(
+            [
+                var_data,
+                rsun,
+                doy_sin,
+                doy_cos,
+                terrain_rep,
+            ]
+        ).astype(np.float32)
 
         return sequence, True
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     # Example usage
     print("SequenceExtractor module - no standalone execution")
     print("Use with GridIndex and EpochSampler for sequence extraction")

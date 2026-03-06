@@ -14,25 +14,29 @@ The index contains:
 This allows O(1) random sampling without touching the actual data
 until we need temporal sequences.
 """
+
 import numpy as np
 from pathlib import Path
-from typing import Tuple, Optional, List
+from typing import Tuple, Optional
 from dataclasses import dataclass
 
 try:
     import zarr
+
     HAS_ZARR = True
 except ImportError:
     HAS_ZARR = False
 
 try:
     from sklearn.neighbors import BallTree
+
     HAS_SKLEARN = True
 except ImportError:
     HAS_SKLEARN = False
 
 try:
     import xarray as xr
+
     HAS_XARRAY = True
 except ImportError:
     HAS_XARRAY = False
@@ -43,6 +47,7 @@ from pretrain_build.config import PretrainConfig, GridSource
 @dataclass
 class CellInfo:
     """Information about a single grid cell."""
+
     cell_id: int
     lat: float
     lon: float
@@ -79,20 +84,20 @@ class GridIndex:
         if not index_path.exists():
             raise FileNotFoundError(f"Index not found: {index_path}")
 
-        store = zarr.open(str(index_path), mode='r')
-        self.coords = store['coords'][:]  # (N, 2) [lat, lon]
-        self.cell_ids = store['cell_ids'][:]  # (N,)
-        self.grid_indices = store['grid_indices'][:]  # (N, 2) [row, col]
-        self.terrain = store['terrain'][:]  # (N, D)
+        store = zarr.open(str(index_path), mode="r")
+        self.coords = store["coords"][:]  # (N, 2) [lat, lon]
+        self.cell_ids = store["cell_ids"][:]  # (N,)
+        self.grid_indices = store["grid_indices"][:]  # (N, 2) [row, col]
+        self.terrain = store["terrain"][:]  # (N, D)
 
         # Store source metadata if available
-        if 'source_name' in store.attrs:
-            self.source_name = store.attrs['source_name']
+        if "source_name" in store.attrs:
+            self.source_name = store.attrs["source_name"]
         else:
             self.source_name = None
 
-        if 'resolution_deg' in store.attrs:
-            self.resolution_deg = store.attrs['resolution_deg']
+        if "resolution_deg" in store.attrs:
+            self.resolution_deg = store.attrs["resolution_deg"]
         else:
             self.resolution_deg = None
 
@@ -101,7 +106,7 @@ class GridIndex:
     def _build_tree(self):
         """Build BallTree for neighbor queries using haversine metric."""
         coords_rad = np.deg2rad(self.coords)
-        self.tree = BallTree(coords_rad, metric='haversine')
+        self.tree = BallTree(coords_rad, metric="haversine")
 
     def __len__(self) -> int:
         return len(self.cell_ids)
@@ -166,7 +171,7 @@ class GridIndex:
     def sample_cells(
         self,
         n: int,
-        strategy: str = 'uniform',
+        strategy: str = "uniform",
         min_spacing_km: Optional[float] = None,
         rng: Optional[np.random.Generator] = None,
     ) -> np.ndarray:
@@ -187,13 +192,13 @@ class GridIndex:
 
         n = min(n, len(self.cell_ids))
 
-        if strategy == 'uniform':
+        if strategy == "uniform":
             return rng.choice(len(self.cell_ids), size=n, replace=False)
 
-        elif strategy == 'poisson_disk':
+        elif strategy == "poisson_disk":
             return self._sample_poisson_disk(n, min_spacing_km, rng)
 
-        elif strategy == 'stratified':
+        elif strategy == "stratified":
             return self._sample_stratified(n, rng)
 
         else:
@@ -229,7 +234,9 @@ class GridIndex:
 
             # Remove cells within min_spacing_km
             lat, lon = self.coords[idx]
-            nbr_idx, nbr_dist = self.query_neighbors(lat, lon, k=min(500, len(available) + 1))
+            nbr_idx, nbr_dist = self.query_neighbors(
+                lat, lon, k=min(500, len(available) + 1)
+            )
             for ni, nd in zip(nbr_idx, nbr_dist):
                 if nd < min_spacing_km and ni in available:
                     available.discard(ni)
@@ -263,10 +270,10 @@ class GridIndex:
                 lon_hi = lon_min + (j + 1) * lon_step
 
                 mask = (
-                    (self.coords[:, 0] >= lat_lo) &
-                    (self.coords[:, 0] < lat_hi) &
-                    (self.coords[:, 1] >= lon_lo) &
-                    (self.coords[:, 1] < lon_hi)
+                    (self.coords[:, 0] >= lat_lo)
+                    & (self.coords[:, 0] < lat_hi)
+                    & (self.coords[:, 1] >= lon_lo)
+                    & (self.coords[:, 1] < lon_hi)
                 )
                 tile_indices = np.where(mask)[0]
 
@@ -280,7 +287,9 @@ class GridIndex:
             remaining = set(range(len(self.cell_ids))) - set(selected)
             needed = n - len(selected)
             if remaining:
-                extra = rng.choice(list(remaining), size=min(needed, len(remaining)), replace=False)
+                extra = rng.choice(
+                    list(remaining), size=min(needed, len(remaining)), replace=False
+                )
                 selected.extend(extra.tolist())
 
         return np.array(selected[:n])
@@ -292,7 +301,7 @@ class GridIndex:
         output_path: Path,
         dem_path: Optional[Path] = None,
         min_valid_days: int = 365,
-    ) -> 'GridIndex':
+    ) -> "GridIndex":
         """
         Build spatial index from a gridded data source.
 
@@ -319,10 +328,10 @@ class GridIndex:
         if source.zarr_path and source.zarr_path.exists():
             ds = xr.open_zarr(source.zarr_path)
         elif source.netcdf_dir and source.netcdf_dir.exists():
-            nc_files = sorted(source.netcdf_dir.glob('*.nc'))
+            nc_files = sorted(source.netcdf_dir.glob("*.nc"))
             if not nc_files:
                 raise FileNotFoundError(f"No NetCDF files in {source.netcdf_dir}")
-            ds = xr.open_mfdataset(nc_files, combine='by_coords')
+            ds = xr.open_mfdataset(nc_files, combine="by_coords")
         else:
             raise FileNotFoundError(f"No data source found for {source.name}")
 
@@ -341,12 +350,7 @@ class GridIndex:
 
         # Apply bounds filter
         w, s, e, n = config.bounds
-        mask = (
-            (lat_grid >= s) &
-            (lat_grid <= n) &
-            (lon_grid >= w) &
-            (lon_grid <= e)
-        )
+        mask = (lat_grid >= s) & (lat_grid <= n) & (lon_grid >= w) & (lon_grid <= e)
 
         # Get valid cell coordinates
         valid_rows, valid_cols = np.where(mask)
@@ -361,18 +365,14 @@ class GridIndex:
             if var_name in ds:
                 print(f"[GridIndex] Checking data availability for {var_name}")
                 # Sample time coverage
-                var_data = ds[var_name]
                 # Check for valid data at each cell (sample check)
                 # For efficiency, just check a subset of times
-                times = ds[source.time_var]
-                if len(times) > 100:
-                    time_sample = times[::len(times)//100]
-                else:
-                    time_sample = times
 
                 # This is a simplified check - in practice you might want more thorough validation
                 valid_data_mask = np.ones(len(valid_lats), dtype=bool)
-                print(f"[GridIndex] Data check passed for {valid_data_mask.sum()} cells")
+                print(
+                    f"[GridIndex] Data check passed for {valid_data_mask.sum()} cells"
+                )
         else:
             valid_data_mask = np.ones(len(valid_lats), dtype=bool)
 
@@ -391,6 +391,7 @@ class GridIndex:
         # Extract terrain features if DEM available
         if dem_path and dem_path.exists():
             from pretrain_build.terrain import extract_terrain_at_points
+
             print(f"[GridIndex] Extracting terrain features from {dem_path}")
             terrain = extract_terrain_at_points(
                 str(dem_path),
@@ -401,21 +402,23 @@ class GridIndex:
         else:
             # Default: zeros (will need terrain from another source or use zeros)
             print("[GridIndex] No DEM provided, using zero terrain features")
-            terrain = np.zeros((len(cell_ids), 7), dtype=np.float32)  # Match TERRAIN_FEATURES count
+            terrain = np.zeros(
+                (len(cell_ids), 7), dtype=np.float32
+            )  # Match TERRAIN_FEATURES count
 
         # Write to Zarr
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        store = zarr.open(str(output_path), mode='w')
-        store.create_dataset('coords', data=coords)
-        store.create_dataset('cell_ids', data=cell_ids)
-        store.create_dataset('grid_indices', data=grid_indices)
-        store.create_dataset('terrain', data=terrain)
+        store = zarr.open(str(output_path), mode="w")
+        store.create_dataset("coords", data=coords)
+        store.create_dataset("cell_ids", data=cell_ids)
+        store.create_dataset("grid_indices", data=grid_indices)
+        store.create_dataset("terrain", data=terrain)
 
         # Store metadata
-        store.attrs['source_name'] = source.name
-        store.attrs['resolution_deg'] = source.resolution_deg
-        store.attrs['bounds'] = list(config.bounds)
-        store.attrs['n_cells'] = len(cell_ids)
+        store.attrs["source_name"] = source.name
+        store.attrs["resolution_deg"] = source.resolution_deg
+        store.attrs["bounds"] = list(config.bounds)
+        store.attrs["n_cells"] = len(cell_ids)
 
         print(f"[GridIndex] Written to {output_path}")
 
@@ -429,9 +432,9 @@ class GridIndex:
         lons: np.ndarray,
         output_path: Path,
         terrain: Optional[np.ndarray] = None,
-        source_name: str = 'custom',
+        source_name: str = "custom",
         resolution_deg: float = 0.04166667,
-    ) -> 'GridIndex':
+    ) -> "GridIndex":
         """
         Build index from explicit coordinate arrays.
 
@@ -466,20 +469,20 @@ class GridIndex:
         if terrain is None:
             terrain = np.zeros((n, 7), dtype=np.float32)
 
-        store = zarr.open(str(output_path), mode='w')
-        store.create_dataset('coords', data=coords)
-        store.create_dataset('cell_ids', data=cell_ids)
-        store.create_dataset('grid_indices', data=grid_indices)
-        store.create_dataset('terrain', data=terrain)
+        store = zarr.open(str(output_path), mode="w")
+        store.create_dataset("coords", data=coords)
+        store.create_dataset("cell_ids", data=cell_ids)
+        store.create_dataset("grid_indices", data=grid_indices)
+        store.create_dataset("terrain", data=terrain)
 
-        store.attrs['source_name'] = source_name
-        store.attrs['resolution_deg'] = resolution_deg
-        store.attrs['n_cells'] = n
+        store.attrs["source_name"] = source_name
+        store.attrs["resolution_deg"] = resolution_deg
+        store.attrs["n_cells"] = n
 
         return GridIndex(output_path)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     # Example usage
     import sys
 
@@ -491,8 +494,12 @@ if __name__ == '__main__':
     if index_path.exists():
         idx = GridIndex(index_path)
         print(f"Loaded index with {len(idx)} cells")
-        print(f"Coordinate range: lat [{idx.coords[:, 0].min():.2f}, {idx.coords[:, 0].max():.2f}]")
-        print(f"                  lon [{idx.coords[:, 1].min():.2f}, {idx.coords[:, 1].max():.2f}]")
+        print(
+            f"Coordinate range: lat [{idx.coords[:, 0].min():.2f}, {idx.coords[:, 0].max():.2f}]"
+        )
+        print(
+            f"                  lon [{idx.coords[:, 1].min():.2f}, {idx.coords[:, 1].max():.2f}]"
+        )
         print(f"Terrain shape: {idx.terrain.shape}")
     else:
         print(f"Index not found: {index_path}")

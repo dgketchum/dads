@@ -13,13 +13,15 @@ Key differences from DadsDataset:
 The output format matches DadsDataset exactly:
     (graph, y, neighbor_seq, neighbor_mask, target_seq)
 """
+
 import numpy as np
 import torch
 from torch.utils.data import Dataset
-from typing import Tuple, Optional, List
+from typing import Tuple, Optional
 
 try:
     from torch_geometric.data import Data
+
     HAS_TORCH_GEOMETRIC = True
 except ImportError:
     HAS_TORCH_GEOMETRIC = False
@@ -49,7 +51,7 @@ class PretrainDataset(Dataset):
         seq_extractor: SequenceExtractor,
         config: PretrainConfig,
         variable: str,
-        scaler: 'MinMaxScaler',
+        scaler: "MinMaxScaler",  # noqa: F821
         windows_per_cell: int = 100,
         seed: Optional[int] = None,
         inject_missingness: bool = True,
@@ -98,8 +100,8 @@ class PretrainDataset(Dataset):
     def _build_index(self, windows_per_cell: int):
         """Build (cell_idx, end_date) pairs for all samples."""
         start_str, end_str = self.config.date_range
-        start_ord = np.datetime64(start_str, 'D').astype(int)
-        end_ord = np.datetime64(end_str, 'D').astype(int)
+        start_ord = np.datetime64(start_str, "D").astype(int)
+        end_ord = np.datetime64(end_str, "D").astype(int)
 
         # Need seq_len days before end_date
         valid_start = start_ord + self.config.seq_len
@@ -109,13 +111,15 @@ class PretrainDataset(Dataset):
             # Sample random end dates within valid range
             end_dates = self.rng.integers(valid_start, end_ord, size=windows_per_cell)
             for ed in end_dates:
-                end_date = np.datetime64(ed, 'D')
+                end_date = np.datetime64(ed, "D")
                 self.samples.append((int(cell_idx), end_date))
 
     def __len__(self):
         return len(self.samples)
 
-    def __getitem__(self, idx) -> Tuple[Data, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    def __getitem__(
+        self, idx
+    ) -> Tuple[Data, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         Get a single training sample.
 
@@ -131,8 +135,13 @@ class PretrainDataset(Dataset):
 
         # Extract target sequence
         tgt_seq, tgt_valid = self.extractor.extract_sequence(
-            tgt_lat, tgt_lon, end_date, self.variable, tgt_terrain,
-            row=int(tgt_row), col=int(tgt_col),
+            tgt_lat,
+            tgt_lon,
+            end_date,
+            self.variable,
+            tgt_terrain,
+            row=int(tgt_row),
+            col=int(tgt_col),
         )
 
         if not tgt_valid:
@@ -144,7 +153,9 @@ class PretrainDataset(Dataset):
         y = torch.from_numpy(tgt_seq_scaled[:, 0])
 
         # Get neighbors from epoch sample
-        neighbor_indices, bearings, distances, terrain_deltas = self.sample.get_neighbors(cell_idx)
+        neighbor_indices, bearings, distances, terrain_deltas = (
+            self.sample.get_neighbors(cell_idx)
+        )
 
         if len(neighbor_indices) < self.config.n_neighbors:
             return self._empty_sample()
@@ -161,8 +172,13 @@ class PretrainDataset(Dataset):
             nbr_row, nbr_col = self.index.grid_indices[ni]
 
             nbr_seq, nbr_valid = self.extractor.extract_sequence(
-                nbr_lat, nbr_lon, end_date, self.variable, nbr_terrain,
-                row=int(nbr_row), col=int(nbr_col),
+                nbr_lat,
+                nbr_lon,
+                end_date,
+                self.variable,
+                nbr_terrain,
+                row=int(nbr_row),
+                col=int(nbr_col),
             )
 
             # Inject synthetic missingness
@@ -175,15 +191,22 @@ class PretrainDataset(Dataset):
 
                 # Apply timestep masking
                 if self.inject_missingness:
-                    mask = self.rng.random(self.config.seq_len) > self.config.timestep_mask_prob
+                    mask = (
+                        self.rng.random(self.config.seq_len)
+                        > self.config.timestep_mask_prob
+                    )
                     nbr_seq_scaled[~mask] = 0.0
 
                 neighbor_seqs.append(torch.from_numpy(nbr_seq_scaled))
                 neighbor_masks.append(True)
                 neighbor_obs_today.append(float(nbr_seq_scaled[-1, 0]))
-                neighbor_exog_today.append(torch.from_numpy(nbr_seq_scaled[-1, 1:].astype(np.float32)))
+                neighbor_exog_today.append(
+                    torch.from_numpy(nbr_seq_scaled[-1, 1:].astype(np.float32))
+                )
             else:
-                neighbor_seqs.append(torch.zeros(self.config.seq_len, self.seq_in_channels))
+                neighbor_seqs.append(
+                    torch.zeros(self.config.seq_len, self.seq_in_channels)
+                )
                 neighbor_masks.append(False)
                 neighbor_obs_today.append(0.0)
                 neighbor_exog_today.append(torch.zeros(self.exog_dim))
@@ -197,11 +220,13 @@ class PretrainDataset(Dataset):
         tgt_exog = torch.from_numpy(tgt_seq_scaled[-1, 1:].astype(np.float32))
 
         # Target row: embedding(zeros) + exog + obs(zero for target)
-        tgt_row_feat = torch.cat([
-            torch.zeros(self.emb_dim, dtype=torch.float32),
-            tgt_exog,
-            torch.zeros(1, dtype=torch.float32),
-        ])
+        tgt_row_feat = torch.cat(
+            [
+                torch.zeros(self.emb_dim, dtype=torch.float32),
+                tgt_exog,
+                torch.zeros(1, dtype=torch.float32),
+            ]
+        )
 
         # Neighbor rows: terrain_embedding + exog + obs
         nbr_embs = torch.from_numpy(
@@ -217,8 +242,12 @@ class PretrainDataset(Dataset):
         terrain_delta = torch.from_numpy(terrain_deltas.astype(np.float32))
 
         # Bearing: sin/cos encoding
-        bearing_rad = torch.tensor([np.radians(b) for b in bearings], dtype=torch.float32)
-        bearing_sc = torch.stack([torch.sin(bearing_rad), torch.cos(bearing_rad)], dim=1)
+        bearing_rad = torch.tensor(
+            [np.radians(b) for b in bearings], dtype=torch.float32
+        )
+        bearing_sc = torch.stack(
+            [torch.sin(bearing_rad), torch.cos(bearing_rad)], dim=1
+        )
 
         # Distance: scaled to ~[0,1]
         dist_scaled = torch.tensor(distances, dtype=torch.float32).unsqueeze(1) / 500.0
@@ -226,19 +255,26 @@ class PretrainDataset(Dataset):
         # Exog delta: target - neighbor
         exog_delta = tgt_exog.unsqueeze(0) - nbr_exog_mat
 
-        edge_attr = torch.cat([terrain_delta, bearing_sc, dist_scaled, exog_delta], dim=1)
+        edge_attr = torch.cat(
+            [terrain_delta, bearing_sc, dist_scaled, exog_delta], dim=1
+        )
 
         # Edge index: neighbors (1..k) -> target (0)
         n_neighbors = len(neighbor_indices)
-        edge_index = torch.stack([
-            torch.arange(1, n_neighbors + 1),
-            torch.zeros(n_neighbors, dtype=torch.long),
-        ], dim=0)
+        edge_index = torch.stack(
+            [
+                torch.arange(1, n_neighbors + 1),
+                torch.zeros(n_neighbors, dtype=torch.long),
+            ],
+            dim=0,
+        )
 
         graph = Data(x=x, edge_index=edge_index, edge_attr=edge_attr)
 
         # Target exog-only temporal sequence (pad target channel with zeros)
-        target_seq = torch.zeros(self.config.seq_len, self.seq_in_channels, dtype=torch.float32)
+        target_seq = torch.zeros(
+            self.config.seq_len, self.seq_in_channels, dtype=torch.float32
+        )
         target_seq[:, 1:] = torch.from_numpy(tgt_seq_scaled[:, 1:].astype(np.float32))
 
         return graph, y, neighbor_seq, neighbor_mask, target_seq
@@ -266,7 +302,9 @@ class PretrainDataset(Dataset):
         scaled = (seq - bias) / scale + 5e-8
         return scaled.astype(np.float32)
 
-    def _empty_sample(self) -> Tuple[Data, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    def _empty_sample(
+        self,
+    ) -> Tuple[Data, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """Return a zeroed sample for invalid data."""
         n = self.config.n_neighbors
         node_dim = self.emb_dim + self.exog_dim + 1
@@ -311,7 +349,13 @@ def pretrain_collate_fn(batch):
     neighbor_mask_batch = torch.stack(neighbor_masks, dim=0)
     target_seq_batch = torch.stack(target_seqs, dim=0)
 
-    return batched_graph, y_batch, neighbor_seq_batch, neighbor_mask_batch, target_seq_batch
+    return (
+        batched_graph,
+        y_batch,
+        neighbor_seq_batch,
+        neighbor_mask_batch,
+        target_seq_batch,
+    )
 
 
 class IterablePretrainDataset(torch.utils.data.IterableDataset):
@@ -329,7 +373,7 @@ class IterablePretrainDataset(torch.utils.data.IterableDataset):
         seq_extractor: SequenceExtractor,
         config: PretrainConfig,
         variable: str,
-        scaler: 'MinMaxScaler',
+        scaler: "MinMaxScaler",  # noqa: F821
         samples_per_epoch: int = 100000,
         seed: Optional[int] = None,
         inject_missingness: bool = True,
@@ -380,13 +424,13 @@ class IterablePretrainDataset(torch.utils.data.IterableDataset):
         rng = np.random.default_rng(seed)
 
         start_str, end_str = self.config.date_range
-        start_ord = np.datetime64(start_str, 'D').astype(int) + self.config.seq_len
-        end_ord = np.datetime64(end_str, 'D').astype(int)
+        start_ord = np.datetime64(start_str, "D").astype(int) + self.config.seq_len
+        end_ord = np.datetime64(end_str, "D").astype(int)
 
         for _ in range(n_samples):
             # Random target cell
             target_idx = rng.choice(self.sample.target_indices)
-            end_date = np.datetime64(rng.integers(start_ord, end_ord), 'D')
+            end_date = np.datetime64(rng.integers(start_ord, end_ord), "D")
 
             # Generate sample (similar to PretrainDataset.__getitem__)
             sample = self._generate_sample(target_idx, end_date, rng)
@@ -400,8 +444,13 @@ class IterablePretrainDataset(torch.utils.data.IterableDataset):
         tgt_row, tgt_col = self.index.grid_indices[cell_idx]
 
         tgt_seq, tgt_valid = self.extractor.extract_sequence(
-            tgt_lat, tgt_lon, end_date, self.variable, tgt_terrain,
-            row=int(tgt_row), col=int(tgt_col),
+            tgt_lat,
+            tgt_lon,
+            end_date,
+            self.variable,
+            tgt_terrain,
+            row=int(tgt_row),
+            col=int(tgt_col),
         )
 
         if not tgt_valid:
@@ -411,7 +460,9 @@ class IterablePretrainDataset(torch.utils.data.IterableDataset):
         tgt_seq_scaled = self._scale_sequence(tgt_seq)
         y = torch.from_numpy(tgt_seq_scaled[:, 0])
 
-        neighbor_indices, bearings, distances, terrain_deltas = self.sample.get_neighbors(cell_idx)
+        neighbor_indices, bearings, distances, terrain_deltas = (
+            self.sample.get_neighbors(cell_idx)
+        )
 
         if len(neighbor_indices) < self.config.n_neighbors:
             return None
@@ -430,25 +481,39 @@ class IterablePretrainDataset(torch.utils.data.IterableDataset):
             nbr_row, nbr_col = self.index.grid_indices[ni]
 
             nbr_seq, nbr_valid = self.extractor.extract_sequence(
-                nbr_lat, nbr_lon, end_date, self.variable, nbr_terrain,
-                row=int(nbr_row), col=int(nbr_col),
+                nbr_lat,
+                nbr_lon,
+                end_date,
+                self.variable,
+                nbr_terrain,
+                row=int(nbr_row),
+                col=int(nbr_col),
             )
 
-            if self.inject_missingness and rng.random() < self.config.neighbor_drop_prob:
+            if (
+                self.inject_missingness
+                and rng.random() < self.config.neighbor_drop_prob
+            ):
                 nbr_valid = False
 
             if nbr_valid:
                 nbr_seq_scaled = self._scale_sequence(nbr_seq)
                 if self.inject_missingness:
-                    mask = rng.random(self.config.seq_len) > self.config.timestep_mask_prob
+                    mask = (
+                        rng.random(self.config.seq_len) > self.config.timestep_mask_prob
+                    )
                     nbr_seq_scaled[~mask] = 0.0
 
                 neighbor_seqs.append(torch.from_numpy(nbr_seq_scaled))
                 neighbor_masks.append(True)
                 neighbor_obs_today.append(float(nbr_seq_scaled[-1, 0]))
-                neighbor_exog_today.append(torch.from_numpy(nbr_seq_scaled[-1, 1:].astype(np.float32)))
+                neighbor_exog_today.append(
+                    torch.from_numpy(nbr_seq_scaled[-1, 1:].astype(np.float32))
+                )
             else:
-                neighbor_seqs.append(torch.zeros(self.config.seq_len, self.seq_in_channels))
+                neighbor_seqs.append(
+                    torch.zeros(self.config.seq_len, self.seq_in_channels)
+                )
                 neighbor_masks.append(False)
                 neighbor_obs_today.append(0.0)
                 neighbor_exog_today.append(torch.zeros(self.exog_dim))
@@ -457,13 +522,17 @@ class IterablePretrainDataset(torch.utils.data.IterableDataset):
         neighbor_mask = torch.tensor(neighbor_masks, dtype=torch.bool)
 
         tgt_exog = torch.from_numpy(tgt_seq_scaled[-1, 1:].astype(np.float32))
-        tgt_row_feat = torch.cat([
-            torch.zeros(self.emb_dim, dtype=torch.float32),
-            tgt_exog,
-            torch.zeros(1, dtype=torch.float32),
-        ])
+        tgt_row_feat = torch.cat(
+            [
+                torch.zeros(self.emb_dim, dtype=torch.float32),
+                tgt_exog,
+                torch.zeros(1, dtype=torch.float32),
+            ]
+        )
 
-        nbr_embs = torch.from_numpy(self.index.terrain[neighbor_indices].astype(np.float32))
+        nbr_embs = torch.from_numpy(
+            self.index.terrain[neighbor_indices].astype(np.float32)
+        )
         nbr_exog_mat = torch.stack(neighbor_exog_today, dim=0)
         nbr_obs = torch.tensor(neighbor_obs_today, dtype=torch.float32).unsqueeze(1)
         nbr_rows = torch.cat([nbr_embs, nbr_exog_mat, nbr_obs], dim=1)
@@ -471,22 +540,33 @@ class IterablePretrainDataset(torch.utils.data.IterableDataset):
         x = torch.cat([tgt_row_feat.unsqueeze(0), nbr_rows], dim=0)
 
         terrain_delta = torch.from_numpy(terrain_deltas.astype(np.float32))
-        bearing_rad = torch.tensor([np.radians(b) for b in bearings], dtype=torch.float32)
-        bearing_sc = torch.stack([torch.sin(bearing_rad), torch.cos(bearing_rad)], dim=1)
+        bearing_rad = torch.tensor(
+            [np.radians(b) for b in bearings], dtype=torch.float32
+        )
+        bearing_sc = torch.stack(
+            [torch.sin(bearing_rad), torch.cos(bearing_rad)], dim=1
+        )
         dist_scaled = torch.tensor(distances, dtype=torch.float32).unsqueeze(1) / 500.0
         exog_delta = tgt_exog.unsqueeze(0) - nbr_exog_mat
 
-        edge_attr = torch.cat([terrain_delta, bearing_sc, dist_scaled, exog_delta], dim=1)
+        edge_attr = torch.cat(
+            [terrain_delta, bearing_sc, dist_scaled, exog_delta], dim=1
+        )
 
         n_neighbors = len(neighbor_indices)
-        edge_index = torch.stack([
-            torch.arange(1, n_neighbors + 1),
-            torch.zeros(n_neighbors, dtype=torch.long),
-        ], dim=0)
+        edge_index = torch.stack(
+            [
+                torch.arange(1, n_neighbors + 1),
+                torch.zeros(n_neighbors, dtype=torch.long),
+            ],
+            dim=0,
+        )
 
         graph = Data(x=x, edge_index=edge_index, edge_attr=edge_attr)
 
-        target_seq = torch.zeros(self.config.seq_len, self.seq_in_channels, dtype=torch.float32)
+        target_seq = torch.zeros(
+            self.config.seq_len, self.seq_in_channels, dtype=torch.float32
+        )
         target_seq[:, 1:] = torch.from_numpy(tgt_seq_scaled[:, 1:].astype(np.float32))
 
         return graph, y, neighbor_seq, neighbor_mask, target_seq
@@ -511,6 +591,6 @@ class IterablePretrainDataset(torch.utils.data.IterableDataset):
         return scaled.astype(np.float32)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     print("PretrainDataset module")
     print("Use with EpochSampler, GridIndex, and SequenceExtractor")

@@ -4,6 +4,7 @@ Resampling utilities for aligning multi-resolution sources to master grid.
 Handles reprojection and resampling from various source formats (GeoTIFF,
 NetCDF, zarr) to the unified 1km WGS84 grid.
 """
+
 from pathlib import Path
 from typing import Tuple, Optional, Union
 import logging
@@ -13,23 +14,26 @@ import numpy as np
 try:
     import rasterio
     from rasterio.warp import (
-        calculate_default_transform,
+        calculate_default_transform,  # noqa: F401
         reproject,
         Resampling,
     )
     from rasterio.crs import CRS
+
     HAS_RASTERIO = True
 except ImportError:
     HAS_RASTERIO = False
 
 try:
     import xarray as xr
+
     HAS_XARRAY = True
 except ImportError:
     HAS_XARRAY = False
 
 try:
-    import rioxarray as rxr
+    import rioxarray as rxr  # noqa: F401
+
     HAS_RIOXARRAY = True
 except ImportError:
     HAS_RIOXARRAY = False
@@ -42,18 +46,15 @@ logger = logging.getLogger(__name__)
 # Resampling method mapping
 RESAMPLING_METHODS = {
     # Aggregation for fine->coarse (DEM, Landsat)
-    'average': Resampling.average if HAS_RASTERIO else None,
-    'mean': Resampling.average if HAS_RASTERIO else None,
-
+    "average": Resampling.average if HAS_RASTERIO else None,
+    "mean": Resampling.average if HAS_RASTERIO else None,
     # Interpolation for coarse->fine or similar resolution
-    'bilinear': Resampling.bilinear if HAS_RASTERIO else None,
-    'cubic': Resampling.cubic if HAS_RASTERIO else None,
-
+    "bilinear": Resampling.bilinear if HAS_RASTERIO else None,
+    "cubic": Resampling.cubic if HAS_RASTERIO else None,
     # Nearest neighbor (categorical data, masks)
-    'nearest': Resampling.nearest if HAS_RASTERIO else None,
-
+    "nearest": Resampling.nearest if HAS_RASTERIO else None,
     # Mode for categorical (land cover, masks)
-    'mode': Resampling.mode if HAS_RASTERIO else None,
+    "mode": Resampling.mode if HAS_RASTERIO else None,
 }
 
 
@@ -91,7 +92,7 @@ class GridResampler:
     def resample_raster(
         self,
         src_path: Union[str, Path],
-        method: str = 'bilinear',
+        method: str = "bilinear",
         band: int = 1,
     ) -> np.ndarray:
         """
@@ -128,7 +129,7 @@ class GridResampler:
         data: np.ndarray,
         src_transform,
         src_crs: str,
-        method: str = 'bilinear',
+        method: str = "bilinear",
         nodata: Optional[float] = None,
     ) -> np.ndarray:
         """
@@ -166,9 +167,9 @@ class GridResampler:
 
     def resample_xarray(
         self,
-        da: 'xr.DataArray',
-        method: str = 'bilinear',
-    ) -> 'xr.DataArray':
+        da: "xr.DataArray",
+        method: str = "bilinear",
+    ) -> "xr.DataArray":
         """
         Resample an xarray DataArray to the master grid.
 
@@ -189,7 +190,7 @@ class GridResampler:
         # Ensure CRS is set
         if da.rio.crs is None:
             # Assume WGS84 if not specified
-            da = da.rio.write_crs('EPSG:4326')
+            da = da.rio.write_crs("EPSG:4326")
 
         # Reproject to target grid
         da_resampled = da.rio.reproject(
@@ -200,15 +201,15 @@ class GridResampler:
         )
 
         # Rename coordinates to match our convention
-        if 'y' in da_resampled.dims:
-            da_resampled = da_resampled.rename({'y': 'lat', 'x': 'lon'})
+        if "y" in da_resampled.dims:
+            da_resampled = da_resampled.rename({"y": "lat", "x": "lon"})
 
         return da_resampled
 
     def resample_temporal_xarray(
         self,
-        da: 'xr.DataArray',
-        method: str = 'bilinear',
+        da: "xr.DataArray",
+        method: str = "bilinear",
     ) -> np.ndarray:
         """
         Resample a temporal xarray DataArray, processing each timestep.
@@ -228,7 +229,7 @@ class GridResampler:
         # Identify time dimension
         time_dim = None
         for dim in da.dims:
-            if dim in ('time', 'Time', 'DATE'):
+            if dim in ("time", "Time", "DATE"):
                 time_dim = dim
                 break
 
@@ -253,10 +254,10 @@ class GridResampler:
 
 
 def resample_to_grid(
-    da: 'xr.DataArray',
+    da: "xr.DataArray",
     grid: MasterGrid,
-    method: str = 'bilinear',
-) -> 'xr.DataArray':
+    method: str = "bilinear",
+) -> "xr.DataArray":
     """
     Convenience function to resample a DataArray to the master grid.
 
@@ -301,7 +302,7 @@ def compute_source_to_target_mapping(
 
 def get_recommended_method(
     src_resolution: float,
-    layer_type: str = 'continuous',
+    layer_type: str = "continuous",
 ) -> str:
     """
     Get recommended resampling method based on source resolution.
@@ -315,22 +316,22 @@ def get_recommended_method(
     """
     target_resolution = 0.008333333  # 1km
 
-    if layer_type == 'categorical':
-        return 'mode'
+    if layer_type == "categorical":
+        return "mode"
 
-    if layer_type == 'terrain' and src_resolution < target_resolution:
+    if layer_type == "terrain" and src_resolution < target_resolution:
         # Aggregating fine DEM to coarser grid
-        return 'average'
+        return "average"
 
     if src_resolution < target_resolution:
         # Aggregating (fine -> coarse)
-        return 'average'
+        return "average"
     else:
         # Interpolating (coarse -> fine or similar)
-        return 'bilinear'
+        return "bilinear"
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     # Demo
     from cube.grid import create_conus_grid
 

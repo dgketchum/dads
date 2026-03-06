@@ -10,27 +10,33 @@ Uses rasterio to sample from DEM and compute derived products:
 These become the pseudo-embeddings for grid cells (replacing station
 autoencoder embeddings in the observation system).
 """
+
 import numpy as np
-from typing import Tuple, Optional, List
-from pathlib import Path
-from functools import lru_cache
+from typing import Tuple, Optional
 
 try:
     import rasterio
-    from rasterio.windows import Window
+    from rasterio.windows import Window  # noqa: F401
+
     HAS_RASTERIO = True
 except ImportError:
     HAS_RASTERIO = False
 
 try:
     from scipy.ndimage import generic_filter
+
     HAS_SCIPY = True
 except ImportError:
     HAS_SCIPY = False
 
 
 # Default TPI radii matching TERRAIN_FEATURES in columns_desc
-DEFAULT_TPI_RADII = (5, 11, 25, 50)  # Corresponds to ~500m, ~1km, ~2.5km, ~10km at 100m res
+DEFAULT_TPI_RADII = (
+    5,
+    11,
+    25,
+    50,
+)  # Corresponds to ~500m, ~1km, ~2.5km, ~10km at 100m res
 
 
 def extract_terrain_at_points(
@@ -85,9 +91,14 @@ def extract_terrain_at_points(
         aspect = np.zeros(n_points, dtype=np.float32)
 
         for i, (r, c) in enumerate(zip(rows, cols)):
-            if r < 1 or r >= dem_data.shape[0] - 1 or c < 1 or c >= dem_data.shape[1] - 1:
+            if (
+                r < 1
+                or r >= dem_data.shape[0] - 1
+                or c < 1
+                or c >= dem_data.shape[1] - 1
+            ):
                 continue
-            patch = dem_data[r-1:r+2, c-1:c+2].astype(np.float64)
+            patch = dem_data[r - 1 : r + 2, c - 1 : c + 2].astype(np.float64)
             if nodata is not None:
                 patch[patch == nodata] = np.nan
             if np.isnan(patch).any():
@@ -122,13 +133,13 @@ def _compute_slope_aspect(patch: np.ndarray, cell_size: float) -> Tuple[float, f
     """
     # Horn's method for gradient
     dzdx = (
-        (patch[0, 2] + 2*patch[1, 2] + patch[2, 2]) -
-        (patch[0, 0] + 2*patch[1, 0] + patch[2, 0])
+        (patch[0, 2] + 2 * patch[1, 2] + patch[2, 2])
+        - (patch[0, 0] + 2 * patch[1, 0] + patch[2, 0])
     ) / (8 * cell_size)
 
     dzdy = (
-        (patch[2, 0] + 2*patch[2, 1] + patch[2, 2]) -
-        (patch[0, 0] + 2*patch[0, 1] + patch[0, 2])
+        (patch[2, 0] + 2 * patch[2, 1] + patch[2, 2])
+        - (patch[0, 0] + 2 * patch[0, 1] + patch[0, 2])
     ) / (8 * cell_size)
 
     # Slope in degrees
@@ -223,9 +234,7 @@ def compute_terrain_grid(
 
         # Compute lat/lon for each cell
         rows, cols = np.meshgrid(
-            np.arange(dem_data.shape[0]),
-            np.arange(dem_data.shape[1]),
-            indexing='ij'
+            np.arange(dem_data.shape[0]), np.arange(dem_data.shape[1]), indexing="ij"
         )
         lons, lats = rasterio.transform.xy(transform, rows.ravel(), cols.ravel())
         lons = np.array(lons).reshape(dem_data.shape)
@@ -248,7 +257,7 @@ def compute_terrain_grid(
 
         for i in range(1, dem_data.shape[0] - 1):
             for j in range(1, dem_data.shape[1] - 1):
-                patch = dem_float[i-1:i+2, j-1:j+2]
+                patch = dem_float[i - 1 : i + 2, j - 1 : j + 2]
                 if np.isnan(patch).any():
                     continue
                 s, a = _compute_slope_aspect(patch, cell_size)
@@ -258,6 +267,7 @@ def compute_terrain_grid(
         # Compute TPI at each scale
         tpi_arrays = []
         for radius in tpi_radii:
+
             def tpi_func(values):
                 center = values[len(values) // 2]
                 valid = values[~np.isnan(values)]
@@ -266,24 +276,20 @@ def compute_terrain_grid(
                 return center - np.nanmean(valid)
 
             tpi = generic_filter(
-                dem_float,
-                tpi_func,
-                size=2*radius + 1,
-                mode='constant',
-                cval=np.nan
+                dem_float, tpi_func, size=2 * radius + 1, mode="constant", cval=np.nan
             )
             tpi_arrays.append(tpi)
 
         # Save to Zarr
-        store = zarr.open(output_path, mode='w')
-        store.create_dataset('lat', data=lats, chunks=(512, 512))
-        store.create_dataset('lon', data=lons, chunks=(512, 512))
-        store.create_dataset('elevation', data=dem_float, chunks=(512, 512))
-        store.create_dataset('slope', data=slope, chunks=(512, 512))
-        store.create_dataset('aspect', data=aspect, chunks=(512, 512))
+        store = zarr.open(output_path, mode="w")
+        store.create_dataset("lat", data=lats, chunks=(512, 512))
+        store.create_dataset("lon", data=lons, chunks=(512, 512))
+        store.create_dataset("elevation", data=dem_float, chunks=(512, 512))
+        store.create_dataset("slope", data=slope, chunks=(512, 512))
+        store.create_dataset("aspect", data=aspect, chunks=(512, 512))
         for i, (radius, tpi) in enumerate(zip(tpi_radii, tpi_arrays)):
-            store.create_dataset(f'tpi_{radius}', data=tpi, chunks=(512, 512))
-        store.create_dataset('valid_mask', data=mask, chunks=(512, 512))
+            store.create_dataset(f"tpi_{radius}", data=tpi, chunks=(512, 512))
+        store.create_dataset("valid_mask", data=mask, chunks=(512, 512))
 
 
 class TerrainCache:
@@ -301,23 +307,25 @@ class TerrainCache:
             zarr_path: Path to Zarr store created by compute_terrain_grid
         """
         import zarr
-        self.store = zarr.open(zarr_path, mode='r')
-        self.lat = self.store['lat'][:]
-        self.lon = self.store['lon'][:]
-        self.elevation = self.store['elevation'][:]
-        self.slope = self.store['slope'][:]
-        self.aspect = self.store['aspect'][:]
+
+        self.store = zarr.open(zarr_path, mode="r")
+        self.lat = self.store["lat"][:]
+        self.lon = self.store["lon"][:]
+        self.elevation = self.store["elevation"][:]
+        self.slope = self.store["slope"][:]
+        self.aspect = self.store["aspect"][:]
 
         # Load TPI arrays
         self.tpi_arrays = []
         self.tpi_names = []
         for key in sorted(self.store.keys()):
-            if key.startswith('tpi_'):
+            if key.startswith("tpi_"):
                 self.tpi_arrays.append(self.store[key][:])
                 self.tpi_names.append(key)
 
         # Build KDTree for fast nearest-neighbor lookup
         from scipy.spatial import cKDTree
+
         points = np.column_stack([self.lat.ravel(), self.lon.ravel()])
         valid = ~np.isnan(self.elevation.ravel())
         self.valid_indices = np.where(valid)[0]
@@ -359,7 +367,7 @@ class TerrainCache:
         return np.column_stack(features).astype(np.float32)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     # Example: Extract terrain at sample points
     import sys
 

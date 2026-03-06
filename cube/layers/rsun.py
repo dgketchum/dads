@@ -10,28 +10,29 @@ Input format: Directory with 365 GeoTIFFs, one per DOY, named like:
 
 Output: cube.zarr/doy_indexed/rsun with shape (365, n_lat, n_lon)
 """
+
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional
 import logging
-import re
 
 import numpy as np
 
 try:
     import rasterio
     from rasterio.merge import merge as rasterio_merge
+
     HAS_RASTERIO = True
 except ImportError:
     HAS_RASTERIO = False
 
 try:
     import zarr
+
     HAS_ZARR = True
 except ImportError:
     HAS_ZARR = False
 
 from cube.layers.base import BaseLayer
-from cube.grid import MasterGrid
 from cube.config import CubeConfig, CHUNKS
 
 logger = logging.getLogger(__name__)
@@ -50,19 +51,19 @@ class RSUNLayer(BaseLayer):
 
     @property
     def name(self) -> str:
-        return 'doy_indexed'
+        return "doy_indexed"
 
     @property
     def variables(self) -> List[str]:
-        return ['rsun']
+        return ["rsun"]
 
     @property
     def dimensions(self) -> Tuple[str, ...]:
-        return ('doy', 'lat', 'lon')
+        return ("doy", "lat", "lon")
 
     @property
     def chunks(self) -> Dict[str, int]:
-        return CHUNKS['doy_indexed']
+        return CHUNKS["doy_indexed"]
 
     def build(
         self,
@@ -82,7 +83,7 @@ class RSUNLayer(BaseLayer):
             raise ImportError("rasterio required for rsun layer building")
 
         source_paths = source_paths or self.config.source_paths
-        rsun_dir = source_paths.get('rsun_dir')
+        rsun_dir = source_paths.get("rsun_dir")
 
         if rsun_dir is None:
             raise ValueError("rsun_dir path not provided in source_paths['rsun_dir']")
@@ -98,24 +99,26 @@ class RSUNLayer(BaseLayer):
         logger.info(f"Detected input format: {input_format}")
 
         # Open store and create group
-        store = self._open_store('a')
+        store = self._open_store("a")
         self._write_coords(store)
         self._write_doy_coord(store)
         group = self._ensure_group(store)
 
         # Create output array
         shape = (365, self.grid.n_lat, self.grid.n_lon)
-        chunks = (self.chunks['doy'], self.chunks['lat'], self.chunks['lon'])
+        chunks = (self.chunks["doy"], self.chunks["lat"], self.chunks["lon"])
 
-        if 'rsun' in group and not overwrite:
-            logger.info("rsun array already exists, skipping (use overwrite=True to rebuild)")
+        if "rsun" in group and not overwrite:
+            logger.info(
+                "rsun array already exists, skipping (use overwrite=True to rebuild)"
+            )
             return
 
         rsun_array = group.create_dataset(
-            'rsun',
+            "rsun",
             shape=shape,
             chunks=chunks,
-            dtype='float32',
+            dtype="float32",
             compressor=self.compression,
             fill_value=np.nan,
             overwrite=overwrite,
@@ -123,6 +126,7 @@ class RSUNLayer(BaseLayer):
 
         # Process each DOY
         from cube.builders.resampler import GridResampler
+
         resampler = GridResampler(self.grid)
 
         for doy in range(1, 366):
@@ -130,9 +134,9 @@ class RSUNLayer(BaseLayer):
                 logger.info(f"Processing DOY {doy}/365...")
 
             try:
-                if input_format == 'flat':
+                if input_format == "flat":
                     data = self._load_flat_doy(rsun_dir, doy, resampler)
-                elif input_format == 'tiled':
+                elif input_format == "tiled":
                     data = self._load_tiled_doy(rsun_dir, doy, resampler, merge_tiles)
                 else:
                     raise ValueError(f"Unknown input format: {input_format}")
@@ -148,9 +152,9 @@ class RSUNLayer(BaseLayer):
                 raise
 
         # Store metadata
-        store.attrs['rsun_source'] = str(rsun_dir)
-        store.attrs['rsun_units'] = 'Wh/m2/day'
-        store.attrs['rsun_description'] = 'Clear-sky global horizontal irradiance'
+        store.attrs["rsun_source"] = str(rsun_dir)
+        store.attrs["rsun_units"] = "Wh/m2/day"
+        store.attrs["rsun_description"] = "Clear-sky global horizontal irradiance"
 
         logger.info("rsun layer complete")
 
@@ -163,18 +167,20 @@ class RSUNLayer(BaseLayer):
             'tiled': Subdirectories per tile with irradiance_day_*.tif
         """
         # Check for flat organization
-        flat_files = list(rsun_dir.glob('rsun_doy_*.tif')) + list(rsun_dir.glob('rsun_*.tif'))
+        flat_files = list(rsun_dir.glob("rsun_doy_*.tif")) + list(
+            rsun_dir.glob("rsun_*.tif")
+        )
         if flat_files:
-            return 'flat'
+            return "flat"
 
         # Check for tile subdirectories
         subdirs = [d for d in rsun_dir.iterdir() if d.is_dir()]
         if subdirs:
             # Look for irradiance files in subdirs
             for subdir in subdirs[:3]:  # Check first few
-                tile_files = list(subdir.glob('irradiance_day_*.tif'))
+                tile_files = list(subdir.glob("irradiance_day_*.tif"))
                 if tile_files:
-                    return 'tiled'
+                    return "tiled"
 
         raise ValueError(
             f"Could not detect rsun input format in {rsun_dir}. "
@@ -185,21 +191,21 @@ class RSUNLayer(BaseLayer):
         self,
         rsun_dir: Path,
         doy: int,
-        resampler: 'GridResampler',
+        resampler: "GridResampler",  # noqa: F821
     ) -> np.ndarray:
         """Load a single DOY from flat file organization."""
         # Try different naming conventions
         patterns = [
-            f'rsun_doy_{doy:03d}.tif',
-            f'rsun_{doy}.tif',
-            f'rsun_{doy:03d}.tif',
-            f'irradiance_day_{doy}.tif',
+            f"rsun_doy_{doy:03d}.tif",
+            f"rsun_{doy}.tif",
+            f"rsun_{doy:03d}.tif",
+            f"irradiance_day_{doy}.tif",
         ]
 
         for pattern in patterns:
             filepath = rsun_dir / pattern
             if filepath.exists():
-                return resampler.resample_raster(filepath, method='bilinear')
+                return resampler.resample_raster(filepath, method="bilinear")
 
         raise FileNotFoundError(f"No rsun file found for DOY {doy} in {rsun_dir}")
 
@@ -207,7 +213,7 @@ class RSUNLayer(BaseLayer):
         self,
         rsun_dir: Path,
         doy: int,
-        resampler: 'GridResampler',
+        resampler: "GridResampler",  # noqa: F821
         merge_tiles: bool = True,
     ) -> np.ndarray:
         """Load a single DOY from tile-organized structure."""
@@ -219,7 +225,7 @@ class RSUNLayer(BaseLayer):
 
             tile_id = tile_dir.name
             # Match irradiance_day_{doy}_{tile}.tif pattern
-            pattern = f'irradiance_day_{doy}_{tile_id}.tif'
+            pattern = f"irradiance_day_{doy}_{tile_id}.tif"
             filepath = tile_dir / pattern
 
             if filepath.exists():
@@ -230,7 +236,7 @@ class RSUNLayer(BaseLayer):
 
         if len(tile_files) == 1:
             # Single tile - just resample
-            return resampler.resample_raster(tile_files[0], method='bilinear')
+            return resampler.resample_raster(tile_files[0], method="bilinear")
 
         if merge_tiles:
             # Merge tiles then resample
@@ -242,10 +248,9 @@ class RSUNLayer(BaseLayer):
     def _merge_and_resample(
         self,
         tile_files: List[Path],
-        resampler: 'GridResampler',
+        resampler: "GridResampler",  # noqa: F821
     ) -> np.ndarray:
         """Merge tiles using rasterio.merge then resample to grid."""
-        import tempfile
 
         # Open all tiles
         src_files = [rasterio.open(f) for f in tile_files]
@@ -262,7 +267,7 @@ class RSUNLayer(BaseLayer):
                 mosaic[0],  # First band
                 src_transform=out_transform,
                 src_crs=src_crs,
-                method='bilinear',
+                method="bilinear",
             )
 
         finally:
@@ -274,7 +279,7 @@ class RSUNLayer(BaseLayer):
     def _resample_and_combine(
         self,
         tile_files: List[Path],
-        resampler: 'GridResampler',
+        resampler: "GridResampler",  # noqa: F821
     ) -> np.ndarray:
         """Resample each tile independently and combine using nanmean."""
         # Initialize accumulator
@@ -283,14 +288,16 @@ class RSUNLayer(BaseLayer):
 
         for filepath in tile_files:
             try:
-                tile_data = resampler.resample_raster(filepath, method='bilinear')
+                tile_data = resampler.resample_raster(filepath, method="bilinear")
 
                 # Accumulate valid values
                 valid = ~np.isnan(tile_data)
                 combined = np.where(valid & (count == 0), tile_data, combined)
-                combined = np.where(valid & (count > 0),
-                                   (combined * count + tile_data) / (count + 1),
-                                   combined)
+                combined = np.where(
+                    valid & (count > 0),
+                    (combined * count + tile_data) / (count + 1),
+                    combined,
+                )
                 count[valid] += 1
 
             except Exception as e:
@@ -306,29 +313,29 @@ class RSUNLayer(BaseLayer):
             return checks
 
         try:
-            store = zarr.open(str(self.store_path), mode='r')
+            store = zarr.open(str(self.store_path), mode="r")
             group = store[self.name]
 
-            rsun = group['rsun'][:]
+            rsun = group["rsun"][:]
 
             # Physical range checks (Wh/m²/day)
             # Typical range: 0 to ~10000 Wh/m²/day for clear sky
             valid = rsun[~np.isnan(rsun)]
-            checks['rsun_min'] = valid.min() >= 0
-            checks['rsun_max'] = valid.max() < 15000  # Upper bound
+            checks["rsun_min"] = valid.min() >= 0
+            checks["rsun_max"] = valid.max() < 15000  # Upper bound
 
             # Check seasonal variation (summer DOYs should have higher values at mid-latitudes)
             summer_mean = np.nanmean(rsun[150:220, :, :])  # ~June-August
             winter_mean = np.nanmean(rsun[330:365, :, :])  # ~December
-            checks['seasonal_pattern'] = summer_mean > winter_mean
+            checks["seasonal_pattern"] = summer_mean > winter_mean
 
             # Coverage check
             nan_fraction = np.isnan(rsun).mean()
-            checks['coverage'] = nan_fraction < 0.5  # At least 50% coverage
+            checks["coverage"] = nan_fraction < 0.5  # At least 50% coverage
 
         except Exception as e:
             logger.error(f"Validation error: {e}")
-            checks['validation_error'] = False
+            checks["validation_error"] = False
 
         return checks
 
@@ -345,8 +352,8 @@ class RSUNLayer(BaseLayer):
         if not self.store_path.exists():
             raise FileNotFoundError(f"Cube not found: {self.store_path}")
 
-        store = zarr.open(str(self.store_path), mode='r')
-        return store[self.name]['rsun'][doy - 1, :, :]
+        store = zarr.open(str(self.store_path), mode="r")
+        return store[self.name]["rsun"][doy - 1, :, :]
 
 
 def build_rsun_from_grass_export(
@@ -371,21 +378,21 @@ def build_rsun_from_grass_export(
         overwrite: Whether to overwrite existing data
     """
     # Update config with rsun_dir
-    config.source_paths['rsun_dir'] = grass_export_dir
+    config.source_paths["rsun_dir"] = grass_export_dir
 
     layer = RSUNLayer(config)
     layer.build(overwrite=overwrite, merge_tiles=True)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     import sys
 
     if len(sys.argv) > 2:
         rsun_dir = sys.argv[1]
         cube_path = sys.argv[2]
     else:
-        rsun_dir = '/nas/dads/dem/rsun_irradiance'
-        cube_path = '/data/ssd2/dads_cube/cube.zarr'
+        rsun_dir = "/nas/dads/dem/rsun_irradiance"
+        cube_path = "/data/ssd2/dads_cube/cube.zarr"
 
     if Path(rsun_dir).exists():
         from cube.config import default_conus_config

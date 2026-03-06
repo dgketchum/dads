@@ -11,4 +11,4 @@ from cube.layers.rsun import RSUNLayer
 from cube.layers.cdr import CDRLayer
 from cube.layers.met import MetLayer
 
-__all__ = ['BaseLayer', 'TerrainLayer', 'RSUNLayer', 'CDRLayer', 'MetLayer']
+__all__ = ["BaseLayer", "TerrainLayer", "RSUNLayer", "CDRLayer", "MetLayer"]
