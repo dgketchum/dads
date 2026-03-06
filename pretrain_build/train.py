@@ -1,7 +1,7 @@
 """
 Pre-training loop for DADS on gridded data.
 
-Key differences from models/dads/train.py:
+Key differences from models/dads_cube/train.py:
     1. Rebuilds graph structure each epoch via EpochSampler
     2. Uses PretrainDataset instead of DadsDataset
     3. Saves checkpoints compatible with fine-tuning on observations
@@ -26,7 +26,7 @@ from lightning.pytorch.callbacks import (
 )
 from torch.utils.data import DataLoader
 
-from models.dads.dads_gnn import DadsMetGNN
+from models.dads_cube.dads_gnn import DadsMetGNN
 from models.components.scalers import MinMaxScaler
 from pretrain_build.config import PretrainConfig, GridSource
 from pretrain_build.grid_index import GridIndex

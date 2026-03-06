@@ -7,7 +7,7 @@ import numpy as np
 import pandas as pd
 import torch
 from tqdm import tqdm
-from models.dads.value_limits import FEATURE_LIMITS, TARGET_LIMITS
+from models.dads_cube.value_limits import FEATURE_LIMITS, TARGET_LIMITS
 
 from prep.columns_desc import TARGETS, TERRAIN_FEATURES, GEO_FEATURES
 from prep.columns_desc import LANDSAT_FEATURES, CDR_FEATURES, RS_MISS_FEATURES
