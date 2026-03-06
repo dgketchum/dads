@@ -12,7 +12,7 @@ import torch
 from pyproj import Transformer
 from torch.utils.data import Dataset
 
-from grid.rtma_patch_sampler import (
+from grid.cog_utils import (
     RtmaPatchConfig,
     _decode_rtma_raw_patch,
     doy_sin_cos,

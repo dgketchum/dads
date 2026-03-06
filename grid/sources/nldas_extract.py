@@ -11,7 +11,7 @@ import pandas as pd
 import xarray as xr
 from earthaccess.results import DataGranule
 
-from grid.to_parquet import process_and_concat_csv
+from grid.sources.to_parquet import process_and_concat_csv
 
 
 def get_nldas(start_date, end_date, down_dst=None):

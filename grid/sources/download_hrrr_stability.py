@@ -15,9 +15,9 @@ Three modes:
 
 Usage
 -----
-  uv run python -m grid.download_hrrr_stability --z0-only
-  uv run python -m grid.download_hrrr_stability --workers 12
-  uv run python -m grid.download_hrrr_stability --compute-factors
+  uv run python -m grid.sources.download_hrrr_stability --z0-only
+  uv run python -m grid.sources.download_hrrr_stability --workers 12
+  uv run python -m grid.sources.download_hrrr_stability --compute-factors
 """
 
 from __future__ import annotations
@@ -38,7 +38,7 @@ import numpy as np
 import pandas as pd
 from sklearn.neighbors import BallTree
 
-from grid.hrrr_stability import daily_mean_most_factor
+from grid.sources.hrrr_stability import daily_mean_most_factor
 
 # ── constants ────────────────────────────────────────────────────────────────
 

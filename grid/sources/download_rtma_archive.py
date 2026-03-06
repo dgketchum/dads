@@ -14,7 +14,7 @@ Layout
 
 Usage
 -----
-  uv run python -m grid.download_rtma_archive \
+  uv run python -m grid.sources.download_rtma_archive \
       --model urma \
       --dest /mnt/mco_nas1/shared/rtma_hourly \
       --workers 20 --include-pcp \

@@ -14,7 +14,7 @@ Assumptions
   - Most other fields stored as int(value * 100) (decode with / 100)
 
 This module intentionally keeps decoding logic consistent with
-grid/rtma_station_daily.py to avoid drift.
+grid/daily.py to avoid drift.
 """
 
 from __future__ import annotations
@@ -27,7 +27,7 @@ import numpy as np
 import rasterio
 from rasterio.windows import Window
 
-from grid.rtma_station_daily import (
+from grid.daily import (
     _RTMA_DAILY_BAND_ORDER,
     _band_index,
     _sat_vapor_pressure_kpa_from_dewpoint_c,

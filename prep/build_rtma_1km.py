@@ -22,7 +22,7 @@ import rasterio
 from rasterio.warp import Resampling, reproject
 
 from prep.pnw_1km_grid import PNW_1KM_CRS, PNW_1KM_SHAPE, PNW_1KM_TRANSFORM
-from grid.rtma_patch_sampler import _decode_rtma_raw_patch
+from grid.cog_utils import _decode_rtma_raw_patch
 
 DECODED_BANDS = (
     "tmp_c",

@@ -7,7 +7,7 @@ Reads hourly GRIB2 files from the archive, samples at station locations
 
 Usage
 -----
-    uv run python -m grid.build_station_daily \
+    uv run python -m grid.sources.build_station_daily \
         --model urma \
         --grib-root /mnt/mco_nas1/shared/rtma_hourly \
         --stations-csv /nas/dads/met/stations/madis_02JULY2025_mgrs.csv \

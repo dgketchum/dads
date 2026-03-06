@@ -17,7 +17,7 @@ Layout
 
 Usage
 -----
-  uv run python -m grid.download_hrrr_archive \\
+  uv run python -m grid.sources.download_hrrr_archive \\
       --dest /mnt/mco_nas1/shared/hrrr_hourly \\
       --workers 20 \\
       --start-date 2014-11-15 --end-date 2025-01-08 \\
