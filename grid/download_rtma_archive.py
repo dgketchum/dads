@@ -3,19 +3,21 @@ Bulk download RTMA / URMA hourly analysis files from AWS S3.
 
 Downloads full analysis GRIB2 files (all variables) with threaded I/O,
 manifest-based resume, and time-window scheduling so downloads can be
-restricted to off-hours.
+restricted to off-hours.  Optionally downloads hourly precipitation
+analysis files (``--include-pcp``).
 
 Layout
 ------
   {dest}/{model}/{YYYY}/{YYYYMMDD}/{model}2p5.tHHz.2dvaranl_ndfd.{suffix}
+  {dest}/{model}/{YYYY}/{YYYYMMDD}/{model}2p5.YYYYMMDDHH.pcp*.grb2   (if --include-pcp)
   {dest}/manifest.parquet
 
 Usage
 -----
-  uv run python process/gridded/download_rtma_archive.py \
+  uv run python -m grid.download_rtma_archive \
       --model urma \
       --dest /mnt/mco_nas1/shared/rtma_hourly \
-      --workers 20 \
+      --workers 20 --include-pcp \
       --schedule "00:00-08:00" --weekend-free
 """
 
@@ -49,6 +51,12 @@ _ARCHIVE_START: dict[str, date] = {
 _HOURS = list(range(24))
 _MAX_RETRIES = 3
 
+# Earliest date with GRIB2-format precipitation files on S3.
+_PCP_START: dict[str, date] = {
+    "rtma": date(2020, 1, 1),
+    "urma": date(2020, 1, 1),
+}
+
 
 # ── suffix / URL helpers ────────────────────────────────────────────────────
 
@@ -74,6 +82,28 @@ def _local_path(dest: str, model: str, d: date, hour: int) -> str:
     suffix = _suffix_for_date(d)
     pfx = f"{model}2p5"
     fname = f"{pfx}.t{hour:02d}z.2dvaranl_ndfd{suffix}"
+    return os.path.join(dest, model, f"{d:%Y}", f"{d:%Y%m%d}", fname)
+
+
+def _pcp_s3_url(model: str, d: date, hour: int) -> str:
+    """S3 URL for the hourly precipitation analysis GRIB2."""
+    pfx = f"{model}2p5"
+    bucket = _BUCKETS[model]
+    dh = f"{d:%Y%m%d}{hour:02d}"
+    if model == "rtma":
+        fname = f"{pfx}.{dh}.pcp.184.grb2"
+    else:
+        fname = f"{pfx}.{dh}.pcp_01h.wexp.grb2"
+    return f"https://{bucket}.s3.amazonaws.com/{pfx}.{d:%Y%m%d}/{fname}"
+
+
+def _pcp_local_path(dest: str, model: str, d: date, hour: int) -> str:
+    pfx = f"{model}2p5"
+    dh = f"{d:%Y%m%d}{hour:02d}"
+    if model == "rtma":
+        fname = f"{pfx}.{dh}.pcp.184.grb2"
+    else:
+        fname = f"{pfx}.{dh}.pcp_01h.wexp.grb2"
     return os.path.join(dest, model, f"{d:%Y}", f"{d:%Y%m%d}", fname)
 
 
@@ -173,6 +203,7 @@ _MANIFEST_COLS = [
     "model",
     "date",
     "hour",
+    "product",
     "s3_url",
     "local_path",
     "size_bytes",
@@ -183,7 +214,10 @@ _MANIFEST_COLS = [
 
 def _load_manifest(path: str) -> pd.DataFrame:
     if os.path.exists(path):
-        return pd.read_parquet(path)
+        df = pd.read_parquet(path)
+        if "product" not in df.columns:
+            df["product"] = "anl"
+        return df
     return pd.DataFrame(columns=_MANIFEST_COLS)
 
 
@@ -192,12 +226,12 @@ def _save_manifest(df: pd.DataFrame, path: str) -> None:
     df.to_parquet(path, index=False)
 
 
-def _done_keys(manifest: pd.DataFrame) -> set[tuple[str, str, int]]:
-    """Set of (model, date, hour) already completed or confirmed missing."""
+def _done_keys(manifest: pd.DataFrame) -> set[tuple[str, str, int, str]]:
+    """Set of (model, date, hour, product) already completed or missing."""
     if manifest.empty:
         return set()
     done = manifest[manifest["status"].isin(("done", "missing"))]
-    return set(zip(done["model"], done["date"], done["hour"]))
+    return set(zip(done["model"], done["date"], done["hour"], done["product"]))
 
 
 # ── signal handling ──────────────────────────────────────────────────────────
@@ -261,13 +295,57 @@ def _parse_args() -> argparse.Namespace:
         action="store_true",
         help="Download oldest dates first (default: most recent first).",
     )
+    p.add_argument(
+        "--include-pcp",
+        action="store_true",
+        help="Also download hourly precipitation analysis GRIBs.",
+    )
+    p.add_argument(
+        "--pcp-only",
+        action="store_true",
+        help="Download ONLY precipitation files (skip analysis).",
+    )
     return p.parse_args()
+
+
+def _build_day_tasks(
+    mdl: str,
+    day: date,
+    dest: str,
+    done: set[tuple[str, str, int, str]],
+    include_anl: bool,
+    include_pcp: bool,
+) -> list[tuple[str, str, str, int, str]]:
+    """Build (url, local_path, date_str, hour, product) tasks for one day."""
+    tasks: list[tuple[str, str, str, int, str]] = []
+    ds = day.isoformat()
+    for h in _HOURS:
+        if include_anl and (mdl, ds, h, "anl") not in done:
+            url = _s3_url(mdl, day, h)
+            lp = _local_path(dest, mdl, day, h)
+            if os.path.exists(lp) and os.path.getsize(lp) > 0:
+                done.add((mdl, ds, h, "anl"))
+            else:
+                tasks.append((url, lp, ds, h, "anl"))
+
+        if include_pcp and day >= _PCP_START.get(mdl, date.max):
+            if (mdl, ds, h, "pcp") not in done:
+                url = _pcp_s3_url(mdl, day, h)
+                lp = _pcp_local_path(dest, mdl, day, h)
+                if os.path.exists(lp) and os.path.getsize(lp) > 0:
+                    done.add((mdl, ds, h, "pcp"))
+                else:
+                    tasks.append((url, lp, ds, h, "pcp"))
+    return tasks
 
 
 def main() -> None:
     args = _parse_args()
     models = ["rtma", "urma"] if args.model == "both" else [args.model]
     yesterday = date.today() - timedelta(days=1)
+
+    include_anl = not args.pcp_only
+    include_pcp = args.include_pcp or args.pcp_only
 
     signal.signal(signal.SIGINT, _signal_handler)
     signal.signal(signal.SIGTERM, _signal_handler)
@@ -280,6 +358,12 @@ def main() -> None:
     total_downloaded = 0
     total_bytes = 0
     t_start = time.time()
+
+    products_desc = []
+    if include_anl:
+        products_desc.append("analysis")
+    if include_pcp:
+        products_desc.append("precip")
 
     for mdl in models:
         start = (
@@ -300,6 +384,7 @@ def main() -> None:
 
         print(f"\n{'=' * 60}")
         print(f"  {mdl.upper()}: {start} → {end}  ({len(days)} days)")
+        print(f"  Products: {' + '.join(products_desc)}")
         print(f"  Workers: {args.workers}  Schedule: {args.schedule or 'unrestricted'}")
         print(f"  Already done: {len(done)} file-hours")
         print(f"{'=' * 60}\n")
@@ -314,18 +399,9 @@ def main() -> None:
             if _shutdown_requested:
                 break
 
-            # Build tasks for this day (skip already done)
-            tasks: list[tuple[str, str, str, int]] = []
-            for h in _HOURS:
-                if (mdl, day.isoformat(), h) in done:
-                    continue
-                url = _s3_url(mdl, day, h)
-                lp = _local_path(args.dest, mdl, day, h)
-                # Also skip if file already exists on disk (resume without manifest)
-                if os.path.exists(lp) and os.path.getsize(lp) > 0:
-                    done.add((mdl, day.isoformat(), h))
-                    continue
-                tasks.append((url, lp, day.isoformat(), h))
+            tasks = _build_day_tasks(
+                mdl, day, args.dest, done, include_anl, include_pcp
+            )
 
             if not tasks:
                 continue
@@ -337,22 +413,23 @@ def main() -> None:
 
             with ThreadPoolExecutor(max_workers=args.workers) as pool:
                 futures = {
-                    pool.submit(_download_one, url, lp): (ds, h)
-                    for url, lp, ds, h in tasks
+                    pool.submit(_download_one, url, lp): (url, ds, h, prod)
+                    for url, lp, ds, h, prod in tasks
                 }
                 for fut in as_completed(futures):
-                    ds, h = futures[fut]
+                    s3_url, ds, h, prod = futures[fut]
                     result = fut.result()
                     row = {
                         "model": mdl,
                         "date": ds,
                         "hour": h,
-                        "s3_url": _s3_url(mdl, date.fromisoformat(ds), h),
+                        "product": prod,
+                        "s3_url": s3_url,
                         **result,
                         "downloaded_at": datetime.now().isoformat(),
                     }
                     new_rows.append(row)
-                    done.add((mdl, ds, h))
+                    done.add((mdl, ds, h, prod))
                     if result["status"] == "done":
                         day_done += 1
                         day_bytes += result["size_bytes"]

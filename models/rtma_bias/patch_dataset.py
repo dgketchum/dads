@@ -12,7 +12,7 @@ import torch
 from pyproj import Transformer
 from torch.utils.data import Dataset
 
-from process.gridded.rtma_patch_sampler import (
+from grid.rtma_patch_sampler import (
     RtmaPatchConfig,
     _decode_rtma_raw_patch,
     doy_sin_cos,
@@ -36,12 +36,15 @@ class PatchDatasetConfig:
     tif_root: str
     rtma_channels: tuple[str, ...] = (
         "tmp_c",
+        "tmax_c",
+        "tmin_c",
         "dpt_c",
         "ugrd",
         "vgrd",
+        "gust",
+        "spfh",
         "pres_kpa",
         "tcdc_pct",
-        "prcp_mm",
         "ea_kpa",
     )
     add_doy: bool = True
@@ -59,6 +62,7 @@ class PatchDatasetConfig:
     rsun_tif: str | None = None
     landsat_tif: str | None = None
     target_col: str = "delta_log_ea"
+    target_cols: tuple[str, ...] | None = None  # multi-target; overrides target_col
     preload_workers: int = 8
     start_date: str | None = None
     end_date: str | None = None
@@ -78,7 +82,10 @@ def _load_one_cog(
     ``prep/build_rtma_1km.py``).  The Int32→float decode step is skipped.
     """
     if decoded_tifs:
-        tif_path = os.path.join(tif_root, f"RTMA_1km_{ymd}.tif")
+        # Try URMA naming first, fall back to RTMA
+        tif_path = os.path.join(tif_root, f"URMA_1km_{ymd}.tif")
+        if not os.path.exists(tif_path):
+            tif_path = os.path.join(tif_root, f"RTMA_1km_{ymd}.tif")
     else:
         tif_path = os.path.join(tif_root, f"RTMA_{ymd}.tif")
     if not os.path.exists(tif_path):
@@ -127,7 +134,15 @@ def _preload_cogs(
             for ymd in unique_days
         }
         for fut in as_completed(futures):
-            result = fut.result()
+            ymd_key = futures[fut]
+            try:
+                result = fut.result()
+            except Exception as exc:
+                print(
+                    f"  WARNING: skipping corrupt COG {ymd_key}: {exc}",
+                    flush=True,
+                )
+                result = None
             if result is not None:
                 ymd, keep = result
                 cache[ymd] = keep
@@ -453,16 +468,23 @@ class RtmaHumidityPatchDataset(Dataset):
 
     def __init__(self, patch_index_parquet: str, config: PatchDatasetConfig):
         self.config = config
+        self._target_cols = config.target_cols or (config.target_col,)
+        self._multi_target = len(self._target_cols) > 1
+
         df = pd.read_parquet(patch_index_parquet)
-        target_col = config.target_col
-        req = {"fid", "day", "latitude", "longitude", target_col}
+        req = {"fid", "day", "latitude", "longitude"} | set(self._target_cols)
         missing = req - set(df.columns)
         if missing:
             raise ValueError(f"patch index missing columns: {sorted(missing)}")
         df = df.copy()
         df["fid"] = df["fid"].astype(str)
         df["day"] = pd.to_datetime(df["day"], errors="coerce").dt.normalize()
-        df = df.dropna(subset=["day", "latitude", "longitude", target_col])
+        df = df.dropna(subset=["day", "latitude", "longitude"])
+        # Keep rows with at least one valid target
+        if self._multi_target:
+            df = df.dropna(subset=list(self._target_cols), how="all")
+        else:
+            df = df.dropna(subset=list(self._target_cols))
         if config.start_date:
             df = df.loc[df["day"] >= pd.to_datetime(config.start_date)]
         if config.end_date:
@@ -496,6 +518,17 @@ class RtmaHumidityPatchDataset(Dataset):
             print(
                 f"Pre-load complete: {len(self._cog_cache)} COGs in memory.", flush=True
             )
+            # Drop samples whose COG failed to load (corrupt files).
+            loaded_days = set(self._cog_cache.keys())
+            mask = self.df["day"].dt.strftime("%Y%m%d").isin(loaded_days)
+            n_drop = int((~mask).sum())
+            if n_drop:
+                print(
+                    f"  Dropped {n_drop} samples for {df['day'].nunique() - len(loaded_days)} "
+                    f"missing/corrupt COGs.",
+                    flush=True,
+                )
+                self.df = self.df.loc[mask].reset_index(drop=True)
 
         # ---- Terrain (static 6-band grid) ----
         self._terrain_cache: dict[str, np.ndarray] | None = None
@@ -605,7 +638,12 @@ class RtmaHumidityPatchDataset(Dataset):
     @staticmethod
     def _tif_path(tif_root: str, day: pd.Timestamp) -> str:
         ymd = day.strftime("%Y%m%d")
-        return os.path.join(str(tif_root).rstrip("/"), f"RTMA_{ymd}.tif")
+        root = str(tif_root).rstrip("/")
+        for prefix in ("URMA_1km_", "RTMA_1km_", "RTMA_"):
+            p = os.path.join(root, f"{prefix}{ymd}.tif")
+            if os.path.exists(p):
+                return p
+        return os.path.join(root, f"RTMA_{ymd}.tif")
 
     def __len__(self) -> int:
         return int(len(self.df))
@@ -619,7 +657,6 @@ class RtmaHumidityPatchDataset(Dataset):
         lon = float(r["longitude"])
         lat = float(r["latitude"])
         day = pd.Timestamp(r["day"])
-        y = float(r[self.config.target_col])
         ymd = day.strftime("%Y%m%d")
 
         cog = self._cog_cache[ymd]
@@ -711,11 +748,22 @@ class RtmaHumidityPatchDataset(Dataset):
         )
         x = self._normalize(x)
         x_t = torch.from_numpy(x)
-        y_t = torch.tensor([y], dtype=torch.float32)
+
+        # Build target tensor
+        if self._multi_target:
+            y_vals = []
+            for tc in self._target_cols:
+                v = r[tc]
+                y_vals.append(float(v) if pd.notna(v) else float("nan"))
+            y_t = torch.tensor(y_vals, dtype=torch.float32)
+        else:
+            y_t = torch.tensor([float(r[self._target_cols[0]])], dtype=torch.float32)
 
         meta = {"fid": str(r["fid"]), "day": day, "lon": lon, "lat": lat}
-        if "ea_rtma" in self.df.columns:
-            meta["log_ea_rtma"] = float(np.log(r["ea_rtma"]))
+        if "ea_rtma" in self.df.columns and pd.notna(r.get("ea_rtma")):
+            meta["log_ea_rtma"] = float(np.log(max(r["ea_rtma"], 1e-10)))
+        if "tmp_rtma" in self.df.columns and pd.notna(r.get("tmp_rtma")):
+            meta["tmp_rtma"] = float(r["tmp_rtma"])
         return x_t, y_t, meta
 
     # ------------------------------------------------------------------
@@ -727,7 +775,6 @@ class RtmaHumidityPatchDataset(Dataset):
         lon = float(r["longitude"])
         lat = float(r["latitude"])
         day = pd.Timestamp(r["day"])
-        y = float(r[self.config.target_col])
 
         tif_path = self._tif_path(self.config.tif_root, day)
         src = _cached_open(tif_path)
@@ -805,7 +852,16 @@ class RtmaHumidityPatchDataset(Dataset):
         )
         x = self._normalize(x)
         x_t = torch.from_numpy(x)
-        y_t = torch.tensor([y], dtype=torch.float32)
+
+        # Build target tensor
+        if self._multi_target:
+            y_vals = []
+            for tc in self._target_cols:
+                v = r[tc]
+                y_vals.append(float(v) if pd.notna(v) else float("nan"))
+            y_t = torch.tensor(y_vals, dtype=torch.float32)
+        else:
+            y_t = torch.tensor([float(r[self._target_cols[0]])], dtype=torch.float32)
 
         meta = {
             "fid": str(r["fid"]),
@@ -815,8 +871,10 @@ class RtmaHumidityPatchDataset(Dataset):
             "tif": tif_path,
             "channels": chan_to_idx,
         }
-        if "ea_rtma" in self.df.columns:
-            meta["log_ea_rtma"] = float(np.log(r["ea_rtma"]))
+        if "ea_rtma" in self.df.columns and pd.notna(r.get("ea_rtma")):
+            meta["log_ea_rtma"] = float(np.log(max(r["ea_rtma"], 1e-10)))
+        if "tmp_rtma" in self.df.columns and pd.notna(r.get("tmp_rtma")):
+            meta["tmp_rtma"] = float(r["tmp_rtma"])
         return x_t, y_t, meta
 
     def __getitem__(self, idx: int):

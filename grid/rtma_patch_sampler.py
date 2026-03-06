@@ -14,7 +14,7 @@ Assumptions
   - Most other fields stored as int(value * 100) (decode with / 100)
 
 This module intentionally keeps decoding logic consistent with
-process/gridded/rtma_station_daily.py to avoid drift.
+grid/rtma_station_daily.py to avoid drift.
 """
 
 from __future__ import annotations
@@ -27,7 +27,7 @@ import numpy as np
 import rasterio
 from rasterio.windows import Window
 
-from process.gridded.rtma_station_daily import (
+from grid.rtma_station_daily import (
     _RTMA_DAILY_BAND_ORDER,
     _band_index,
     _sat_vapor_pressure_kpa_from_dewpoint_c,
@@ -129,7 +129,7 @@ def _decode_rtma_raw_patch(
     prcp_mm = _get("ACPC01") / 100.0
 
     if np.isnan(wind).all():
-        wind = np.sqrt(ugrd ** 2 + vgrd ** 2)
+        wind = np.sqrt(ugrd**2 + vgrd**2)
     if np.isnan(wdir).all():
         wdir = _wind_dir_deg_from_uv(ugrd, vgrd).astype("float32", copy=False)
 
@@ -190,7 +190,12 @@ def sample_rtma_patch(
         row, col = src.index(float(lon), float(lat))
         # Window is defined in (col_off, row_off) pixel space.
         half = patch_size // 2
-        w = Window(col_off=int(col - half), row_off=int(row - half), width=patch_size, height=patch_size)
+        w = Window(
+            col_off=int(col - half),
+            row_off=int(row - half),
+            width=patch_size,
+            height=patch_size,
+        )
         raw_bhw = _read_window(src, window=w, boundless=bool(config.boundless))
         decoded = _decode_rtma_raw_patch(src, raw_bhw=raw_bhw)
     finally:
@@ -201,7 +206,9 @@ def sample_rtma_patch(
     stack = []
     for i, c in enumerate(channels):
         if c not in decoded:
-            raise KeyError(f"unknown channel '{c}'; available: {sorted(decoded.keys())}")
+            raise KeyError(
+                f"unknown channel '{c}'; available: {sorted(decoded.keys())}"
+            )
         chan_to_idx[c] = i
         stack.append(decoded[c])
     x = np.stack(stack, axis=0).astype("float32", copy=False)
@@ -210,8 +217,8 @@ def sample_rtma_patch(
 
 def doy_sin_cos(day: np.datetime64 | str) -> tuple[float, float]:
     import pandas as pd
+
     ts = pd.Timestamp(day)
     doy = float(ts.dayofyear)
     ang = 2.0 * np.pi * doy / 365.25
     return float(np.sin(ang)), float(np.cos(ang))
-

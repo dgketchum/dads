@@ -69,8 +69,8 @@ _RTMA_DAILY_BAND_ORDER = (
 
 @dataclass(frozen=True)
 class UnitHints:
-    tmp: str | None = None   # "K" or "C"
-    dpt: str | None = None   # "K" or "C"
+    tmp: str | None = None  # "K" or "C"
+    dpt: str | None = None  # "K" or "C"
     pres: str | None = None  # "Pa" or "hPa" or "kPa"
     tcdc: str | None = None  # "fraction" or "percent"
     wdir: str | None = None  # "rad" or "deg"
@@ -90,7 +90,9 @@ def _parse_dt_col(df: pd.DataFrame) -> pd.Series:
     """Return a timezone-naive UTC datetime index."""
     dt_col = _first_present(df.columns, _DT_COL_CANDIDATES)
     if dt_col is None:
-        raise KeyError(f"no datetime column found; expected one of {_DT_COL_CANDIDATES}")
+        raise KeyError(
+            f"no datetime column found; expected one of {_DT_COL_CANDIDATES}"
+        )
 
     s = df[dt_col]
     if np.issubdtype(s.dtype, np.datetime64):
@@ -99,16 +101,22 @@ def _parse_dt_col(df: pd.DataFrame) -> pd.Series:
         # Common raw formats:
         # - YYYYMMDDHH
         # - YYYY-MM-DD HH:MM:SS
-        out = pd.to_datetime(s, utc=True, errors="coerce", format=None).dt.tz_convert(None)
+        out = pd.to_datetime(s, utc=True, errors="coerce", format=None).dt.tz_convert(
+            None
+        )
         if out.isna().all():
-            out = pd.to_datetime(s.astype(str), utc=True, errors="coerce", format="%Y%m%d%H").dt.tz_convert(None)
+            out = pd.to_datetime(
+                s.astype(str), utc=True, errors="coerce", format="%Y%m%d%H"
+            ).dt.tz_convert(None)
 
     if out.isna().any():
         out = out[out.notna()]
     return out
 
 
-def _actual_vapor_pressure_kpa_from_q_and_p(q_kgkg: np.ndarray, pres_kpa: np.ndarray) -> np.ndarray:
+def _actual_vapor_pressure_kpa_from_q_and_p(
+    q_kgkg: np.ndarray, pres_kpa: np.ndarray
+) -> np.ndarray:
     # ea = q * p / (0.622 + 0.378*q)
     q = np.asarray(q_kgkg, dtype="float64")
     p = np.asarray(pres_kpa, dtype="float64")
@@ -214,7 +222,9 @@ def _maybe_unscale_prcp(values: pd.Series, hint: str | None) -> pd.Series:
     return v
 
 
-def canonicalize_hourly(df_raw: pd.DataFrame, model: str, unit_hints: UnitHints) -> pd.DataFrame:
+def canonicalize_hourly(
+    df_raw: pd.DataFrame, model: str, unit_hints: UnitHints
+) -> pd.DataFrame:
     """Pick and rename columns, convert units, and compute derived hourly fields."""
     model = str(model).lower()
     if model not in {"rtma", "urma"}:
@@ -237,7 +247,14 @@ def canonicalize_hourly(df_raw: pd.DataFrame, model: str, unit_hints: UnitHints)
         "wind": ("WIND", "wind", "ws", "wind_speed"),
         "wdir": ("WDIR", "wdir", "wd", "wind_direction"),
         "tcdc": ("TCDC", "tcdc", "tcc", "total_cloud_cover", "cloud_cover"),
-        "acpc01": ("ACPC01", "acpc01", "prcp", "tp", "total_precipitation", "precipitation_amount"),
+        "acpc01": (
+            "ACPC01",
+            "acpc01",
+            "prcp",
+            "tp",
+            "total_precipitation",
+            "precipitation_amount",
+        ),
     }
 
     out = pd.DataFrame(index=df.index)
@@ -279,7 +296,9 @@ def canonicalize_hourly(df_raw: pd.DataFrame, model: str, unit_hints: UnitHints)
         if f"wind_{model}" not in out.columns:
             out[f"wind_{model}"] = np.sqrt(out[u_key] ** 2 + out[v_key] ** 2)
         if f"wdir_{model}" not in out.columns:
-            out[f"wdir_{model}"] = _wind_dir_deg_from_uv(out[u_key].values, out[v_key].values)
+            out[f"wdir_{model}"] = _wind_dir_deg_from_uv(
+                out[u_key].values, out[v_key].values
+            )
 
     # Derive ea from spfh + pres where available.
     q_key = f"spfh_{model}"
@@ -301,6 +320,11 @@ def hourly_to_daily(df_hourly: pd.DataFrame, model: str) -> pd.DataFrame:
         else:
             agg[c] = "mean"
     daily = df_hourly.resample("D").agg(agg)
+    # Keep tmp_{model} as daily mean for backward compatibility, and add
+    # tmax_{model} as daily maximum for true tmax residual targets.
+    tmp_col = f"tmp_{model}"
+    if tmp_col in df_hourly.columns:
+        daily[f"tmax_{model}"] = df_hourly[tmp_col].resample("D").max()
     # Rename precip accumulation to prcp_{model} and drop raw accumulation name
     acc = f"acpc01_{model}"
     if acc in daily.columns:
@@ -344,7 +368,9 @@ def build_daily_tables(
             except Exception:
                 continue
             try:
-                frames.append(canonicalize_hourly(df_raw, model=model, unit_hints=unit_hints))
+                frames.append(
+                    canonicalize_hourly(df_raw, model=model, unit_hints=unit_hints)
+                )
             except Exception:
                 continue
 
@@ -357,7 +383,9 @@ def build_daily_tables(
         daily.to_parquet(out_file)
 
 
-def _discover_station_col(df: pd.DataFrame, user_col: str | None, candidates: tuple[str, ...], kind: str) -> str:
+def _discover_station_col(
+    df: pd.DataFrame, user_col: str | None, candidates: tuple[str, ...], kind: str
+) -> str:
     if user_col:
         if user_col not in df.columns:
             raise KeyError(f"{kind} column not found: {user_col}")
@@ -375,7 +403,9 @@ def _load_stations(
     lon_col: str | None = None,
 ) -> pd.DataFrame:
     df = pd.read_csv(stations_csv)
-    id_col = _discover_station_col(df, station_id_col, _STATION_ID_COL_CANDIDATES, "station-id")
+    id_col = _discover_station_col(
+        df, station_id_col, _STATION_ID_COL_CANDIDATES, "station-id"
+    )
     lat_key = _discover_station_col(df, lat_col, _STATION_LAT_COL_CANDIDATES, "lat")
     lon_key = _discover_station_col(df, lon_col, _STATION_LON_COL_CANDIDATES, "lon")
     out = df[[id_col, lat_key, lon_key]].copy()
@@ -401,7 +431,9 @@ def _parse_day_from_tif_name(path: str) -> pd.Timestamp | None:
     return day.normalize()
 
 
-def _iter_daily_tifs(tif_root: str, start_date: str | None = None, end_date: str | None = None) -> list[tuple[pd.Timestamp, str]]:
+def _iter_daily_tifs(
+    tif_root: str, start_date: str | None = None, end_date: str | None = None
+) -> list[tuple[pd.Timestamp, str]]:
     start = pd.to_datetime(start_date).normalize() if start_date else None
     end = pd.to_datetime(end_date).normalize() if end_date else None
     rows = []
@@ -466,7 +498,7 @@ def _sample_daily_tif(
     prcp_mm = _get("ACPC01") / 100.0
 
     if np.isnan(wind).all():
-        wind = np.sqrt(ugrd ** 2 + vgrd ** 2)
+        wind = np.sqrt(ugrd**2 + vgrd**2)
     if np.isnan(wdir).all():
         wdir = _wind_dir_deg_from_uv(ugrd, vgrd)
 
@@ -512,7 +544,9 @@ def build_daily_tables_from_tifs(
         lat_col=lat_col,
         lon_col=lon_col,
     )
-    tif_rows = _iter_daily_tifs(tif_root=tif_root, start_date=start_date, end_date=end_date)
+    tif_rows = _iter_daily_tifs(
+        tif_root=tif_root, start_date=start_date, end_date=end_date
+    )
 
     n = len(stations)
     step = max(1, int(station_chunk_size))
@@ -520,8 +554,14 @@ def build_daily_tables_from_tifs(
         stop_i = min(n, start_i + step)
         chunk = stations.iloc[start_i:stop_i].reset_index(drop=True)
         fids = chunk["fid"].tolist()
-        coords = list(zip(chunk["lon"].astype(float).tolist(), chunk["lat"].astype(float).tolist()))
-        rows_by_fid: dict[str, list[dict[str, float | pd.Timestamp]]] = {fid: [] for fid in fids}
+        coords = list(
+            zip(
+                chunk["lon"].astype(float).tolist(), chunk["lat"].astype(float).tolist()
+            )
+        )
+        rows_by_fid: dict[str, list[dict[str, float | pd.Timestamp]]] = {
+            fid: [] for fid in fids
+        }
 
         for day, tif_path in tif_rows:
             try:
@@ -557,20 +597,67 @@ def build_daily_tables_from_tifs(
 
 
 def _parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(description="Build daily RTMA/URMA per-station Parquets from hourly extracts or daily COGs.")
-    p.add_argument("--source", choices=["hourly", "tif"], default="hourly", help="Input source type.")
-    p.add_argument("--raw-station-root", default=None, help="Root dir containing per-station subdirs of monthly Parquets (hourly mode).")
-    p.add_argument("--stations", default=None, help="Station CSV with fid/lat/lon columns (tif mode).")
-    p.add_argument("--tif-root", default=None, help="Directory of daily COGs named RTMA_YYYYMMDD.tif (tif mode).")
-    p.add_argument("--out-daily-root", required=True, help="Output directory for per-station daily Parquets.")
-    p.add_argument("--model", default="rtma", choices=["rtma", "urma"], help="Model name for output suffixing.")
-    p.add_argument("--overwrite", action="store_true", help="Overwrite existing output station files.")
-    p.add_argument("--start-date", default=None, help="Optional start date (YYYY-MM-DD) for tif mode.")
-    p.add_argument("--end-date", default=None, help="Optional end date (YYYY-MM-DD) for tif mode.")
-    p.add_argument("--station-chunk-size", type=int, default=2000, help="Stations per chunk while sampling tifs.")
-    p.add_argument("--station-id-col", default=None, help="Station id column in --stations CSV.")
+    p = argparse.ArgumentParser(
+        description="Build daily RTMA/URMA per-station Parquets from hourly extracts or daily COGs."
+    )
+    p.add_argument(
+        "--source",
+        choices=["hourly", "tif"],
+        default="hourly",
+        help="Input source type.",
+    )
+    p.add_argument(
+        "--raw-station-root",
+        default=None,
+        help="Root dir containing per-station subdirs of monthly Parquets (hourly mode).",
+    )
+    p.add_argument(
+        "--stations",
+        default=None,
+        help="Station CSV with fid/lat/lon columns (tif mode).",
+    )
+    p.add_argument(
+        "--tif-root",
+        default=None,
+        help="Directory of daily COGs named RTMA_YYYYMMDD.tif (tif mode).",
+    )
+    p.add_argument(
+        "--out-daily-root",
+        required=True,
+        help="Output directory for per-station daily Parquets.",
+    )
+    p.add_argument(
+        "--model",
+        default="rtma",
+        choices=["rtma", "urma"],
+        help="Model name for output suffixing.",
+    )
+    p.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="Overwrite existing output station files.",
+    )
+    p.add_argument(
+        "--start-date",
+        default=None,
+        help="Optional start date (YYYY-MM-DD) for tif mode.",
+    )
+    p.add_argument(
+        "--end-date", default=None, help="Optional end date (YYYY-MM-DD) for tif mode."
+    )
+    p.add_argument(
+        "--station-chunk-size",
+        type=int,
+        default=2000,
+        help="Stations per chunk while sampling tifs.",
+    )
+    p.add_argument(
+        "--station-id-col", default=None, help="Station id column in --stations CSV."
+    )
     p.add_argument("--lat-col", default=None, help="Latitude column in --stations CSV.")
-    p.add_argument("--lon-col", default=None, help="Longitude column in --stations CSV.")
+    p.add_argument(
+        "--lon-col", default=None, help="Longitude column in --stations CSV."
+    )
     # Optional unit hints (override heuristics)
     p.add_argument("--tmp-units", choices=["K", "C"], default=None)
     p.add_argument("--dpt-units", choices=["K", "C"], default=None)
