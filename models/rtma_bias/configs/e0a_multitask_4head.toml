@@ -1,0 +1,52 @@
+name = "e0a_multitask_4head"
+description = "4-head MLP (ea+tmax+tmin+wind) with height-corrected wind, MGRS spatial holdout"
+features = ["urma_all", "terrain", "rsun", "landsat"]
+
+# Model
+model = "mlp"
+base = 32
+n_heads = 4
+task = "ea"
+
+# Training
+lr = 3e-4
+tv_weight = 0.0
+batch_size = 512
+epochs = 50
+physics_weight = 0.0
+seed = 42
+
+# Multi-task targets and weights
+target_cols = ["delta_log_ea", "delta_tmax", "delta_tmin", "delta_wind"]
+task_weights = [1.0, 1.0, 1.0, 1.0]
+
+# Data
+patch_size = 64
+decoded = true
+start_date = "2024-01-01"
+end_date = "2024-12-31"
+use_pairwise_loss = false
+
+# Spatial holdout (same 40 tiles as E0B)
+val_mgrs_tiles = [
+    "10TDT", "10TEM", "10TEP", "10TEQ", "10TFM", "10TGQ", "10TGR", "10UEV",
+    "11TLG", "11TML", "11TNG", "11TNH", "11TNL", "11TPJ", "11TPM", "11TPP",
+    "11TQK", "11TQL", "11UPQ",
+    "12TTP", "12TTQ", "12TUR", "12TUU", "12TVS", "12TVU", "12TWR", "12TXP",
+    "12TXT", "12TYN", "12TYU", "12UUV",
+    "13TBH", "13TBL", "13TBM", "13TBN", "13TCG", "13TCK", "13TCL", "13TDJ",
+    "13UEQ",
+]
+
+# Paths
+patch_index = "/nas/dads/mvp/patch_index_4target_urma_pnw_2024.parquet"
+tif_root = "/nas/dads/mvp/urma_1km_pnw_2024"
+out_dir = "/nas/dads/mvp/e0a_multitask_4head"
+terrain_tif = "/nas/dads/mvp/terrain_pnw_1km.tif"
+rsun_tif = "/nas/dads/mvp/rsun_pnw_1km.tif"
+landsat_tif = "/nas/dads/mvp/landsat_pnw_1km.tif"
+
+# Runtime
+device = "cuda:0"
+num_workers = 8
+preload = true

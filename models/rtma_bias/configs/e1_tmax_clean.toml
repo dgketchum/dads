@@ -1,0 +1,41 @@
+name = "e1_tmax_clean"
+description = "Clean single-target tmax MLP on daily_all obs with explicit lineage, MGRS spatial holdout"
+features = ["urma_all", "terrain", "rsun", "landsat"]
+model = "mlp"
+task = "tmax"
+
+base = 32
+lr = 3e-4
+tv_weight = 0.0
+batch_size = 512
+epochs = 50
+patch_size = 64
+seed = 42
+start_date = "2024-01-01"
+end_date = "2024-12-31"
+decoded = true
+num_workers = 8
+
+n_heads = 1
+target_col = "delta_tmax"
+physics_weight = 0.0
+
+use_pairwise_loss = false
+
+val_mgrs_tiles = [
+    "10TDT", "10TEM", "10TEP", "10TEQ", "10TFM",
+    "10TGQ", "10TGR", "10UEV", "11TLG", "11TML",
+    "11TNG", "11TNH", "11TNL", "11TPJ", "11TPM",
+    "11TPP", "11TQK", "11TQL", "11UPQ", "12TTP",
+    "12TTQ", "12TUR", "12TUU", "12TVS", "12TVU",
+    "12TWR", "12TXP", "12TXT", "12TYN", "12TYU",
+    "12UUV", "13TBH", "13TBL", "13TBM", "13TBN",
+    "13TCG", "13TCK", "13TCL", "13TDJ", "13UEQ",
+]
+
+patch_index = "/nas/dads/mvp/patch_index_e1_tmax_dailyall.parquet"
+tif_root = "/nas/dads/mvp/urma_1km_pnw_2024"
+out_dir = "/nas/dads/mvp/e1_tmax_clean"
+terrain_tif = "/nas/dads/mvp/terrain_pnw_1km.tif"
+rsun_tif = "/nas/dads/mvp/rsun_pnw_1km.tif"
+landsat_tif = "/nas/dads/mvp/landsat_pnw_1km.tif"
