@@ -10,8 +10,6 @@ import torch
 from torch.utils.data import Dataset, IterableDataset
 from torch.utils.data._utils.collate import default_collate
 
-from models.scalers import MinMaxScaler
-
 
 class WeatherDataset(Dataset):
     """Yearly or sliding-window dataset for autoencoder training.
@@ -26,12 +24,27 @@ class WeatherDataset(Dataset):
     - New: can enforce minimum target coverage per window (``min_target_frac``)
       to ensure reconstruction receives meaningful supervision.
     """
-    def __init__(self, file_paths, expected_width, col_indices, chunk_size,
-                 scaler,
-                 target_indices=None, transform=None, expected_columns=None, selected_indices=None,
-                 num_workers=12, window_stride=None, triplet_sampling=True, max_samples=None,
-                 max_files=None, split_name=None, tqdm_desc=None,
-                 min_target_frac=0.8):
+
+    def __init__(
+        self,
+        file_paths,
+        expected_width,
+        col_indices,
+        chunk_size,
+        scaler,
+        target_indices=None,
+        transform=None,
+        expected_columns=None,
+        selected_indices=None,
+        num_workers=12,
+        window_stride=None,
+        triplet_sampling=True,
+        max_samples=None,
+        max_files=None,
+        split_name=None,
+        tqdm_desc=None,
+        min_target_frac=0.8,
+    ):
 
         self.chunk_size = chunk_size
         self.transform = transform
@@ -40,7 +53,9 @@ class WeatherDataset(Dataset):
         self.expected_columns = expected_columns
         self.selected_indices = selected_indices
         self.num_workers = num_workers
-        self.window_stride = int(window_stride) if window_stride is not None else int(chunk_size)
+        self.window_stride = (
+            int(window_stride) if window_stride is not None else int(chunk_size)
+        )
         self.triplet_sampling = bool(triplet_sampling)
         self.min_target_frac = float(min_target_frac)
         self._max_samples = int(max_samples) if max_samples is not None else None
@@ -55,15 +70,19 @@ class WeatherDataset(Dataset):
         if self._max_files is not None:
             original_len = len(file_paths)
             file_paths = file_paths[: self._max_files]
-            print(f"Debug mode: limiting {self._split_name or 'dataset'} files to first {len(file_paths)} of {original_len}")
+            print(
+                f"Debug mode: limiting {self._split_name or 'dataset'} files to first {len(file_paths)} of {original_len}"
+            )
 
         def load_one(file_path):
-            staid = os.path.basename(file_path).replace('.parquet', '')
+            staid = os.path.basename(file_path).replace(".parquet", "")
             df = pd.read_parquet(file_path)
 
             if self.expected_columns is not None:
                 if not list(df.columns) == list(self.expected_columns):
-                    print(f"Skipping {file_path}, columns mismatch. Expected {expected_width} columns, got {df.shape[1]}")
+                    print(
+                        f"Skipping {file_path}, columns mismatch. Expected {expected_width} columns, got {df.shape[1]}"
+                    )
                     return staid, None, 0, 0
 
             assert isinstance(df.index, pd.DatetimeIndex)
@@ -71,12 +90,18 @@ class WeatherDataset(Dataset):
             # drop leap day to enforce 365-day alignment
             df = df[~((df.index.month == 2) & (df.index.day == 29))]
             if df.shape[1] != expected_width:
-                print(f"Skipping {file_path}, shape mismatch. Expected {expected_width} columns, got {df.shape[1]}")
+                print(
+                    f"Skipping {file_path}, shape mismatch. Expected {expected_width} columns, got {df.shape[1]}"
+                )
                 return staid, None, 0, 0
             # build continuous daily index across the full record (Feb 29 removed)
-            start = pd.Timestamp(df.index.min().year, df.index.min().month, df.index.min().day)
-            end = pd.Timestamp(df.index.max().year, df.index.max().month, df.index.max().day)
-            idx = pd.date_range(start, end, freq='D')
+            start = pd.Timestamp(
+                df.index.min().year, df.index.min().month, df.index.min().day
+            )
+            end = pd.Timestamp(
+                df.index.max().year, df.index.max().month, df.index.max().day
+            )
+            idx = pd.date_range(start, end, freq="D")
             idx = idx[~((idx.month == 2) & (idx.day == 29))]
             sub = df.reindex(idx)
 
@@ -85,14 +110,24 @@ class WeatherDataset(Dataset):
 
             # resolve target column index in the full frame order
             if self.selected_indices is not None:
-                target_col_idx = self.selected_indices[self.target_indices[0]] if isinstance(self.target_indices, list) else self.selected_indices[0]
+                target_col_idx = (
+                    self.selected_indices[self.target_indices[0]]
+                    if isinstance(self.target_indices, list)
+                    else self.selected_indices[0]
+                )
             else:
-                target_col_idx = self.target_indices[0] if isinstance(self.target_indices, list) else 0
+                target_col_idx = (
+                    self.target_indices[0]
+                    if isinstance(self.target_indices, list)
+                    else 0
+                )
 
             # sliding windows over the entire record
             if len(sub) >= self.chunk_size:
-                for start_i in range(0, len(sub) - self.chunk_size + 1, self.window_stride):
-                    win = sub.iloc[start_i:start_i + self.chunk_size]
+                for start_i in range(
+                    0, len(sub) - self.chunk_size + 1, self.window_stride
+                ):
+                    win = sub.iloc[start_i : start_i + self.chunk_size]
                     # require target coverage only (relax overall valid fraction)
                     t_vals = win.iloc[:, target_col_idx].to_numpy()
                     t_total = t_vals.size
@@ -111,9 +146,21 @@ class WeatherDataset(Dataset):
 
         all_data = []
         total_dropped, total_kept = 0, 0
-        desc = tqdm_desc or f"AE[{self._split_name or 'data'}] files={len(file_paths)} T={self.chunk_size} stride={self.window_stride}"
-        with ThreadPoolExecutor(max_workers=min(self.num_workers, len(file_paths) or 1)) as ex:
-            results = list(tqdm(ex.map(load_one, file_paths), total=len(file_paths), desc=desc, unit='file'))
+        desc = (
+            tqdm_desc
+            or f"AE[{self._split_name or 'data'}] files={len(file_paths)} T={self.chunk_size} stride={self.window_stride}"
+        )
+        with ThreadPoolExecutor(
+            max_workers=min(self.num_workers, len(file_paths) or 1)
+        ) as ex:
+            results = list(
+                tqdm(
+                    ex.map(load_one, file_paths),
+                    total=len(file_paths),
+                    desc=desc,
+                    unit="file",
+                )
+            )
 
         stations_seen = set()
         for staid, data, dropped, kept in results:
@@ -128,8 +175,12 @@ class WeatherDataset(Dataset):
             self.station_idx.extend([self.stations.index(staid)] * len(data))
 
         if not all_data:
-            print('No valid chunks found after filtering. Dropped: {}, Kept: {}, Stations: {}'.format(total_dropped, total_kept, len(stations_seen)))
-            raise ValueError('No valid chunks to train on.')
+            print(
+                "No valid chunks found after filtering. Dropped: {}, Kept: {}, Stations: {}".format(
+                    total_dropped, total_kept, len(stations_seen)
+                )
+            )
+            raise ValueError("No valid chunks to train on.")
         self.data = torch.cat(all_data, dim=0)
 
         # Optionally truncate to a small number of samples for fast debug runs
@@ -146,7 +197,11 @@ class WeatherDataset(Dataset):
         for i, s_idx in enumerate(self.station_idx):
             self.station_to_indices.setdefault(s_idx, []).append(i)
 
-        print('Loaded stations: {}, valid chunks: {}, dropped chunks (<30% valid): {}'.format(len(stations_seen), total_kept, total_dropped))
+        print(
+            "Loaded stations: {}, valid chunks: {}, dropped chunks (<30% valid): {}".format(
+                len(stations_seen), total_kept, total_dropped
+            )
+        )
 
     def get_positive_pair(self, idx):
         s_idx = self.station_idx[idx]
@@ -184,7 +239,7 @@ class WeatherDataset(Dataset):
                 cols = self.selected_indices
                 chunk_cols = chunk[:, cols]
             else:
-                chunk_cols = chunk[:, :self.col_indices]
+                chunk_cols = chunk[:, : self.col_indices]
             valid_rows = chunk_cols[~torch.isnan(chunk_cols).any(dim=1)]
             valid_data.append(valid_rows)
         return torch.cat(valid_data, dim=0).numpy()
@@ -193,8 +248,8 @@ class WeatherDataset(Dataset):
 
         bias_ = self.scaler.bias.flatten().tolist()
         scale_ = self.scaler.scale.flatten().tolist()
-        dct = {'bias': bias_, 'scale': scale_}
-        with open(scaler_path, 'w') as fp:
+        dct = {"bias": bias_, "scale": scale_}
+        with open(scaler_path, "w") as fp:
             json.dump(dct, fp, indent=4)
         print(f"Scaler saved to {scaler_path}")
 
@@ -217,7 +272,7 @@ class WeatherDataset(Dataset):
         if self.selected_indices is not None:
             chunk = full[:, self.selected_indices].clone()
         else:
-            chunk = full[:, :self.col_indices].clone()
+            chunk = full[:, : self.col_indices].clone()
 
         if isinstance(self.target_indices[0], tuple):
             target = diff_pairs(chunk, self.target_indices)
@@ -232,7 +287,11 @@ class WeatherDataset(Dataset):
                 masks.append(m.unsqueeze(1))
             mask = torch.cat(masks, dim=1)
         else:
-            idxs = self.target_indices if isinstance(self.target_indices, list) else [self.target_indices]
+            idxs = (
+                self.target_indices
+                if isinstance(self.target_indices, list)
+                else [self.target_indices]
+            )
             mask = ~torch.isnan(chunk[:, idxs])
 
         positive_chunk = self.get_positive_pair(idx) if self.triplet_sampling else None
@@ -242,13 +301,13 @@ class WeatherDataset(Dataset):
             if self.selected_indices is not None:
                 positive_chunk = positive_chunk[:, self.selected_indices].clone()
             else:
-                positive_chunk = positive_chunk[:, :self.col_indices].clone()
+                positive_chunk = positive_chunk[:, : self.col_indices].clone()
 
         if negative_chunk is not None:
             if self.selected_indices is not None:
                 negative_chunk = negative_chunk[:, self.selected_indices].clone()
             else:
-                negative_chunk = negative_chunk[:, :self.col_indices].clone()
+                negative_chunk = negative_chunk[:, : self.col_indices].clone()
 
         sidx = int(self.station_idx[idx]) if (0 <= idx < len(self.station_idx)) else -1
         return chunk, target, mask, positive_chunk, negative_chunk, sidx
@@ -281,12 +340,30 @@ class WeatherIterableDataset(IterableDataset):
       only inspects index bounds from a single column per file.
     """
 
-    def __init__(self, file_paths, expected_width, col_indices, chunk_size,
-                 scaler,
-                 target_indices=None, transform=None, expected_columns=None, selected_indices=None,
-                 num_workers=12, window_stride=None, triplet_sampling=False, max_samples=None,
-                 max_files=None, split_name=None, shuffle_files=True, tqdm_desc=None,
-                 min_target_frac=0.8, require_rs_present=False, rs_feature_indices=None, min_rs_count=1):
+    def __init__(
+        self,
+        file_paths,
+        expected_width,
+        col_indices,
+        chunk_size,
+        scaler,
+        target_indices=None,
+        transform=None,
+        expected_columns=None,
+        selected_indices=None,
+        num_workers=12,
+        window_stride=None,
+        triplet_sampling=False,
+        max_samples=None,
+        max_files=None,
+        split_name=None,
+        shuffle_files=True,
+        tqdm_desc=None,
+        min_target_frac=0.8,
+        require_rs_present=False,
+        rs_feature_indices=None,
+        min_rs_count=1,
+    ):
 
         super().__init__()
         self.file_paths = list(file_paths)
@@ -298,28 +375,36 @@ class WeatherIterableDataset(IterableDataset):
         self.expected_columns = expected_columns
         self.selected_indices = selected_indices
         self.num_workers = int(num_workers)
-        self.window_stride = int(window_stride) if window_stride is not None else int(chunk_size)
+        self.window_stride = (
+            int(window_stride) if window_stride is not None else int(chunk_size)
+        )
         self.triplet_sampling = bool(triplet_sampling)
         self._max_samples = int(max_samples) if max_samples is not None else None
         self._max_files = int(max_files) if max_files is not None else None
-        self._split_name = split_name or 'data'
+        self._split_name = split_name or "data"
         self._shuffle_files = bool(shuffle_files)
         self._tqdm_desc = tqdm_desc
         self.scaler = scaler
         self.min_target_frac = float(min_target_frac)
         self.require_rs_present = bool(require_rs_present)
-        self._rs_idxs = list(rs_feature_indices) if rs_feature_indices is not None else []
+        self._rs_idxs = (
+            list(rs_feature_indices) if rs_feature_indices is not None else []
+        )
         self.min_rs_count = int(min_rs_count)
 
         # Effective file list (respect max_files if provided)
         if self._max_files is not None:
             original_len = len(self.file_paths)
             self.file_paths = self.file_paths[: self._max_files]
-            print(f"Debug mode: limiting {self._split_name} files to first {len(self.file_paths)} of {original_len}")
+            print(
+                f"Debug mode: limiting {self._split_name} files to first {len(self.file_paths)} of {original_len}"
+            )
 
         # Pre-compute selected column names to request minimal data from Parquet
         if self.expected_columns is not None and self.selected_indices is not None:
-            self._selected_names = [self.expected_columns[i] for i in self.selected_indices]
+            self._selected_names = [
+                self.expected_columns[i] for i in self.selected_indices
+            ]
         else:
             self._selected_names = None
 
@@ -339,14 +424,15 @@ class WeatherIterableDataset(IterableDataset):
     def _iter_file(self, file_path):
         # cache station id for this file
         staid = os.path.splitext(os.path.basename(file_path))[0]
-        sidx = getattr(self, '_station_id_map', {}).get(staid, -1)
+        sidx = getattr(self, "_station_id_map", {}).get(staid, -1)
+
         def _synthesize_missing_flags(df_local):
             # Ensure any *_miss columns exist. If base present, flag = isna(base)
             # If base missing, set flag=1.0 (conservative).
             if not self._selected_names:
                 return df_local
             for name in self._selected_names:
-                if name.endswith('_miss'):
+                if name.endswith("_miss"):
                     base = name[:-5]
                     if name not in df_local.columns:
                         if base in df_local.columns:
@@ -364,18 +450,22 @@ class WeatherIterableDataset(IterableDataset):
             needed = set()
             if self._selected_names:
                 for n in self._selected_names:
-                    if n.endswith('_miss'):
+                    if n.endswith("_miss"):
                         needed.add(n[:-5])  # base column to derive miss flag
                     else:
                         needed.add(n)
             try:
-                df = pd.read_parquet(file_path, columns=list(needed) if needed else None)
+                df = pd.read_parquet(
+                    file_path, columns=list(needed) if needed else None
+                )
             except Exception as e2:
                 # As a last resort, read all columns; if this fails, skip file
                 try:
                     df = pd.read_parquet(file_path)
                 except Exception:
-                    print(f"Skipping {file_path}, failed to read selected columns: {e2}")
+                    print(
+                        f"Skipping {file_path}, failed to read selected columns: {e2}"
+                    )
                     return
             # Synthesize missingness flags and any missing selected columns
             df = _synthesize_missing_flags(df)
@@ -389,7 +479,9 @@ class WeatherIterableDataset(IterableDataset):
                 df = df[self._selected_names]
 
         # Basic schema sanity: ensure all requested columns arrived
-        if self._selected_names is not None and list(df.columns) != list(self._selected_names):
+        if self._selected_names is not None and list(df.columns) != list(
+            self._selected_names
+        ):
             # Try to recover by synthesizing missingness flags if only those are absent
             df = _synthesize_missing_flags(df)
             for n in self._selected_names:
@@ -411,14 +503,20 @@ class WeatherIterableDataset(IterableDataset):
         df = df[~((df.index.month == 2) & (df.index.day == 29))]
 
         # build continuous daily index across the full record (Feb 29 removed)
-        start = pd.Timestamp(df.index.min().year, df.index.min().month, df.index.min().day)
-        end = pd.Timestamp(df.index.max().year, df.index.max().month, df.index.max().day)
-        idx = pd.date_range(start, end, freq='D')
+        start = pd.Timestamp(
+            df.index.min().year, df.index.min().month, df.index.min().day
+        )
+        end = pd.Timestamp(
+            df.index.max().year, df.index.max().month, df.index.max().day
+        )
+        idx = pd.date_range(start, end, freq="D")
         idx = idx[~((idx.month == 2) & (idx.day == 29))]
         sub = df.reindex(idx)
 
         # Sanity on shape
-        if self._selected_names is not None and sub.shape[1] != len(self._selected_names):
+        if self._selected_names is not None and sub.shape[1] != len(
+            self._selected_names
+        ):
             return
 
         # Resolve target column indices within the selected feature order
@@ -436,7 +534,7 @@ class WeatherIterableDataset(IterableDataset):
         min_frac = self.min_target_frac
         values = sub.values  # (T, C_in)
         for start_i in range(0, total - self.chunk_size + 1, self.window_stride):
-            win = values[start_i:start_i + self.chunk_size]
+            win = values[start_i : start_i + self.chunk_size]
             # Compute target valid fraction across the first target channel
             t_vals = win[:, tgt_idxs[0]]
             t_total = t_vals.size
@@ -476,7 +574,7 @@ class WeatherIterableDataset(IterableDataset):
         paths = self._worker_file_slice(paths)
 
         # Build station id map once per worker
-        if not hasattr(self, '_station_id_map'):
+        if not hasattr(self, "_station_id_map"):
             ids = {}
             for i, fp in enumerate(paths):
                 staid = os.path.splitext(os.path.basename(fp))[0]
@@ -508,7 +606,9 @@ class WeatherIterableDataset(IterableDataset):
 
         for fp in self.file_paths:
             try:
-                df = pd.read_parquet(fp, columns=[col_name] if col_name is not None else None)
+                df = pd.read_parquet(
+                    fp, columns=[col_name] if col_name is not None else None
+                )
                 if not isinstance(df.index, pd.DatetimeIndex) or df.empty:
                     continue
                 start = df.index.min()
@@ -530,6 +630,6 @@ class WeatherIterableDataset(IterableDataset):
         return self._approx_len
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     pass
 # ========================= EOF ====================================================================

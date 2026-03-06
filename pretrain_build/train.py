@@ -27,7 +27,7 @@ from lightning.pytorch.callbacks import (
 from torch.utils.data import DataLoader
 
 from models.dads.dads_gnn import DadsMetGNN
-from models.scalers import MinMaxScaler
+from models.components.scalers import MinMaxScaler
 from pretrain_build.config import PretrainConfig, GridSource
 from pretrain_build.grid_index import GridIndex
 from pretrain_build.sampler import EpochSampler, ValidationSampler

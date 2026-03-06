@@ -11,7 +11,7 @@ from lightning.pytorch.loggers import CSVLogger
 
 from models.autoencoder.dataset import WeatherIterableDataset
 from models.autoencoder.weather_encoder import WeatherAutoencoder
-from models.scalers import MinMaxScaler
+from models.components.scalers import MinMaxScaler
 
 from prep.columns_desc import (
     GEO_FEATURES,

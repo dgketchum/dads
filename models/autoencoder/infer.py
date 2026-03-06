@@ -6,7 +6,7 @@ import numpy as np
 import pandas as pd
 from torch.utils.data import Dataset, DataLoader
 from models.autoencoder.weather_encoder import WeatherAutoencoder
-from models.scalers import MinMaxScaler
+from models.components.scalers import MinMaxScaler
 import matplotlib.pyplot as plt
 from sklearn.manifold import TSNE
 from tqdm import tqdm
@@ -16,18 +16,28 @@ from sklearn.metrics import r2_score
 device_name = None
 if torch.cuda.is_available():
     device_name = torch.cuda.get_device_name(0)
-    print(f'Using GPU: {device_name}')
+    print(f"Using GPU: {device_name}")
 else:
-    print('CUDA is not available. PyTorch will use the CPU.')
+    print("CUDA is not available. PyTorch will use the CPU.")
 
-torch.set_float32_matmul_precision('medium')
+torch.set_float32_matmul_precision("medium")
 if torch.cuda.is_available():  # avoid CPU-only crash
     torch.cuda.get_device_name(torch.cuda.current_device())
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+
 class InferenceDataset(Dataset):
-    def __init__(self, file_path, expected_width, selected_indices, chunk_size, scaler, expected_columns, window_stride):
+    def __init__(
+        self,
+        file_path,
+        expected_width,
+        selected_indices,
+        chunk_size,
+        scaler,
+        expected_columns,
+        window_stride,
+    ):
         self.chunk_size = chunk_size
         self.selected_indices = selected_indices
         self.scaler = scaler
@@ -40,7 +50,9 @@ class InferenceDataset(Dataset):
 
         df = pd.read_parquet(file_path)
         if self.expected_columns is not None:
-            assert list(df.columns) == list(self.expected_columns), "Parquet columns do not match training metadata"
+            assert list(df.columns) == list(self.expected_columns), (
+                "Parquet columns do not match training metadata"
+            )
         if not isinstance(df.index, pd.DatetimeIndex):
             raise ValueError("Parquet file index must be a DatetimeIndex")
         df = df.sort_index()
@@ -50,15 +62,19 @@ class InferenceDataset(Dataset):
             return
 
         # continuous daily index across full record and sliding windows
-        start = pd.Timestamp(df.index.min().year, df.index.min().month, df.index.min().day)
-        end = pd.Timestamp(df.index.max().year, df.index.max().month, df.index.max().day)
-        idx = pd.date_range(start, end, freq='D')
+        start = pd.Timestamp(
+            df.index.min().year, df.index.min().month, df.index.min().day
+        )
+        end = pd.Timestamp(
+            df.index.max().year, df.index.max().month, df.index.max().day
+        )
+        idx = pd.date_range(start, end, freq="D")
         idx = idx[~((idx.month == 2) & (idx.day == 29))]
         sub = df.reindex(idx)
 
         if len(sub) >= self.chunk_size:
             for start_i in range(0, len(sub) - self.chunk_size + 1, self.window_stride):
-                win = sub.iloc[start_i:start_i + self.chunk_size]
+                win = sub.iloc[start_i : start_i + self.chunk_size]
                 arr = torch.as_tensor(win.values, dtype=torch.float32)
                 self.data.append(arr)
                 center = win.index[self.chunk_size // 2]
@@ -80,7 +96,9 @@ class InferenceDataset(Dataset):
         return x
 
 
-def infer_embeddings(model_dir, data_dir, metadata_path, embedding_path, scaler_json, plot=False):
+def infer_embeddings(
+    model_dir, data_dir, metadata_path, embedding_path, scaler_json, plot=False
+):
     """Infer per-station embeddings with the trained autoencoder.
 
     Uses the training metadata to enforce column identity and scaling, then averages
@@ -88,55 +106,68 @@ def infer_embeddings(model_dir, data_dir, metadata_path, embedding_path, scaler_
     train_ids (train-only). Writes a JSON mapping from
     station id to embedding vector suitable for DADS.
     """
-    with open(metadata_path, 'r') as f:
+    with open(metadata_path, "r") as f:
         meta = json.load(f)
 
-    sequence_length = meta['sequence_length']
-    window_stride = int(meta.get('window_stride', sequence_length))
-    input_dim = meta['input_dim']
-    output_dim = meta['output_dim']
-    selected_indices = meta['selected_indices']
-    expected_width = meta['expected_width']
-    expected_columns = meta.get('actual_columns', None)
+    sequence_length = meta["sequence_length"]
+    window_stride = int(meta.get("window_stride", sequence_length))
+    input_dim = meta["input_dim"]
+    output_dim = meta["output_dim"]
+    selected_indices = meta["selected_indices"]
+    expected_width = meta["expected_width"]
+    expected_columns = meta.get("actual_columns", None)
 
     model = WeatherAutoencoder.load_from_checkpoint(
-        os.path.join(model_dir, f'best_model.ckpt'),
+        os.path.join(model_dir, "best_model.ckpt"),
         input_dim=input_dim,
         output_dim=output_dim,
-        latent_size=meta['latent_size'],
-        hidden_size=meta['hidden_size'],
-        dropout=meta['dropout'],
-        learning_rate=meta['learning_rate'],
+        latent_size=meta["latent_size"],
+        hidden_size=meta["hidden_size"],
+        dropout=meta["dropout"],
+        learning_rate=meta["learning_rate"],
         sequence_length=sequence_length,
-        margin=meta['margin'],
-        data_columns=meta['data_columns'],
-        column_order=meta['column_order'],
+        margin=meta["margin"],
+        data_columns=meta["data_columns"],
+        column_order=meta["column_order"],
         zero_target_in_encoder=False,
         target_input_idx=0,
     )
     model.to(device)
     model.eval()
 
-    assert scaler_json is not None and os.path.exists(scaler_json), "scaler_json required and must exist (from graph)"
-    with open(scaler_json, 'r') as f:
+    assert scaler_json is not None and os.path.exists(scaler_json), (
+        "scaler_json required and must exist (from graph)"
+    )
+    with open(scaler_json, "r") as f:
         sp = json.load(f)
     scaler = MinMaxScaler()
-    scaler.bias = np.array(sp['bias']).reshape(1, -1)
-    scaler.scale = np.array(sp['scale']).reshape(1, -1)
+    scaler.bias = np.array(sp["bias"]).reshape(1, -1)
+    scaler.scale = np.array(sp["scale"]).reshape(1, -1)
 
     embeddings = {}
     seasonal_embeddings = {}
     all_embeddings = []
     station_names = []
 
-    files_ = [os.path.join(data_dir, f) for f in os.listdir(data_dir) if f.endswith('.parquet')]
+    files_ = [
+        os.path.join(data_dir, f)
+        for f in os.listdir(data_dir)
+        if f.endswith(".parquet")
+    ]
 
-    for i, file_path in enumerate(tqdm(files_, desc='Inferring station embeddings')):
-
-        station_name = os.path.basename(file_path).replace('.parquet', '')
+    for i, file_path in enumerate(tqdm(files_, desc="Inferring station embeddings")):
+        station_name = os.path.basename(file_path).replace(".parquet", "")
 
         try:
-            dataset = InferenceDataset(file_path, expected_width, selected_indices, sequence_length, scaler, expected_columns, window_stride)
+            dataset = InferenceDataset(
+                file_path,
+                expected_width,
+                selected_indices,
+                sequence_length,
+                scaler,
+                expected_columns,
+                window_stride,
+            )
         except Exception as e:
             print(f"Skipping {station_name}: {e}")
             continue
@@ -201,10 +232,10 @@ def infer_embeddings(model_dir, data_dir, metadata_path, embedding_path, scaler_
         plt.ylabel("t-SNE Dimension 2")
         plt.show()
 
-    with open(embedding_path, 'w') as fp:
+    with open(embedding_path, "w") as fp:
         json.dump(embeddings, fp, indent=4)
-    seasonal_path = embedding_path.replace('.json', '_by_month.json')
-    with open(seasonal_path, 'w') as fp:
+    seasonal_path = embedding_path.replace(".json", "_by_month.json")
+    with open(seasonal_path, "w") as fp:
         json.dump(seasonal_embeddings, fp, indent=4)
 
     # Optional quick probe: monthly mean R^2 using seasonal embeddings
@@ -214,42 +245,44 @@ def infer_embeddings(model_dir, data_dir, metadata_path, embedding_path, scaler_
         pass
 
 
-if __name__ == '__main__':
-    d = '/media/research/IrrigationGIS/dads'
+if __name__ == "__main__":
+    d = "/media/research/IrrigationGIS/dads"
     if not os.path.exists(d):
-        d = '/nas/dads'
+        d = "/nas/dads"
 
-    variable_ = 'tmax'
-    target_var_ = f'{variable_}_obs'
+    variable_ = "tmax"
+    target_var_ = f"{variable_}_obs"
 
-    if device_name == 'NVIDIA GeForce RTX 2080':
+    if device_name == "NVIDIA GeForce RTX 2080":
         workers = 4
-    elif device_name == 'NVIDIA RTX A6000':
+    elif device_name == "NVIDIA RTX A6000":
         workers = 8
     else:
-        raise NotImplementedError('Specify the machine this is running on')
+        raise NotImplementedError("Specify the machine this is running on")
 
-    zoran = '/data/ssd2/dads/training'
-    nvm = '/media/nvm/training'
+    zoran = "/data/ssd2/dads/training"
+    nvm = "/media/nvm/training"
     if os.path.exists(zoran):
-        print('Modeling with data from Zoran')
+        print("Modeling with data from Zoran")
         training = zoran
     elif os.path.exists(nvm):
-        print('Modeling with data from NVM drive')
+        print("Modeling with data from NVM drive")
         training = nvm
     else:
         raise NotImplementedError
 
-    param_dir = os.path.join(training, 'autoencoder')
-    parq_ = os.path.join(training, 'parquet', target_var_)
+    param_dir = os.path.join(training, "autoencoder")
+    parq_ = os.path.join(training, "parquet", target_var_)
 
-    model_run = os.path.join(param_dir, 'checkpoints', '10211323')
-    model_ = os.path.join(model_run, 'best_model.ckpt')
-    scaler_json_ = os.path.join(training, 'scalers', f"{variable_}.json")
-    metadata_ = os.path.join(model_run, 'training_metadata.json')
-    embeddings_file = os.path.join(model_run, 'embeddings.json')
+    model_run = os.path.join(param_dir, "checkpoints", "10211323")
+    model_ = os.path.join(model_run, "best_model.ckpt")
+    scaler_json_ = os.path.join(training, "scalers", f"{variable_}.json")
+    metadata_ = os.path.join(model_run, "training_metadata.json")
+    embeddings_file = os.path.join(model_run, "embeddings.json")
 
-    infer_embeddings(model_run, parq_, metadata_, embeddings_file, scaler_json_, plot=False)
+    infer_embeddings(
+        model_run, parq_, metadata_, embeddings_file, scaler_json_, plot=False
+    )
 
 
 def _safe_monthly_mean(parquet_path, target_col):
@@ -270,13 +303,13 @@ def probe_monthly_means(seasonal_embeddings_path, data_dir, target_col):
 
     Prints per-month R^2 across stations and overall average R^2.
     """
-    with open(seasonal_embeddings_path, 'r') as f:
+    with open(seasonal_embeddings_path, "r") as f:
         seasonal = json.load(f)
     # Build features and targets per month
     months = [str(i) for i in range(1, 13)]
     Xm, ym = {}, {}
     for st in os.listdir(data_dir):
-        if not st.endswith('.parquet'):
+        if not st.endswith(".parquet"):
             continue
         sid = os.path.splitext(st)[0]
         if sid not in seasonal:
@@ -292,7 +325,7 @@ def probe_monthly_means(seasonal_embeddings_path, data_dir, target_col):
                 Xm.setdefault(m, []).append(zm.squeeze(0))
                 ym.setdefault(m, []).append(yv)
     if not Xm:
-        print('[Probe] No seasonal embeddings + monthly means overlap; skipping probe.')
+        print("[Probe] No seasonal embeddings + monthly means overlap; skipping probe.")
         return
     rs = []
     for m in months:
@@ -309,4 +342,6 @@ def probe_monthly_means(seasonal_embeddings_path, data_dir, target_col):
         print(f"[Probe][month={m}] stations={len(X)} R2={r2:.3f}")
     if rs:
         print(f"[Probe] Monthly mean R2 avg={np.mean(rs):.3f} over {len(rs)} months")
+
+
 # ========================= EOF ====================================================================

@@ -13,7 +13,7 @@ import torch
 from torch import nn
 from torchmetrics import MeanAbsoluteError, MeanMetric
 
-from models.wind_bias.gnn import EdgeGatedGNN
+from models.components.edge_gated_gnn import EdgeGatedGNN
 
 
 class LitWindGNN(L.LightningModule):

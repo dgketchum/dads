@@ -10,7 +10,7 @@ from torch import optim as optim
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from torch_geometric.nn import LayerNorm, TransformerConv
 
-from models.temporal.tcn import TemporalConvEncoder
+from models.components.tcn import TemporalConvEncoder
 
 
 class DadsMetGNN(pl.LightningModule):
