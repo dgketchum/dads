@@ -4,7 +4,7 @@ The Wind MVP is a station-graph GNN (with MLP baseline) for RTMA wind bias corre
 
 ## Relationship to Full DADS
 
-The full [DADS pipeline](../architecture.md) decomposes each target variable into a station-derived climatological background and a daily anomaly predicted by a GNN from a star graph. The Wind MVP validates whether RTMA wind can be improved with terrain-aware spatial learning using a simpler k-NN station graph and an edge-gated attention mechanism.
+The full [DADS pipeline](../../cube/architecture.md) decomposes each target variable into a station-derived climatological background and a daily anomaly predicted by a GNN from a star graph. The Wind MVP validates whether RTMA wind can be improved with terrain-aware spatial learning using a simpler k-NN station graph and an edge-gated attention mechanism.
 
 | | Full DADS | Wind MVP |
 |---|---|---|

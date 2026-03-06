@@ -4,7 +4,7 @@ The MVP is a lightweight, gridded-to-gridded bias-correction system for RTMA act
 
 ## Relationship to Full DADS
 
-The full [DADS pipeline](../architecture.md) decomposes each target variable into a station-derived climatological background and a daily anomaly predicted by a GNN from a neighbor graph. That system requires a complete data cube (stations.zarr, cube.zarr, graph.zarr), an autoencoder for station embeddings, and a graph neural network for spatial interpolation.
+The full [DADS pipeline](../../cube/architecture.md) decomposes each target variable into a station-derived climatological background and a daily anomaly predicted by a GNN from a neighbor graph. That system requires a complete data cube (stations.zarr, cube.zarr, graph.zarr), an autoencoder for station embeddings, and a graph neural network for spatial interpolation.
 
 The MVP takes a deliberately simpler path:
 
@@ -20,7 +20,7 @@ The MVP validates the core hypothesis -- that RTMA humidity can be improved with
 
 ## Pipeline at a Glance
 
-1. **Station extraction** -- sample RTMA COGs at station locations, aggregate to daily (`process/gridded/rtma_station_daily.py`)
+1. **Station extraction** -- sample RTMA COGs at station locations, aggregate to daily (`grid/sources/rtma_station_daily.py`)
 2. **Station-day join** -- join MADIS $e_a$ observations with RTMA baseline, compute residuals (`prep/build_station_day_table.py`)
 3. **Patch index** -- build training rows with $\Delta\!\log e_a$ targets and outlier filtering (`prep/build_rtma_patch_index.py`)
 4. **U-Net training** -- center-pixel supervision with Huber + TV loss, COGs preloaded into RAM (`models/rtma_bias/train_patch_unet.py`)

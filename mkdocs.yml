@@ -63,19 +63,26 @@ extra_javascript:
 
 nav:
   - Home: index.md
-  - System Architecture: architecture.md
-  - Data Provenance: data_provenance.md
-  - Data Cube Schema: cube_schema.md
-  - Algorithms: algorithms.md
-  - Design Decisions: decisions.md
   - MADIS Observation QC: madis_qaqc.md
-  - MVP – RTMA Humidity:
-    - Overview: mvp/index.md
-    - System Architecture: mvp/architecture.md
-    - Data Provenance: mvp/data_provenance.md
-    - Algorithms: mvp/algorithms.md
-  - MVP – RTMA Wind:
-    - Overview: wind/index.md
-    - System Architecture: wind/architecture.md
-    - Data Provenance: wind/data_provenance.md
-    - Algorithms: wind/algorithms.md
+  - DADS Cube:
+    - Overview: cube/index.md
+    - System Architecture: cube/architecture.md
+    - Data Provenance: cube/data_provenance.md
+    - Data Cube Schema: cube/cube_schema.md
+    - Algorithms: cube/algorithms.md
+    - Design Decisions: cube/decisions.md
+  - RTMA Bias Correction:
+    - Overview: rtma/index.md
+    - Humidity:
+      - Overview: rtma/humidity/index.md
+      - System Architecture: rtma/humidity/architecture.md
+      - Data Provenance: rtma/humidity/data_provenance.md
+      - Algorithms: rtma/humidity/algorithms.md
+    - Wind:
+      - Overview: rtma/wind/index.md
+      - System Architecture: rtma/wind/architecture.md
+      - Data Provenance: rtma/wind/data_provenance.md
+      - Algorithms: rtma/wind/algorithms.md
+    - Shortwave Radiation: rtma/shortwave/index.md
+    - Temperature: rtma/temperature/index.md
+  - HRRR Reanalysis: hrrr/index.md
