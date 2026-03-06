@@ -29,12 +29,12 @@ try:
 except ImportError:
     Data = None
 
-from models.wind_bias.wind_dataset import (
-    TARGET_COLS,
-    _get_feature_cols,
+from models.wind_bias.wind_dataset import TARGET_COLS, _get_feature_cols
+from prep.graph_utils import (
     build_edges_for_day,
     build_knn_map,
     build_static_edge_attrs,
+    compute_edge_norm,
 )
 
 
@@ -81,26 +81,7 @@ def main() -> None:
     static_edges = build_static_edge_attrs(args.stations_csv, knn_map)
 
     # Edge normalization stats (distance, delta_elevation)
-    all_dists = [
-        ea["distance_km"]
-        for fid_attrs in static_edges.values()
-        for ea in fid_attrs.values()
-    ]
-    dist_mean = float(np.mean(all_dists)) if all_dists else 1.0
-    dist_std = float(max(np.std(all_dists), 1e-6))
-    all_delev = [
-        ea["delta_elevation"]
-        for fid_attrs in static_edges.values()
-        for ea in fid_attrs.values()
-    ]
-    delev_mean = float(np.mean(all_delev)) if all_delev else 0.0
-    delev_std = float(max(np.std(all_delev), 1e-6))
-    edge_norm = {
-        "dist_mean": dist_mean,
-        "dist_std": dist_std,
-        "delev_mean": delev_mean,
-        "delev_std": delev_std,
-    }
+    edge_norm = compute_edge_norm(static_edges)
 
     # Group by day
     day_groups = {str(day): grp for day, grp in df.groupby("day")}

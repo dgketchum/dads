@@ -34,10 +34,7 @@ from sklearn.neighbors import BallTree
 
 from models.rtma_bias.lit_scalar_gnn import LitScalarGNN
 from models.rtma_bias.patch_dataset import _date_to_period
-from models.wind_bias.wind_dataset import (
-    build_knn_map,
-    build_static_edge_attrs,
-)
+from prep.graph_utils import build_knn_map, build_static_edge_attrs
 from prep.pnw_1km_grid import (
     PNW_1KM_CRS,
     PNW_1KM_SHAPE,
