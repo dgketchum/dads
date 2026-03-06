@@ -13,16 +13,20 @@ from lightning.pytorch.callbacks import (
 from models.rtma_bias.data_module import RtmaPatchDataModule
 from models.rtma_bias.experiment import ExperimentConfig, log_experiment
 from models.rtma_bias.lit_unet import LitPatchUNet
+from models.rtma_bias.mlp import PointMLP
 
-# Default RTMA channels when no --config and no --rtma-channels provided.
+# Default URMA channels when no --config and no --rtma-channels provided.
 _DEFAULT_RTMA = (
     "tmp_c",
+    "tmax_c",
+    "tmin_c",
     "dpt_c",
     "ugrd",
     "vgrd",
+    "gust",
+    "spfh",
     "pres_kpa",
     "tcdc_pct",
-    "prcp_mm",
     "ea_kpa",
 )
 
@@ -72,12 +76,12 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument(
         "--terrain-tif",
         default=None,
-        help="6-band terrain GeoTIFF (from prep/build_terrain_grid.py)",
+        help="6-band terrain GeoTIFF (from terrain/grid.py)",
     )
     p.add_argument(
         "--rsun-tif",
         default=None,
-        help="365-band RSUN GeoTIFF (from prep/build_terrain_grid.py)",
+        help="365-band RSUN GeoTIFF (from terrain/grid.py)",
     )
     p.add_argument(
         "--landsat-tif",
@@ -103,6 +107,91 @@ def _parse_args() -> argparse.Namespace:
         "--end-date",
         default=None,
         help="Filter patch index to days <= this date (YYYY-MM-DD)",
+    )
+    p.add_argument(
+        "--n-heads",
+        type=int,
+        default=None,
+        help="Number of output heads (1=single-task, 2=multi-task ea+tmax)",
+    )
+    p.add_argument(
+        "--target-cols",
+        default=None,
+        help="Comma-separated target columns (e.g. delta_log_ea,delta_tmax)",
+    )
+    p.add_argument(
+        "--task-weights",
+        default=None,
+        help="Comma-separated task weights (e.g. 1.0,0.01)",
+    )
+    p.add_argument(
+        "--physics-weight",
+        type=float,
+        default=None,
+        help="Weight for Clausius-Clapeyron physics penalty (default 0.0)",
+    )
+    p.add_argument(
+        "--val-mgrs-tiles",
+        default=None,
+        help="Comma-separated MGRS tile IDs for spatial validation holdout",
+    )
+    p.add_argument(
+        "--model",
+        default=None,
+        choices=["unet", "mlp"],
+        help="Model architecture (default: unet)",
+    )
+    p.add_argument(
+        "--task",
+        default=None,
+        choices=["ea", "tmax", "tmin", "wind"],
+        help="Primary task for single-head mode (default: ea)",
+    )
+    p.add_argument(
+        "--pair-head-idx",
+        type=int,
+        default=None,
+        help="Head index used for pairwise loss in multi-head mode (default: task-specific)",
+    )
+    p.add_argument(
+        "--use-pairwise-loss",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Enable optional pairwise gradient-consistency loss",
+    )
+    p.add_argument(
+        "--pair-index",
+        default=None,
+        help="Optional pair-index parquet (columns: fid_i,fid_j,day,...)",
+    )
+    p.add_argument(
+        "--pair-k",
+        type=int,
+        default=None,
+        help="Pair builder metadata: number of nearest neighbors used",
+    )
+    p.add_argument(
+        "--pair-dmax-km",
+        type=float,
+        default=None,
+        help="Maximum pair distance (km) retained by datamodule from pair-index",
+    )
+    p.add_argument(
+        "--pair-loss-weight",
+        type=float,
+        default=None,
+        help="Weight for pairwise loss term when enabled",
+    )
+    p.add_argument(
+        "--pair-sample-per-batch",
+        type=int,
+        default=None,
+        help="Pair samples per batch (defaults to training batch size)",
+    )
+    p.add_argument(
+        "--pair-distance-bins",
+        default=None,
+        help="Optional comma-separated distance bins for pair diagnostics (e.g. 0,10,20,35)",
     )
     return p.parse_args()
 
@@ -137,11 +226,34 @@ def _build_config(args: argparse.Namespace) -> ExperimentConfig:
         "start_date": "start_date",
         "end_date": "end_date",
         "decoded": "decoded",
+        "n_heads": "n_heads",
+        "physics_weight": "physics_weight",
+        "model": "model",
+        "task": "task",
+        "pair_head_idx": "pair_head_idx",
+        "use_pairwise_loss": "use_pairwise_loss",
+        "pair_index": "pair_index",
+        "pair_k": "pair_k",
+        "pair_dmax_km": "pair_dmax_km",
+        "pair_loss_weight": "pair_loss_weight",
+        "pair_sample_per_batch": "pair_sample_per_batch",
     }
     for cli_name, cfg_name in _cli_map.items():
         val = getattr(args, cli_name, None)
         if val is not None:
             setattr(cfg, cfg_name, val)
+
+    # Parse comma-separated CLI args for target_cols, task_weights, val_mgrs_tiles.
+    if args.target_cols is not None:
+        cfg.target_cols = [c.strip() for c in args.target_cols.split(",")]
+    if args.task_weights is not None:
+        cfg.task_weights = [float(w.strip()) for w in args.task_weights.split(",")]
+    if args.val_mgrs_tiles is not None:
+        cfg.val_mgrs_tiles = [t.strip() for t in args.val_mgrs_tiles.split(",")]
+    if args.pair_distance_bins is not None:
+        cfg.pair_distance_bins = [
+            float(v.strip()) for v in args.pair_distance_bins.split(",")
+        ]
 
     # --rtma-channels overrides features with explicit channel list.
     if args.rtma_channels is not None:
@@ -176,6 +288,14 @@ def _build_config(args: argparse.Namespace) -> ExperimentConfig:
     for k, v in _legacy_defaults.items():
         if getattr(cfg, k) is None:
             setattr(cfg, k, v)
+    # Task-aware default for single-head tmax runs.
+    if (
+        cfg.task == "tmax"
+        and not cfg.target_cols
+        and (args.target_col is None)
+        and cfg.target_col == "delta_log_ea"
+    ):
+        cfg.target_col = "delta_tmax"
 
     # Validate required paths.
     if not cfg.patch_index:
@@ -184,6 +304,10 @@ def _build_config(args: argparse.Namespace) -> ExperimentConfig:
         raise SystemExit("Error: --tif-root is required (via CLI or config TOML)")
     if not cfg.out_dir:
         raise SystemExit("Error: --out-dir is required (via CLI or config TOML)")
+    if cfg.use_pairwise_loss and not cfg.pair_index:
+        raise SystemExit(
+            "Error: --use-pairwise-loss requires --pair-index (via CLI or config TOML)"
+        )
 
     return cfg
 
@@ -200,6 +324,15 @@ def main() -> None:
 
     rtma_channels = cfg.rtma_channels or None
 
+    # Resolve target_cols for data module.
+    target_cols_tuple = None
+    if cfg.target_cols:
+        target_cols_tuple = tuple(cfg.target_cols)
+
+    val_mgrs_tuple = None
+    if cfg.val_mgrs_tiles:
+        val_mgrs_tuple = tuple(cfg.val_mgrs_tiles)
+
     dm = RtmaPatchDataModule(
         patch_index=cfg.patch_index,
         tif_root=cfg.tif_root,
@@ -213,10 +346,16 @@ def main() -> None:
         rsun_tif=cfg.rsun_tif if cfg.use_rsun else None,
         landsat_tif=cfg.landsat_tif if cfg.use_landsat else None,
         target_col=cfg.target_col,
+        target_cols=target_cols_tuple,
         rtma_channels=rtma_channels,
         start_date=cfg.start_date,
         end_date=cfg.end_date,
         decoded=cfg.decoded,
+        val_mgrs_tiles=val_mgrs_tuple,
+        use_pairwise_loss=cfg.use_pairwise_loss,
+        pair_index=cfg.pair_index,
+        pair_dmax_km=cfg.pair_dmax_km,
+        pair_sample_per_batch=cfg.pair_sample_per_batch,
     )
     dm.setup()
 
@@ -224,13 +363,52 @@ def main() -> None:
     norm_path = os.path.join(cfg.out_dir, "norm_stats.json")
     dm.save_norm_stats(norm_path)
 
+    if cfg.model == "mlp":
+        net = PointMLP(
+            in_channels=dm.in_channels,
+            n_heads=cfg.n_heads,
+        )
+    else:
+        from models.rtma_bias.unet import UNetSmall
+
+        net = UNetSmall(
+            in_channels=dm.in_channels,
+            out_channels=1,
+            base=cfg.base,
+            n_heads=cfg.n_heads,
+        )
+
     model = LitPatchUNet(
         in_channels=dm.in_channels,
         out_channels=1,
         base=cfg.base,
         lr=cfg.lr,
-        tv_weight=cfg.tv_weight,
+        tv_weight=cfg.tv_weight if cfg.model != "mlp" else 0.0,
+        n_heads=cfg.n_heads,
+        task_weights=cfg.task_weights,
+        physics_weight=cfg.physics_weight,
+        task=cfg.task,
+        pair_head_idx=cfg.pair_head_idx,
+        use_pairwise_loss=cfg.use_pairwise_loss,
+        pair_loss_weight=cfg.pair_loss_weight,
     )
+    model.model = net
+    if cfg.use_pairwise_loss:
+        if dm.train_pair_ds is None or len(dm.train_pair_ds) == 0:
+            raise SystemExit(
+                "Error: pairwise loss enabled but no usable training pairs were found "
+                "(check pair index, distance threshold, and split overlap)."
+            )
+        if dm.val_pair_ds is None or len(dm.val_pair_ds) == 0:
+            print(
+                "Warning: pairwise loss enabled but no validation pairs available; "
+                "pairwise validation metrics will be skipped.",
+                flush=True,
+            )
+        model.attach_pair_dataloaders(
+            train_loader=dm.train_pair_dataloader(),
+            val_loader=dm.val_pair_dataloader(),
+        )
 
     # Determine accelerator / devices from --device flag.
     if cfg.device and cfg.device.startswith("cuda"):

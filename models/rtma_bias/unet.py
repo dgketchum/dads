@@ -23,11 +23,23 @@ class UNetSmall(nn.Module):
     Minimal U-Net for patch-based correction fields.
 
     This is intentionally small for MVP iteration speed.
+
+    When *n_heads* > 1, the output layer is replaced by a ModuleList of
+    independent 1×1 conv heads.  ``forward()`` returns a list of tensors
+    ``[(B, 1, H, W), ...]`` in that case, or a single ``(B, out_channels, H, W)``
+    tensor when ``n_heads == 1`` (backward compatible).
     """
 
-    def __init__(self, in_channels: int, out_channels: int, base: int = 32):
+    def __init__(
+        self,
+        in_channels: int,
+        out_channels: int = 1,
+        base: int = 32,
+        n_heads: int = 1,
+    ):
         super().__init__()
         b = int(base)
+        self.n_heads = int(n_heads)
         self.down1 = _ConvBlock(in_channels, b)
         self.pool1 = nn.MaxPool2d(2)
         self.down2 = _ConvBlock(b, 2 * b)
@@ -40,9 +52,14 @@ class UNetSmall(nn.Module):
         self.up1 = nn.ConvTranspose2d(2 * b, b, kernel_size=2, stride=2)
         self.dec1 = _ConvBlock(2 * b, b)
 
-        self.out = nn.Conv2d(b, out_channels, kernel_size=1)
+        if self.n_heads > 1:
+            self.heads = nn.ModuleList(
+                [nn.Conv2d(b, 1, kernel_size=1) for _ in range(self.n_heads)]
+            )
+        else:
+            self.out = nn.Conv2d(b, out_channels, kernel_size=1)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor) -> torch.Tensor | list[torch.Tensor]:
         x1 = self.down1(x)
         x2 = self.down2(self.pool1(x1))
         xm = self.mid(self.pool2(x2))
@@ -54,5 +71,7 @@ class UNetSmall(nn.Module):
         x = self.up1(x)
         x = torch.cat([x, x1], dim=1)
         x = self.dec1(x)
-        return self.out(x)
 
+        if self.n_heads > 1:
+            return [head(x) for head in self.heads]
+        return self.out(x)
