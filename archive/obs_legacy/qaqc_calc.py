@@ -45,8 +45,21 @@ def calc_temperature_variables(month, tmax, tmin, tdew):
     return delta_t, monthly_delta_t, k_not, monthly_k_not, monthly_tmin, monthly_tdew
 
 
-def calc_humidity_variables(tmax, tmin, tavg, ea, ea_col, tdew, tdew_col, rhmax, rhmax_col,
-                            rhmin, rhmin_col, rhavg, rhavg_col):
+def calc_humidity_variables(
+    tmax,
+    tmin,
+    tavg,
+    ea,
+    ea_col,
+    tdew,
+    tdew_col,
+    rhmax,
+    rhmax_col,
+    rhmin,
+    rhmin_col,
+    rhavg,
+    rhavg_col,
+):
     """
     Takes in all possible humidity variables and figures out which one to use for the calculation of TDew and Ea.
 
@@ -87,83 +100,105 @@ def calc_humidity_variables(tmax, tmin, tavg, ea, ea_col, tdew, tdew_col, rhmax,
 
     # Check to see if TDew exists, if it does not, then see what is provided to calculate it.
     if tdew_col == -1:  # We are not given TDew
-
         if ea_col != -1:  # Vapor Pressure exists, so it will be used to calculate TDew
-
             calc_ea = np.array(ea)
             # Calculate TDew using actual vapor pressure
             # Below equation was taken from the book "Evapotranspiration: Principles and
             # Applications for Water Management" by Goyal and Harmsen, Eq. 9 in chapter 13, page 320.
-            calc_tdew = np.array((116.91 + (237.3 * np.log(calc_ea))) / (16.78 - np.log(calc_ea)))
+            calc_tdew = np.array(
+                (116.91 + (237.3 * np.log(calc_ea))) / (16.78 - np.log(calc_ea))
+            )
 
             return calc_ea, calc_tdew
 
-        elif ea_col == -1 and rhmax_col != -1 and rhmin_col != -1:  # RHmax and RHmin exist but Ea does not exist
+        elif (
+            ea_col == -1 and rhmax_col != -1 and rhmin_col != -1
+        ):  # RHmax and RHmin exist but Ea does not exist
+            eo_tmax = np.array(
+                0.6108 * np.exp((17.27 * tmax) / (tmax + 237.3))
+            )  # units kPa, EQ 7
+            eo_tmin = np.array(
+                0.6108 * np.exp((17.27 * tmin) / (tmin + 237.3))
+            )  # units kPa, EQ 7
 
-            eo_tmax = np.array(0.6108 * np.exp((17.27 * tmax) / (tmax + 237.3)))  # units kPa, EQ 7
-            eo_tmin = np.array(0.6108 * np.exp((17.27 * tmin) / (tmin + 237.3)))  # units kPa, EQ 7
-
-            calc_ea = np.array(((eo_tmin * (rhmax / 100)) + (eo_tmax * (rhmin / 100))) / 2)  # EQ 11
-            calc_tdew = np.array((116.91 + (237.3 * np.log(calc_ea))) / (16.78 - np.log(calc_ea)))  # EQ cited above
+            calc_ea = np.array(
+                ((eo_tmin * (rhmax / 100)) + (eo_tmax * (rhmin / 100))) / 2
+            )  # EQ 11
+            calc_tdew = np.array(
+                (116.91 + (237.3 * np.log(calc_ea))) / (16.78 - np.log(calc_ea))
+            )  # EQ cited above
 
             return calc_ea, calc_tdew
 
-        elif ea_col == -1 and rhmax_col == -1 and rhmin_col == -1 and rhavg_col != -1:  # Only RHAvg exists, so use it
-
-            eo_tavg = np.array(0.6108 * np.exp((17.27 * tavg) / (tavg + 237.3)))  # units kPa, EQ 7
+        elif (
+            ea_col == -1 and rhmax_col == -1 and rhmin_col == -1 and rhavg_col != -1
+        ):  # Only RHAvg exists, so use it
+            eo_tavg = np.array(
+                0.6108 * np.exp((17.27 * tavg) / (tavg + 237.3))
+            )  # units kPa, EQ 7
             calc_ea = np.array(eo_tavg * (rhavg / 100))  # EQ 14
-            calc_tdew = np.array((116.91 + (237.3 * np.log(calc_ea))) / (16.78 - np.log(calc_ea)))  # EQ cited above
+            calc_tdew = np.array(
+                (116.91 + (237.3 * np.log(calc_ea))) / (16.78 - np.log(calc_ea))
+            )  # EQ cited above
 
             return calc_ea, calc_tdew
 
         else:
             # If an unsupported combination of humidity variables is passed, raise a value error.
-            raise ValueError('calc_humidity_variables encountered an unexpected combination of inputs.')
+            raise ValueError(
+                "calc_humidity_variables encountered an unexpected combination of inputs."
+            )
 
     elif tdew_col != -1:
         # We are given tdew, so we check to see if ea also exists.
         calc_tdew = np.array(tdew)
 
         if ea_col == -1:  # Vapor pressure not given, have to calculate from tdew
-            calc_ea = np.array(0.6108 * np.exp((17.27 * calc_tdew) / (calc_tdew + 237.3)))  # EQ 8, units kPa
+            calc_ea = np.array(
+                0.6108 * np.exp((17.27 * calc_tdew) / (calc_tdew + 237.3))
+            )  # EQ 8, units kPa
         elif ea_col != -1:
             # Vapor pressure and tdew were both provided so we don't need to calculate either.
             calc_ea = np.array(ea)
         else:
             # If an unsupported combination of humidity variables is passed, raise a value error.
-            raise ValueError('calc_humidity_variables encountered an unexpected combination of inputs.')
+            raise ValueError(
+                "calc_humidity_variables encountered an unexpected combination of inputs."
+            )
 
         return calc_ea, calc_tdew
 
     else:
         # If an unsupported combination of humidity variables is passed, raise a value error.
-        raise ValueError('calc_humidity_variables encountered an unexpected combination of inputs.')
+        raise ValueError(
+            "calc_humidity_variables encountered an unexpected combination of inputs."
+        )
 
 
 def calc_rso_and_refet(lat, elev, wind_anemom, doy, month, tmax, tmin, ea, uz, rs):
     """
-        Calculates clear-sky solar radiation and reference evapotranspiration
-        variables using the refet package (https://github.com/DRI-WSWUP/RefET)
+    Calculates clear-sky solar radiation and reference evapotranspiration
+    variables using the refet package (https://github.com/DRI-WSWUP/RefET)
 
-        Args:
-            :lat: (float) station latitude in decimal degrees
-            :elev: (float) station elevation in meters
-            :wind_anemom: (float) height of windspeed anemometer in meters
-            :doy: (ndarray) 1D numpy array of day of year in record
-            :month: (ndarray) 1D numpy array of current month in record
-            :tmax: (ndarray) 1D numpy array of maximum temperature values
-            :tmin: (ndarray) 1D numpy array of minimum temperature values
-            :ea: (ndarray) 1D numpy array of vapor pressure in kPa
-            :uz: (ndarray) 1D numpy array of average windspeed values
-            :rs: (ndarray) 1D numpy array of solar radiation values
+    Args:
+        :lat: (float) station latitude in decimal degrees
+        :elev: (float) station elevation in meters
+        :wind_anemom: (float) height of windspeed anemometer in meters
+        :doy: (ndarray) 1D numpy array of day of year in record
+        :month: (ndarray) 1D numpy array of current month in record
+        :tmax: (ndarray) 1D numpy array of maximum temperature values
+        :tmin: (ndarray) 1D numpy array of minimum temperature values
+        :ea: (ndarray) 1D numpy array of vapor pressure in kPa
+        :uz: (ndarray) 1D numpy array of average windspeed values
+        :rs: (ndarray) 1D numpy array of solar radiation values
 
-        Returns:
-            :rso: (ndarray) 1-D array of clear sky solar radiation
-            :monthly_rs: (ndarray) 1-D array of monthly averaged solar radiation (12 values total) values
-            :eto: (ndarray) 1-D array of  grass reference evapotranspiration in units mm/day
-            :etr: (ndarray)  1-D array of alfalfa reference evapotranspiration in units mm/day
-            :monthly_eto: (ndarray) 1-D array of monthly averaged grass reference ET (12 values total) values
-            :monthly_etr: (ndarray) 1-D array of monthly averaged alfalfa reference ET (12 values total) values
+    Returns:
+        :rso: (ndarray) 1-D array of clear sky solar radiation
+        :monthly_rs: (ndarray) 1-D array of monthly averaged solar radiation (12 values total) values
+        :eto: (ndarray) 1-D array of  grass reference evapotranspiration in units mm/day
+        :etr: (ndarray)  1-D array of alfalfa reference evapotranspiration in units mm/day
+        :monthly_eto: (ndarray) 1-D array of monthly averaged grass reference ET (12 values total) values
+        :monthly_etr: (ndarray) 1-D array of monthly averaged alfalfa reference ET (12 values total) values
     """
 
     monthly_rs = np.empty(12)
@@ -172,19 +207,53 @@ def calc_rso_and_refet(lat, elev, wind_anemom, doy, month, tmax, tmin, ea, uz, r
 
     # Calculate rso values
     lat_radians = lat * np.pi / 180.0  # convert latitude into radians
-    pressure = _air_pressure(elev=elev, method='asce')  # returns air pressure in kpa
-    ra = _ra_daily(lat=lat_radians, doy=doy, method='asce')  # returns ra in mj/m2
+    pressure = _air_pressure(elev=elev, method="asce")  # returns air pressure in kpa
+    ra = _ra_daily(lat=lat_radians, doy=doy, method="asce")  # returns ra in mj/m2
     rso = _rso_daily(ra=ra, ea=ea, pair=pressure, doy=doy, lat=lat_radians)
 
     # Calculating ETo in mm using refET package
-    eto = Daily(tmin=tmin, tmax=tmax, ea=ea, rs=rs, uz=uz,
-                zw=wind_anemom, elev=elev, lat=lat, doy=doy, method='asce',
-                input_units={'tmin': 'c', 'tmax': 'c', 'ea': 'kpa', 'rs': 'w/m2', 'uz': 'm/s', 'lat': 'deg'}).eto()
+    eto = Daily(
+        tmin=tmin,
+        tmax=tmax,
+        ea=ea,
+        rs=rs,
+        uz=uz,
+        zw=wind_anemom,
+        elev=elev,
+        lat=lat,
+        doy=doy,
+        method="asce",
+        input_units={
+            "tmin": "c",
+            "tmax": "c",
+            "ea": "kpa",
+            "rs": "w/m2",
+            "uz": "m/s",
+            "lat": "deg",
+        },
+    ).eto()
 
     # Calculating ETr in mm using refET package
-    etr = Daily(tmin=tmin, tmax=tmax, ea=ea, rs=rs, uz=uz,
-                zw=wind_anemom, elev=elev, lat=lat, doy=doy, method='asce',
-                input_units={'tmin': 'c', 'tmax': 'c', 'ea': 'kpa', 'rs': 'w/m2', 'uz': 'm/s', 'lat': 'deg'}).etr()
+    etr = Daily(
+        tmin=tmin,
+        tmax=tmax,
+        ea=ea,
+        rs=rs,
+        uz=uz,
+        zw=wind_anemom,
+        elev=elev,
+        lat=lat,
+        doy=doy,
+        method="asce",
+        input_units={
+            "tmin": "c",
+            "tmax": "c",
+            "ea": "kpa",
+            "rs": "w/m2",
+            "uz": "m/s",
+            "lat": "deg",
+        },
+    ).etr()
 
     # Calculate mean monthly values
     j = 1
@@ -203,12 +272,10 @@ def calc_rso_and_refet(lat, elev, wind_anemom, doy, month, tmax, tmin, ea, uz, r
 
 
 def calc_rso(lat, elev, doy, month, ea, rs):
-    monthly_rs = np.empty(12)
-
     # Calculate rso values
     lat_radians = lat * np.pi / 180.0  # convert latitude into radians
-    pressure = _air_pressure(elev=elev, method='asce')  # returns air pressure in kpa
-    ra = _ra_daily(lat=lat_radians, doy=doy, method='asce')  # returns ra in mj/m2
+    pressure = _air_pressure(elev=elev, method="asce")  # returns air pressure in kpa
+    ra = _ra_daily(lat=lat_radians, doy=doy, method="asce")  # returns ra in mj/m2
     rso = _rso_daily(ra=ra, ea=ea, pair=pressure, doy=doy, lat=lat_radians)
 
     rso = (rso * 1000000) / 86400
@@ -217,25 +284,27 @@ def calc_rso(lat, elev, doy, month, ea, rs):
 
 def calc_rs_tr(month, rso, delta_t, mm_delta_t, b_zero, b_one, b_two):
     """
-        Calculates theoretical daily solar radiation according to the Thornton and Running 1999 model.
-        Paper can be found here: http://www.engr.scu.edu/~emaurer/chile/vic_taller/papers/thornton_running_1997.pdf
+    Calculates theoretical daily solar radiation according to the Thornton and Running 1999 model.
+    Paper can be found here: http://www.engr.scu.edu/~emaurer/chile/vic_taller/papers/thornton_running_1997.pdf
 
-        Args:
-            :month: (ndarray) 1D numpy array of months within dataset
-            :rso: (ndarray) 1D numpy array of clear-sky solar radiation values in w/m2
-            :delta_t: (ndarray) 1D numpy array of difference between maximum and minimum temperature values
-            :mm_delta_t: (ndarray) monthly averaged delta_t (12 values total) values
-            :b_zero: (float) first B coefficient used in calculation of rs_tr, original value is 0.031
-            :b_one: (float) second B coefficient used in calculation of rs_tr, original value is 0.201
-            :b_two: (float) third B coefficient used in the calculation of rs_tr, original value is -0.185
+    Args:
+        :month: (ndarray) 1D numpy array of months within dataset
+        :rso: (ndarray) 1D numpy array of clear-sky solar radiation values in w/m2
+        :delta_t: (ndarray) 1D numpy array of difference between maximum and minimum temperature values
+        :mm_delta_t: (ndarray) monthly averaged delta_t (12 values total) values
+        :b_zero: (float) first B coefficient used in calculation of rs_tr, original value is 0.031
+        :b_one: (float) second B coefficient used in calculation of rs_tr, original value is 0.201
+        :b_two: (float) third B coefficient used in the calculation of rs_tr, original value is -0.185
 
-        Returns:
-            :rs_tr: (ndarray) 1D numpy array of thornton-running solar radiation
-            :mm_rs_tr: (ndarray) mean monthly averaged rs_tr (12 values total) values
+    Returns:
+        :rs_tr: (ndarray) 1D numpy array of thornton-running solar radiation
+        :mm_rs_tr: (ndarray) mean monthly averaged rs_tr (12 values total) values
     """
     mm_rs_tr = np.empty(12)
     b_coefficient = np.array(b_zero + b_one * np.exp(b_two * mm_delta_t))
-    rs_tr = np.array(rso * (1 - 0.9 * np.exp(-1 * b_coefficient[month - 1] * delta_t ** 1.5)))
+    rs_tr = np.array(
+        rso * (1 - 0.9 * np.exp(-1 * b_coefficient[month - 1] * delta_t**1.5))
+    )
 
     # Create mean monthly values
     j = 1
@@ -249,7 +318,9 @@ def calc_rs_tr(month, rso, delta_t, mm_delta_t, b_zero, b_one, b_two):
     return rs_tr, mm_rs_tr
 
 
-def calc_org_and_opt_rs_tr(mc_iterations, log_path, month, delta_t, mm_delta_t, rs, rso):
+def calc_org_and_opt_rs_tr(
+    mc_iterations, log_path, month, delta_t, mm_delta_t, rs, rso
+):
     """
     This function performs a monte carlo simulation on the b coefficients that go into generating thornton-
     running solar radiation in an attempt to optimize a model that best fits observed solar radiation data.
@@ -277,26 +348,46 @@ def calc_org_and_opt_rs_tr(mc_iterations, log_path, month, delta_t, mm_delta_t, 
         :opt_rs_tr: (ndarray) 1D numpy array of thornton-running solar radiation with optimized B coefficient values
         :mm_opt_rs_tr: (ndarray) 1D numpy array of monthly averaged opt_rs_tr (12 values total) values
     """
-    print("\nSystem: Now performing a Monte Carlo simulation to optimize Thornton Running solar radiation parameters.")
-    print("System: %s iterations are being run, this may take some time." % mc_iterations)
+    print(
+        "\nSystem: Now performing a Monte Carlo simulation to optimize Thornton Running solar radiation parameters."
+    )
+    print(
+        "System: %s iterations are being run, this may take some time." % mc_iterations
+    )
 
-    b_zero = np.array(0.031 + (0.031 * 0.5) * np.random.uniform(low=-1, high=1, size=mc_iterations))
-    b_one = np.array(0.201 + (0.201 * 0.5) * np.random.uniform(low=-1, high=1, size=mc_iterations))
-    b_two = np.array(-0.185 + (-0.185 * 0.5) * np.random.uniform(low=-1, high=1, size=mc_iterations))
+    b_zero = np.array(
+        0.031 + (0.031 * 0.5) * np.random.uniform(low=-1, high=1, size=mc_iterations)
+    )
+    b_one = np.array(
+        0.201 + (0.201 * 0.5) * np.random.uniform(low=-1, high=1, size=mc_iterations)
+    )
+    b_two = np.array(
+        -0.185 + (-0.185 * 0.5) * np.random.uniform(low=-1, high=1, size=mc_iterations)
+    )
 
     mc_rmse = np.zeros(mc_iterations)
 
     # Calculate rs_tr using original, unoptimized B coefficients
-    (orig_rs_tr, mm_orig_rs_tr) = calc_rs_tr(month, rso, delta_t, mm_delta_t, 0.031, 0.201, -0.185)
+    (orig_rs_tr, mm_orig_rs_tr) = calc_rs_tr(
+        month, rso, delta_t, mm_delta_t, 0.031, 0.201, -0.185
+    )
 
     for i in range(mc_iterations):
         # Run all randomized b coefficients through thornton running calculation
-        (mc_rs_tr, mm_mc_rs_tr) = calc_rs_tr(month, rso, delta_t, mm_delta_t, b_zero[i], b_one[i], b_two[i])
+        (mc_rs_tr, mm_mc_rs_tr) = calc_rs_tr(
+            month, rso, delta_t, mm_delta_t, b_zero[i], b_one[i], b_two[i]
+        )
 
-        mc_rmse[i] = np.sqrt(np.nanmean((mc_rs_tr - rs) ** 2))  # Calculate RMSE to track how good those parameters were
+        mc_rmse[i] = np.sqrt(
+            np.nanmean((mc_rs_tr - rs) ** 2)
+        )  # Calculate RMSE to track how good those parameters were
 
         if (i % 100) == 0:  # Update user so they don't think script is frozen.
-            print('System: Processing Thornton-Running iteration: {} of {}'.format(i, mc_iterations))
+            print(
+                "System: Processing Thornton-Running iteration: {} of {}".format(
+                    i, mc_iterations
+                )
+            )
         else:
             pass
 
@@ -305,25 +396,51 @@ def calc_org_and_opt_rs_tr(mc_iterations, log_path, month, delta_t, mm_delta_t, 
     # Calculate RMSE of original rs_tr B coefficients
     orig_rmse = np.sqrt(np.nanmean((orig_rs_tr - rs) ** 2))
 
-    print('System: Original coefficients for TR Solar Radiation produced an RMSE of: {0:.4f}'.format(orig_rmse))
-    print('System: Optimized coefficients for TR Solar Radiation produced an RMSE of: {0:.4f}'.
-          format(mc_rmse[min_rmse_index]))
+    print(
+        "System: Original coefficients for TR Solar Radiation produced an RMSE of: {0:.4f}".format(
+            orig_rmse
+        )
+    )
+    print(
+        "System: Optimized coefficients for TR Solar Radiation produced an RMSE of: {0:.4f}".format(
+            mc_rmse[min_rmse_index]
+        )
+    )
 
     # Calculate the optimized rs_tr using the B coefficients that caused the lowest rmse
-    (opt_rs_tr, mm_opt_rs_tr) = calc_rs_tr(month, rso, delta_t, mm_delta_t, b_zero[min_rmse_index],
-                                           b_one[min_rmse_index], b_two[min_rmse_index])
+    (opt_rs_tr, mm_opt_rs_tr) = calc_rs_tr(
+        month,
+        rso,
+        delta_t,
+        mm_delta_t,
+        b_zero[min_rmse_index],
+        b_one[min_rmse_index],
+        b_two[min_rmse_index],
+    )
 
     # Write the b coefficients used to the log file then close it
     log.basicConfig()
-    corr_log = open(log_path, 'a')
-    corr_log.write('\n\nThornton-Running Solar Radiation Optimization')
-    corr_log.write('\nMonte Carlo simulation with %s iterations produced the coefficients:' % mc_iterations)
-    corr_log.write('\nb_zero = {0:.4f}, b_one = {1:.4f}, b_two = {2:.4f}'.
-                   format(b_zero[min_rmse_index], b_one[min_rmse_index], b_two[min_rmse_index]))
-    corr_log.write('\nOptimized coefficients RMSE against observed solar radiation was: {0:.4f}'.
-                   format(mc_rmse[min_rmse_index]))
-    corr_log.write('\nOriginal coefficients RMSE against observed solar radiation was: {0:.4f} \n\n'
-                   .format(orig_rmse))
+    corr_log = open(log_path, "a")
+    corr_log.write("\n\nThornton-Running Solar Radiation Optimization")
+    corr_log.write(
+        "\nMonte Carlo simulation with %s iterations produced the coefficients:"
+        % mc_iterations
+    )
+    corr_log.write(
+        "\nb_zero = {0:.4f}, b_one = {1:.4f}, b_two = {2:.4f}".format(
+            b_zero[min_rmse_index], b_one[min_rmse_index], b_two[min_rmse_index]
+        )
+    )
+    corr_log.write(
+        "\nOptimized coefficients RMSE against observed solar radiation was: {0:.4f}".format(
+            mc_rmse[min_rmse_index]
+        )
+    )
+    corr_log.write(
+        "\nOriginal coefficients RMSE against observed solar radiation was: {0:.4f} \n\n".format(
+            orig_rmse
+        )
+    )
     corr_log.close()
 
     if orig_rmse < mc_rmse[min_rmse_index] and mc_iterations == 100:
@@ -333,8 +450,10 @@ def calc_org_and_opt_rs_tr(mc_iterations, log_path, month, delta_t, mm_delta_t, 
         mm_opt_rs_tr = mm_orig_rs_tr
     elif orig_rmse < mc_rmse[min_rmse_index] and mc_iterations != 100:
         # this shouldn't happen, as we should have done enough iterations to beat original values, so raise an error
-        raise ValueError('Thornton running optimization failed to beat original coefficient values.' +
-                         ' Try running again, and if this error persists please report it on github.')
+        raise ValueError(
+            "Thornton running optimization failed to beat original coefficient values."
+            + " Try running again, and if this error persists please report it on github."
+        )
     else:
         pass
 
@@ -342,30 +461,43 @@ def calc_org_and_opt_rs_tr(mc_iterations, log_path, month, delta_t, mm_delta_t, 
     return orig_rs_tr, mm_orig_rs_tr, opt_rs_tr, mm_opt_rs_tr
 
 
-def calc_compiled_ea(tmax, tmin, tavg, ea, tdew, tdew_col,
-                     rhmax, rhmax_col, rhmin, rhmin_col, rhavg, rhavg_col, tdew_ko):
+def calc_compiled_ea(
+    tmax,
+    tmin,
+    tavg,
+    ea,
+    tdew,
+    tdew_col,
+    rhmax,
+    rhmax_col,
+    rhmin,
+    rhmin_col,
+    rhavg,
+    rhavg_col,
+    tdew_ko,
+):
     """
-        This function is used to create a 'compiled' ea from all provided humidity variables, always using the best one
-        provided within the dataset for each given day of the record. This function will work regardless of if ea is
-        provided by the dataset or not. See `qaqc_functions.compiled_humidity_adjustment` for more information.
+    This function is used to create a 'compiled' ea from all provided humidity variables, always using the best one
+    provided within the dataset for each given day of the record. This function will work regardless of if ea is
+    provided by the dataset or not. See `qaqc_functions.compiled_humidity_adjustment` for more information.
 
-        Args:
-            :tmax: (ndarray) 1D array of maximum temperature values
-            :tmin: (ndarray) 1D array of minimum temperature values
-            :tavg: (ndarray) 1D array of average temperature values
-            :ea: (ndarray) 1D array of vapor pressure values, which may be empty
-            :tdew: (ndarray) 1D array of dewpoint temperature values, which may be empty
-            :tdew_col: (int) column of Tdew variable in data file, if it is provided
-            :rhmax: (ndarray) 1D array of maximum relative humidity values, which may be empty
-            :rhmax_col: (int) column of rhmax variable in data file, if it was provided
-            :rhmin: (ndarray) 1D array of minimum relative humidity values, which may be empty
-            :rhmin_col: (int) column of rhmin variable in data file, if it was provided
-            :rhavg: (ndarray) 1D array of average relative humidity values, which may be empty
-            :rhavg_col: (int) column of rhavg variable in data file, if it was provided
-            :tdew_ko: (ndarray) 1D array of tdew data filled in by tmin-ko curve
+    Args:
+        :tmax: (ndarray) 1D array of maximum temperature values
+        :tmin: (ndarray) 1D array of minimum temperature values
+        :tavg: (ndarray) 1D array of average temperature values
+        :ea: (ndarray) 1D array of vapor pressure values, which may be empty
+        :tdew: (ndarray) 1D array of dewpoint temperature values, which may be empty
+        :tdew_col: (int) column of Tdew variable in data file, if it is provided
+        :rhmax: (ndarray) 1D array of maximum relative humidity values, which may be empty
+        :rhmax_col: (int) column of rhmax variable in data file, if it was provided
+        :rhmin: (ndarray) 1D array of minimum relative humidity values, which may be empty
+        :rhmin_col: (int) column of rhmin variable in data file, if it was provided
+        :rhavg: (ndarray) 1D array of average relative humidity values, which may be empty
+        :rhavg_col: (int) column of rhavg variable in data file, if it was provided
+        :tdew_ko: (ndarray) 1D array of tdew data filled in by tmin-ko curve
 
-        Returns:
-            :compiled_ea: (ndarray) 1D array of vapor pressure that has been compiled from the "best" data sources
+    Returns:
+        :compiled_ea: (ndarray) 1D array of vapor pressure that has been compiled from the "best" data sources
     """
     data_length = ea.shape[0]
     compiled_ea = np.empty(data_length) * np.nan
@@ -374,37 +506,55 @@ def calc_compiled_ea(tmax, tmin, tavg, ea, tdew, tdew_col,
     rh_avg_calc_ea = np.empty(data_length) * np.nan
 
     # TDew data filled in with TMin - Ko curve is always an option
-    tdew_ko_calc_ea = np.array(0.6108 * np.exp((17.27 * tdew_ko) / (tdew_ko + 237.3)))  # EQ 8, units kPa
+    tdew_ko_calc_ea = np.array(
+        0.6108 * np.exp((17.27 * tdew_ko) / (tdew_ko + 237.3))
+    )  # EQ 8, units kPa
 
     if tdew_col != -1:  # Dewpoint temperature is provided
-
-        tdew_calc_ea = np.array(0.6108 * np.exp((17.27 * tdew) / (tdew + 237.3)))  # EQ 8, units kPa
+        tdew_calc_ea = np.array(
+            0.6108 * np.exp((17.27 * tdew) / (tdew + 237.3))
+        )  # EQ 8, units kPa
 
     if rhmax_col != -1 and rhmin_col != -1:  # relative humidity is provided
+        eo_tmax = np.array(
+            0.6108 * np.exp((17.27 * tmax) / (tmax + 237.3))
+        )  # units kPa, EQ 7
+        eo_tmin = np.array(
+            0.6108 * np.exp((17.27 * tmin) / (tmin + 237.3))
+        )  # units kPa, EQ 7
 
-        eo_tmax = np.array(0.6108 * np.exp((17.27 * tmax) / (tmax + 237.3)))  # units kPa, EQ 7
-        eo_tmin = np.array(0.6108 * np.exp((17.27 * tmin) / (tmin + 237.3)))  # units kPa, EQ 7
-
-        rh_max_min_calc_ea = np.array(((eo_tmin * (rhmax / 100)) + (eo_tmax * (rhmin / 100))) / 2)  # EQ 11
+        rh_max_min_calc_ea = np.array(
+            ((eo_tmin * (rhmax / 100)) + (eo_tmax * (rhmin / 100))) / 2
+        )  # EQ 11
 
     if rhavg_col != -1:  # RHAvg is provided
-
-        eo_tavg = np.array(0.6108 * np.exp((17.27 * tavg) / (tavg + 237.3)))  # units kPa, EQ 7
+        eo_tavg = np.array(
+            0.6108 * np.exp((17.27 * tavg) / (tavg + 237.3))
+        )  # units kPa, EQ 7
         rh_avg_calc_ea = np.array(eo_tavg * (rhavg / 100))  # EQ 14
 
     for i in range(data_length):
-        if np.isnan(ea[i]):  # Either Ea is provided or is already calculated by the best humidity variable available
-
+        if np.isnan(
+            ea[i]
+        ):  # Either Ea is provided or is already calculated by the best humidity variable available
             if not np.isnan(tdew_calc_ea[i]):
                 compiled_ea[i] = tdew_calc_ea[i]
 
             elif np.isnan(tdew_calc_ea[i]) and not np.isnan(rh_max_min_calc_ea[i]):
                 compiled_ea[i] = rh_max_min_calc_ea[i]
 
-            elif np.isnan(tdew_calc_ea[i]) and np.isnan(rh_max_min_calc_ea[i]) and not np.isnan(rh_avg_calc_ea[i]):
+            elif (
+                np.isnan(tdew_calc_ea[i])
+                and np.isnan(rh_max_min_calc_ea[i])
+                and not np.isnan(rh_avg_calc_ea[i])
+            ):
                 compiled_ea[i] = rh_avg_calc_ea[i]
 
-            elif np.isnan(tdew_calc_ea[i]) and np.isnan(rh_max_min_calc_ea[i]) and np.isnan(rh_avg_calc_ea[i]):
+            elif (
+                np.isnan(tdew_calc_ea[i])
+                and np.isnan(rh_max_min_calc_ea[i])
+                and np.isnan(rh_avg_calc_ea[i])
+            ):
                 compiled_ea[i] = tdew_ko_calc_ea[i]
 
         else:  # ea exists here so no need to fill
@@ -415,4 +565,6 @@ def calc_compiled_ea(tmax, tmin, tavg, ea, tdew, tdew_col,
 
 # This is never run by itself
 if __name__ == "__main__":
-    print("\nThis module is called as a part of the QAQC script, it does nothing by itself.")
+    print(
+        "\nThis module is called as a part of the QAQC script, it does nothing by itself."
+    )
