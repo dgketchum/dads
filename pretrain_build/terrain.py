@@ -11,12 +11,12 @@ These become the pseudo-embeddings for grid cells (replacing station
 autoencoder embeddings in the observation system).
 """
 
+from typing import Optional, Tuple
+
 import numpy as np
-from typing import Tuple, Optional
 
 try:
     import rasterio
-    from rasterio.windows import Window  # noqa: F401
 
     HAS_RASTERIO = True
 except ImportError:

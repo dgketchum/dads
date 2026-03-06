@@ -1,13 +1,15 @@
 """
 Master grid definition for DADS data cube.
 
-Defines the unified 1km WGS84 coordinate system used by all cube layers.
-Provides utilities for coordinate conversion, cell lookup, and spatial queries.
+Defines the unified 1km EPSG:5070 (Albers Equal Area Conic) coordinate system
+used by all cube layers. Provides utilities for coordinate conversion, cell
+lookup, and spatial queries.
 """
 
-import numpy as np
 from dataclasses import dataclass, field
-from typing import Tuple, Optional, Union
+from typing import Optional, Tuple, Union
+
+import numpy as np
 
 try:
     from affine import Affine
@@ -23,160 +25,336 @@ try:
 except ImportError:
     HAS_SKLEARN = False
 
+try:
+    from pyproj import Transformer
+
+    HAS_PYPROJ = True
+except ImportError:
+    HAS_PYPROJ = False
+
+
+def _get_transformers():
+    """Lazy-init pyproj Transformer pair (5070<->4326, always_xy=True)."""
+    if not HAS_PYPROJ:
+        raise ImportError("pyproj required for coordinate transformations")
+    to_geo = Transformer.from_crs("EPSG:5070", "EPSG:4326", always_xy=True)
+    to_proj = Transformer.from_crs("EPSG:4326", "EPSG:5070", always_xy=True)
+    return to_geo, to_proj
+
+
+def _geographic_bounds_to_albers(w, s, e, n, resolution=1000.0):
+    """
+    Convert geographic (lon/lat) bounds to EPSG:5070, snapped outward to resolution.
+
+    Densely samples the boundary to find the enclosing rectangle in projected
+    coordinates, then snaps outward to the nearest resolution step.
+
+    Args:
+        w, s, e, n: Geographic bounds (west, south, east, north) in degrees
+        resolution: Grid resolution in meters for snapping
+
+    Returns:
+        (x_min, y_min, x_max, y_max) in EPSG:5070 meters, snapped to resolution
+    """
+    _, to_proj = _get_transformers()
+
+    # Densely sample the geographic boundary
+    n_pts = 200
+    lons = np.concatenate(
+        [
+            np.linspace(w, e, n_pts),  # south edge
+            np.full(n_pts, e),  # east edge
+            np.linspace(e, w, n_pts),  # north edge
+            np.full(n_pts, w),  # west edge
+        ]
+    )
+    lats = np.concatenate(
+        [
+            np.full(n_pts, s),  # south edge
+            np.linspace(s, n, n_pts),  # east edge
+            np.full(n_pts, n),  # north edge
+            np.linspace(n, s, n_pts),  # west edge
+        ]
+    )
+
+    # always_xy: (lon, lat) -> (easting, northing)
+    xs, ys = to_proj.transform(lons, lats)
+
+    # Enclosing rectangle
+    x_min, x_max = xs.min(), xs.max()
+    y_min, y_max = ys.min(), ys.max()
+
+    # Snap outward to resolution
+    x_min = np.floor(x_min / resolution) * resolution
+    y_min = np.floor(y_min / resolution) * resolution
+    x_max = np.ceil(x_max / resolution) * resolution
+    y_max = np.ceil(y_max / resolution) * resolution
+
+    return (x_min, y_min, x_max, y_max)
+
 
 @dataclass
 class MasterGrid:
     """
     Master grid definition for the data cube.
 
-    Defines a regular lat/lon grid in WGS84 (EPSG:4326) at approximately
-    1km resolution. All data layers are resampled to this common grid.
+    Defines a regular grid in EPSG:5070 (Albers Equal Area Conic) at 1000m
+    resolution. All data layers are resampled to this common grid.
 
     Attributes:
-        bounds: Spatial domain as (west, south, east, north) in degrees
-        resolution_deg: Grid resolution in degrees
+        bounds: Spatial domain as (x_min, y_min, x_max, y_max) in EPSG:5070 meters
+        resolution: Grid resolution in meters (default 1000.0)
         crs: Coordinate reference system string
 
     The grid is defined with:
-        - Origin at northwest corner (top-left)
-        - Latitude decreasing southward (row index increases)
-        - Longitude increasing eastward (column index increases)
+        - Origin at upper-left (x_min, y_max)
+        - y (northing) decreasing southward (row index increases)
+        - x (easting) increasing eastward (column index increases)
         - Cell coordinates refer to cell centers
     """
 
-    bounds: Tuple[float, float, float, float] = (-125.0, 24.0, -66.0, 50.0)
-    resolution_deg: float = 0.008333333  # ~1km (1/120 degree)
-    crs: str = "EPSG:4326"
+    bounds: Tuple[float, float, float, float] = (
+        -2361000.0,
+        258000.0,
+        2264000.0,
+        3177000.0,
+    )
+    resolution: float = 1000.0
+    crs: str = "EPSG:5070"
 
-    # Computed arrays (lazy initialization)
+    # Cached arrays (lazy initialization)
+    _y: np.ndarray = field(default=None, repr=False, compare=False)
+    _x: np.ndarray = field(default=None, repr=False, compare=False)
     _lat: np.ndarray = field(default=None, repr=False, compare=False)
     _lon: np.ndarray = field(default=None, repr=False, compare=False)
     _tree: "BallTree" = field(default=None, repr=False, compare=False)
+    _valid_indices: np.ndarray = field(default=None, repr=False, compare=False)
+    _to_geo: object = field(default=None, repr=False, compare=False)
+    _to_proj: object = field(default=None, repr=False, compare=False)
 
     def __post_init__(self):
-        # Ensure bounds are in correct order
-        w, s, e, n = self.bounds
-        assert w < e, "West must be less than East"
-        assert s < n, "South must be less than North"
+        x_min, y_min, x_max, y_max = self.bounds
+        assert x_min < x_max, "x_min must be less than x_max"
+        assert y_min < y_max, "y_min must be less than y_max"
+
+    def _ensure_transformers(self):
+        """Lazy-init pyproj transformers."""
+        if self._to_geo is None:
+            self._to_geo, self._to_proj = _get_transformers()
 
     @property
-    def west(self) -> float:
-        return self.bounds[0]
+    def n_y(self) -> int:
+        """Number of rows (northing cells)."""
+        x_min, y_min, x_max, y_max = self.bounds
+        return int(round((y_max - y_min) / self.resolution))
 
     @property
-    def south(self) -> float:
-        return self.bounds[1]
-
-    @property
-    def east(self) -> float:
-        return self.bounds[2]
-
-    @property
-    def north(self) -> float:
-        return self.bounds[3]
-
-    @property
-    def n_lat(self) -> int:
-        """Number of latitude cells (rows)."""
-        return int(round((self.north - self.south) / self.resolution_deg))
-
-    @property
-    def n_lon(self) -> int:
-        """Number of longitude cells (columns)."""
-        return int(round((self.east - self.west) / self.resolution_deg))
+    def n_x(self) -> int:
+        """Number of columns (easting cells)."""
+        x_min, y_min, x_max, y_max = self.bounds
+        return int(round((x_max - x_min) / self.resolution))
 
     @property
     def shape(self) -> Tuple[int, int]:
-        """Grid shape as (n_lat, n_lon) = (rows, cols)."""
-        return (self.n_lat, self.n_lon)
+        """Grid shape as (n_y, n_x) = (rows, cols)."""
+        return (self.n_y, self.n_x)
 
     @property
     def height(self) -> int:
-        """Alias for n_lat (rasterio convention)."""
-        return self.n_lat
+        """Alias for n_y (rasterio convention)."""
+        return self.n_y
 
     @property
     def width(self) -> int:
-        """Alias for n_lon (rasterio convention)."""
-        return self.n_lon
+        """Alias for n_x (rasterio convention)."""
+        return self.n_x
 
     @property
     def n_cells(self) -> int:
         """Total number of grid cells."""
-        return self.n_lat * self.n_lon
+        return self.n_y * self.n_x
+
+    @property
+    def y(self) -> np.ndarray:
+        """
+        1D array of northing values (cell centers).
+
+        Ordered from north to south (decreasing).
+        Shape: (n_y,)
+        """
+        if self._y is None:
+            x_min, y_min, x_max, y_max = self.bounds
+            half_res = self.resolution / 2
+            self._y = np.linspace(
+                y_max - half_res,
+                y_min + half_res,
+                self.n_y,
+            )
+        return self._y
+
+    @property
+    def x(self) -> np.ndarray:
+        """
+        1D array of easting values (cell centers).
+
+        Ordered from west to east (increasing).
+        Shape: (n_x,)
+        """
+        if self._x is None:
+            x_min, y_min, x_max, y_max = self.bounds
+            half_res = self.resolution / 2
+            self._x = np.linspace(
+                x_min + half_res,
+                x_max - half_res,
+                self.n_x,
+            )
+        return self._x
 
     @property
     def lat(self) -> np.ndarray:
         """
-        1D array of latitude values (cell centers).
+        2D array of latitude values (cell centers) via pyproj.
 
-        Ordered from north to south (decreasing).
-        Shape: (n_lat,)
+        Shape: (n_y, n_x)
         """
         if self._lat is None:
-            # Cell centers, starting from north
-            half_res = self.resolution_deg / 2
-            self._lat = np.linspace(
-                self.north - half_res, self.south + half_res, self.n_lat
-            )
+            self._compute_latlon()
         return self._lat
 
     @property
     def lon(self) -> np.ndarray:
         """
-        1D array of longitude values (cell centers).
+        2D array of longitude values (cell centers) via pyproj.
 
-        Ordered from west to east (increasing).
-        Shape: (n_lon,)
+        Shape: (n_y, n_x)
         """
         if self._lon is None:
-            half_res = self.resolution_deg / 2
-            self._lon = np.linspace(
-                self.west + half_res, self.east - half_res, self.n_lon
-            )
+            self._compute_latlon()
         return self._lon
+
+    def _compute_latlon(self):
+        """Compute 2D lat/lon arrays from projected y/x via pyproj."""
+        self._ensure_transformers()
+        xx, yy = np.meshgrid(self.x, self.y)
+        # always_xy: (easting, northing) -> (lon, lat)
+        lon_2d, lat_2d = self._to_geo.transform(xx, yy)
+        self._lat = lat_2d.astype(np.float64)
+        self._lon = lon_2d.astype(np.float64)
 
     @property
     def transform(self) -> "Affine":
         """
         Affine transform for georeferencing (rasterio convention).
 
-        Maps pixel coordinates to geographic coordinates.
-        Origin at top-left (northwest corner).
+        Maps pixel coordinates to projected coordinates.
+        Origin at upper-left (x_min, y_max).
         """
         if not HAS_AFFINE:
             raise ImportError("affine package required for transform property")
 
+        x_min, y_min, x_max, y_max = self.bounds
         return Affine(
-            self.resolution_deg,  # a: pixel width
+            self.resolution,  # a: pixel width in meters
             0.0,  # b: row rotation (0 for north-up)
-            self.west,  # c: x-coordinate of upper-left corner
+            x_min,  # c: x-coordinate of upper-left corner
             0.0,  # d: column rotation (0 for north-up)
-            -self.resolution_deg,  # e: pixel height (negative for north-up)
-            self.north,  # f: y-coordinate of upper-left corner
+            -self.resolution,  # e: pixel height (negative for north-up)
+            y_max,  # f: y-coordinate of upper-left corner
         )
 
-    def rowcol_to_latlon(
+    def rowcol_to_xy(
         self,
         row: Union[int, np.ndarray],
         col: Union[int, np.ndarray],
     ) -> Tuple[Union[float, np.ndarray], Union[float, np.ndarray]]:
         """
-        Convert row/col indices to lat/lon coordinates (cell centers).
+        Convert row/col indices to (easting, northing) coordinates (cell centers).
 
         Args:
             row: Row index or array of row indices
             col: Column index or array of column indices
 
         Returns:
-            (lat, lon) tuple of coordinates
+            (easting, northing) tuple of coordinates
         """
         row = np.asarray(row)
         col = np.asarray(col)
+        return self.x[col], self.y[row]
 
-        lat = self.lat[row]
-        lon = self.lon[col]
+    def xy_to_rowcol(
+        self,
+        easting: Union[float, np.ndarray],
+        northing: Union[float, np.ndarray],
+    ) -> Tuple[Union[int, np.ndarray], Union[int, np.ndarray]]:
+        """
+        Convert (easting, northing) to row/col indices (nearest cell).
 
+        Args:
+            easting: Easting or array of eastings
+            northing: Northing or array of northings
+
+        Returns:
+            (row, col) tuple of indices
+        """
+        easting = np.asarray(easting, dtype=np.float64)
+        northing = np.asarray(northing, dtype=np.float64)
+
+        x_min, y_min, x_max, y_max = self.bounds
+
+        # Row: northing decreases with row index
+        row = np.round((y_max - northing) / self.resolution - 0.5).astype(int)
+        row = np.clip(row, 0, self.n_y - 1)
+
+        # Col: easting increases with col index
+        col = np.round((easting - x_min) / self.resolution - 0.5).astype(int)
+        col = np.clip(col, 0, self.n_x - 1)
+
+        return row, col
+
+    def latlon_to_xy(
+        self,
+        lat: Union[float, np.ndarray],
+        lon: Union[float, np.ndarray],
+    ) -> Tuple[Union[float, np.ndarray], Union[float, np.ndarray]]:
+        """
+        Convert (lat, lon) to (easting, northing) via pyproj.
+
+        Args:
+            lat: Latitude(s)
+            lon: Longitude(s)
+
+        Returns:
+            (easting, northing)
+        """
+        self._ensure_transformers()
+        # always_xy: (lon, lat) -> (easting, northing)
+        easting, northing = self._to_proj.transform(
+            np.asarray(lon, dtype=np.float64),
+            np.asarray(lat, dtype=np.float64),
+        )
+        return easting, northing
+
+    def xy_to_latlon(
+        self,
+        easting: Union[float, np.ndarray],
+        northing: Union[float, np.ndarray],
+    ) -> Tuple[Union[float, np.ndarray], Union[float, np.ndarray]]:
+        """
+        Convert (easting, northing) to (lat, lon) via pyproj.
+
+        Args:
+            easting: Easting(s)
+            northing: Northing(s)
+
+        Returns:
+            (lat, lon)
+        """
+        self._ensure_transformers()
+        # always_xy: (easting, northing) -> (lon, lat)
+        lon, lat = self._to_geo.transform(
+            np.asarray(easting, dtype=np.float64),
+            np.asarray(northing, dtype=np.float64),
+        )
         return lat, lon
 
     def latlon_to_rowcol(
@@ -185,27 +363,35 @@ class MasterGrid:
         lon: Union[float, np.ndarray],
     ) -> Tuple[Union[int, np.ndarray], Union[int, np.ndarray]]:
         """
-        Convert lat/lon coordinates to row/col indices (nearest cell).
+        Convert (lat, lon) to row/col indices via projection then snapping.
 
         Args:
-            lat: Latitude or array of latitudes
-            lon: Longitude or array of longitudes
+            lat: Latitude(s)
+            lon: Longitude(s)
 
         Returns:
             (row, col) tuple of indices
         """
-        lat = np.asarray(lat)
-        lon = np.asarray(lon)
+        easting, northing = self.latlon_to_xy(lat, lon)
+        return self.xy_to_rowcol(easting, northing)
 
-        # Compute row (latitude decreases with row index)
-        row = np.round((self.north - lat) / self.resolution_deg - 0.5).astype(int)
-        row = np.clip(row, 0, self.n_lat - 1)
+    def rowcol_to_latlon(
+        self,
+        row: Union[int, np.ndarray],
+        col: Union[int, np.ndarray],
+    ) -> Tuple[Union[float, np.ndarray], Union[float, np.ndarray]]:
+        """
+        Convert row/col indices to (lat, lon) via cell center then inverse projection.
 
-        # Compute column (longitude increases with col index)
-        col = np.round((lon - self.west) / self.resolution_deg - 0.5).astype(int)
-        col = np.clip(col, 0, self.n_lon - 1)
+        Args:
+            row: Row index or array of row indices
+            col: Column index or array of column indices
 
-        return row, col
+        Returns:
+            (lat, lon) tuple of coordinates
+        """
+        easting, northing = self.rowcol_to_xy(row, col)
+        return self.xy_to_latlon(easting, northing)
 
     def is_valid_cell(
         self,
@@ -225,38 +411,36 @@ class MasterGrid:
         row = np.asarray(row)
         col = np.asarray(col)
 
-        valid = (row >= 0) & (row < self.n_lat) & (col >= 0) & (col < self.n_lon)
+        valid = (row >= 0) & (row < self.n_y) & (col >= 0) & (col < self.n_x)
         return valid
 
     def _build_tree(self, valid_mask: Optional[np.ndarray] = None):
         """
-        Build BallTree for fast spatial queries.
+        Build BallTree for fast spatial queries using euclidean metric
+        on projected (easting, northing) coordinates.
 
         Args:
-            valid_mask: Optional (n_lat, n_lon) boolean mask of valid cells
+            valid_mask: Optional (n_y, n_x) boolean mask of valid cells
         """
         if not HAS_SKLEARN:
             raise ImportError("sklearn required for spatial queries")
 
-        # Create coordinate pairs for all cells
-        lat_grid, lon_grid = np.meshgrid(self.lat, self.lon, indexing="ij")
+        x_grid, y_grid = np.meshgrid(self.x, self.y)
 
         if valid_mask is not None:
             valid_rows, valid_cols = np.where(valid_mask)
             coords = np.column_stack(
                 [
-                    lat_grid[valid_rows, valid_cols],
-                    lon_grid[valid_rows, valid_cols],
+                    x_grid[valid_rows, valid_cols],
+                    y_grid[valid_rows, valid_cols],
                 ]
             )
             self._valid_indices = np.column_stack([valid_rows, valid_cols])
         else:
-            coords = np.column_stack([lat_grid.ravel(), lon_grid.ravel()])
+            coords = np.column_stack([x_grid.ravel(), y_grid.ravel()])
             self._valid_indices = None
 
-        # Convert to radians for haversine
-        coords_rad = np.deg2rad(coords)
-        self._tree = BallTree(coords_rad, metric="haversine")
+        self._tree = BallTree(coords, metric="euclidean")
 
     def query_nearest(
         self,
@@ -273,24 +457,22 @@ class MasterGrid:
             k: Number of neighbors
 
         Returns:
-            (indices, distances_km) where indices are into valid_indices if masked
+            (indices, distances_m) where distances are in meters
         """
         if self._tree is None:
             self._build_tree()
 
-        point = np.deg2rad([[lat, lon]])
-        dist_rad, idx = self._tree.query(point, k=k)
+        easting, northing = self.latlon_to_xy(lat, lon)
+        point = np.array([[easting, northing]])
+        dist, idx = self._tree.query(point, k=k)
 
-        # Convert to km
-        dist_km = dist_rad[0] * 6371.0
-
-        return idx[0], dist_km
+        return idx[0], dist[0]
 
     def query_radius(
         self,
         lat: float,
         lon: float,
-        radius_km: float,
+        radius_m: float,
     ) -> Tuple[np.ndarray, np.ndarray]:
         """
         Find all grid cells within radius of a point.
@@ -298,32 +480,31 @@ class MasterGrid:
         Args:
             lat: Query latitude
             lon: Query longitude
-            radius_km: Search radius in kilometers
+            radius_m: Search radius in meters
 
         Returns:
-            (indices, distances_km)
+            (indices, distances_m)
         """
         if self._tree is None:
             self._build_tree()
 
-        point = np.deg2rad([[lat, lon]])
-        radius_rad = radius_km / 6371.0
+        easting, northing = self.latlon_to_xy(lat, lon)
+        point = np.array([[easting, northing]])
 
-        idx, dist_rad = self._tree.query_radius(
-            point, r=radius_rad, return_distance=True
-        )
+        idx, dist = self._tree.query_radius(point, r=radius_m, return_distance=True)
 
-        dist_km = dist_rad[0] * 6371.0
-        return idx[0], dist_km
+        return idx[0], dist[0]
 
     def create_coords_dataset(self) -> dict:
         """
         Create coordinate arrays for zarr store initialization.
 
         Returns:
-            Dict with 'lat', 'lon' arrays suitable for zarr
+            Dict with 'y' (1D), 'x' (1D), 'lat' (2D), 'lon' (2D)
         """
         return {
+            "y": self.y.astype(np.float64),
+            "x": self.x.astype(np.float64),
             "lat": self.lat.astype(np.float64),
             "lon": self.lon.astype(np.float64),
         }
@@ -332,7 +513,7 @@ class MasterGrid:
         """Serialize grid parameters to dict."""
         return {
             "bounds": list(self.bounds),
-            "resolution_deg": self.resolution_deg,
+            "resolution": self.resolution,
             "crs": self.crs,
             "shape": list(self.shape),
             "n_cells": self.n_cells,
@@ -343,48 +524,37 @@ class MasterGrid:
         """Create MasterGrid from dict."""
         return cls(
             bounds=tuple(d["bounds"]),
-            resolution_deg=d["resolution_deg"],
-            crs=d.get("crs", "EPSG:4326"),
+            resolution=d["resolution"],
+            crs=d.get("crs", "EPSG:5070"),
         )
 
     def __repr__(self) -> str:
         return (
             f"MasterGrid(bounds={self.bounds}, "
-            f"resolution={self.resolution_deg:.6f}°, "
+            f"resolution={self.resolution:.0f}m, "
             f"shape={self.shape}, "
             f"n_cells={self.n_cells:,})"
         )
 
 
 def create_conus_grid() -> MasterGrid:
-    """Create default CONUS grid at 1km resolution."""
-    return MasterGrid(
-        bounds=(-125.0, 24.0, -66.0, 50.0),
-        resolution_deg=0.008333333,
-        crs="EPSG:4326",
-    )
+    """Create default CONUS grid at 1km resolution in EPSG:5070."""
+    bounds = _geographic_bounds_to_albers(-125.0, 24.0, -66.0, 50.0)
+    return MasterGrid(bounds=bounds, resolution=1000.0, crs="EPSG:5070")
 
 
-def create_western_us_grid() -> MasterGrid:
-    """Create Western US grid at 1km resolution."""
-    return MasterGrid(
-        bounds=(-125.0, 31.0, -102.0, 49.0),
-        resolution_deg=0.008333333,
-        crs="EPSG:4326",
-    )
+def create_test_region_grid() -> MasterGrid:
+    """Create Pacific NW test region (WA/OR/ID/MT) at 1km in EPSG:5070."""
+    bounds = _geographic_bounds_to_albers(-125.0, 42.0, -104.0, 49.0)
+    return MasterGrid(bounds=bounds, resolution=1000.0, crs="EPSG:5070")
 
 
 if __name__ == "__main__":
-    # Demo
     grid = create_conus_grid()
     print(grid)
     print("\nCoordinate arrays:")
-    print(
-        f"  lat: [{grid.lat[0]:.4f}, ..., {grid.lat[-1]:.4f}] ({len(grid.lat)} values)"
-    )
-    print(
-        f"  lon: [{grid.lon[0]:.4f}, ..., {grid.lon[-1]:.4f}] ({len(grid.lon)} values)"
-    )
+    print(f"  y: [{grid.y[0]:.0f}, ..., {grid.y[-1]:.0f}] ({len(grid.y)} values)")
+    print(f"  x: [{grid.x[0]:.0f}, ..., {grid.x[-1]:.0f}] ({len(grid.x)} values)")
 
     # Test coordinate conversion
     test_lat, test_lon = 40.0, -105.0

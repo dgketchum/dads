@@ -8,9 +8,9 @@ The output format matches the observation pipeline (DadsDataset) to enable
 seamless model transfer from pre-training to fine-tuning.
 """
 
-from pathlib import Path
-from typing import Tuple, Dict, Optional, List, Union
 import logging
+from pathlib import Path
+from typing import Dict, List, Optional, Tuple, Union
 
 import numpy as np
 
@@ -28,13 +28,13 @@ try:
 except ImportError:
     HAS_XARRAY = False
 
-from cube.grid import MasterGrid
 from cube.config import (
     CDR_FEATURES,
     LANDSAT_FEATURES,
-    TERRAIN_FEATURES,
     MET_FEATURES,
+    TERRAIN_FEATURES,
 )
+from cube.grid import MasterGrid
 
 logger = logging.getLogger(__name__)
 
@@ -91,9 +91,13 @@ class DataCubeExtractor:
         # Open zarr store
         self.store = zarr.open(str(self.cube_path), mode="r")
 
-        # Load coordinate arrays
-        self.lat = self.store["lat"][:]
-        self.lon = self.store["lon"][:]
+        # Load 1D projected coordinate arrays
+        self.y_coords = self.store["y"][:]
+        self.x_coords = self.store["x"][:]
+
+        # Load 2D geographic coordinate arrays
+        self.lat_2d = self.store["lat"][:]
+        self.lon_2d = self.store["lon"][:]
 
         # Load time coordinate if available
         if "time" in self.store:
@@ -107,16 +111,20 @@ class DataCubeExtractor:
             self.time = None
             self._time_to_idx = None
 
-        # Build grid from store metadata or coordinates
-        self.grid = MasterGrid(
-            bounds=(
-                float(self.lon[0] - (self.lon[1] - self.lon[0]) / 2),
-                float(self.lat[-1] - (self.lat[0] - self.lat[1]) / 2),
-                float(self.lon[-1] + (self.lon[1] - self.lon[0]) / 2),
-                float(self.lat[0] + (self.lat[0] - self.lat[1]) / 2),
-            ),
-            resolution_deg=float(abs(self.lat[1] - self.lat[0])),
+        # Reconstruct grid from y/x arrays
+        resolution = (
+            float(abs(self.y_coords[1] - self.y_coords[0]))
+            if len(self.y_coords) > 1
+            else 1000.0
         )
+        half_res = resolution / 2
+        bounds = (
+            float(self.x_coords[0] - half_res),
+            float(self.y_coords[-1] - half_res),
+            float(self.x_coords[-1] + half_res),
+            float(self.y_coords[0] + half_res),
+        )
+        self.grid = MasterGrid(bounds=bounds, resolution=resolution)
 
         # Feature configuration
         self.terrain_features = TERRAIN_FEATURES
@@ -233,9 +241,9 @@ class DataCubeExtractor:
         doy_sin = np.sin(2 * np.pi * doys / 365.25).astype(np.float32)
         doy_cos = np.cos(2 * np.pi * doys / 365.25).astype(np.float32)
 
-        # Get lat/lon (static)
-        lat_val = float(self.lat[row])
-        lon_val = float(self.lon[col])
+        # Get lat/lon from 2D arrays
+        lat_val = float(self.lat_2d[row, col])
+        lon_val = float(self.lon_2d[row, col])
         lat_arr = np.full(seq_len, lat_val, dtype=np.float32)
         lon_arr = np.full(seq_len, lon_val, dtype=np.float32)
 
@@ -289,7 +297,7 @@ class DataCubeExtractor:
             if self._ds_daily is not None and var in self._ds_daily:
                 return (
                     self._ds_daily[var]
-                    .isel(lat=row, lon=col, time=slice(start_idx, end_idx))
+                    .isel(y=row, x=col, time=slice(start_idx, end_idx))
                     .values
                 )
             elif "daily" in self.store and var in self.store["daily"]:
@@ -308,7 +316,7 @@ class DataCubeExtractor:
         for feat in self.terrain_features:
             try:
                 if self._ds_static is not None and feat in self._ds_static:
-                    val = float(self._ds_static[feat].isel(lat=row, lon=col).values)
+                    val = float(self._ds_static[feat].isel(y=row, x=col).values)
                 elif "static" in self.store and feat in self.store["static"]:
                     val = float(self.store["static"][feat][row, col])
                 else:
@@ -339,9 +347,7 @@ class DataCubeExtractor:
             # DOY is 1-indexed, zarr is 0-indexed
             doy_indices = doys - 1
             if self._ds_doy is not None and "rsun" in self._ds_doy:
-                return (
-                    self._ds_doy["rsun"].isel(lat=row, lon=col, doy=doy_indices).values
-                )
+                return self._ds_doy["rsun"].isel(y=row, x=col, doy=doy_indices).values
             elif "doy_indexed" in self.store and "rsun" in self.store["doy_indexed"]:
                 return self.store["doy_indexed"]["rsun"][doy_indices, row, col]
         except Exception as e:
@@ -364,7 +370,7 @@ class DataCubeExtractor:
                 if self._ds_daily is not None and feat in self._ds_daily:
                     cdr_seq[:, i] = (
                         self._ds_daily[feat]
-                        .isel(lat=row, lon=col, time=slice(start_idx, end_idx))
+                        .isel(y=row, x=col, time=slice(start_idx, end_idx))
                         .values
                     )
                 elif "daily" in self.store and feat in self.store["daily"]:
@@ -386,12 +392,28 @@ class DataCubeExtractor:
         seq_len = len(dates)
         landsat_seq = np.zeros((seq_len, len(self.landsat_features)), dtype=np.float32)
 
-        # For now, return zeros if composites not available
-        # Full implementation would find nearest composite date
-        if self._ds_composites is None and "composites" not in self.store:
+        if "composites" not in self.store:
             return landsat_seq
 
-        # TODO: Implement composite date matching when Landsat layer is built
+        composites = self.store["composites"]
+
+        # Load composite_time coordinate (days since epoch)
+        if "composite_time" not in self.store:
+            return landsat_seq
+
+        comp_time = self.store["composite_time"][:]
+
+        for t, date in enumerate(dates):
+            day_val = (
+                np.datetime64(date, "D") - np.datetime64("1970-01-01", "D")
+            ).astype(int)
+            nearest_idx = int(np.argmin(np.abs(comp_time - day_val)))
+
+            for f, feat in enumerate(self.landsat_features):
+                if feat in composites:
+                    val = float(composites[feat][nearest_idx, row, col])
+                    landsat_seq[t, f] = val
+
         return landsat_seq
 
     def _empty_sequence(
@@ -433,7 +455,7 @@ class DataCubeExtractor:
 
         # Fallback: return all cells
         rows, cols = np.meshgrid(
-            np.arange(len(self.lat)), np.arange(len(self.lon)), indexing="ij"
+            np.arange(len(self.y_coords)), np.arange(len(self.x_coords)), indexing="ij"
         )
         return np.column_stack([rows.ravel(), cols.ravel()])
 
@@ -446,13 +468,15 @@ class DataCubeExtractor:
             col: Column index
 
         Returns:
-            Dict with lat, lon, terrain features
+            Dict with lat, lon, y, x, terrain features
         """
         return {
             "row": row,
             "col": col,
-            "lat": float(self.lat[row]),
-            "lon": float(self.lon[col]),
+            "y": float(self.y_coords[row]),
+            "x": float(self.x_coords[col]),
+            "lat": float(self.lat_2d[row, col]),
+            "lon": float(self.lon_2d[row, col]),
             "terrain": self._get_terrain(row, col),
         }
 
@@ -493,7 +517,7 @@ class DataCubeExtractor:
         return (
             f"DataCubeExtractor("
             f"path='{self.cube_path}', "
-            f"shape=({len(self.lat)}, {len(self.lon)}), "
+            f"shape=({len(self.y_coords)}, {len(self.x_coords)}), "
             f"n_times={len(self.time) if self.time is not None else 0})"
         )
 

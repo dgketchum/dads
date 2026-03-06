@@ -14,10 +14,16 @@ The output format matches DadsDataset exactly:
     (graph, y, neighbor_seq, neighbor_mask, target_seq)
 """
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Optional, Tuple
+
+if TYPE_CHECKING:
+    from models.components.scalers import MinMaxScaler
+
 import numpy as np
 import torch
 from torch.utils.data import Dataset
-from typing import Tuple, Optional
 
 try:
     from torch_geometric.data import Data
@@ -26,10 +32,10 @@ try:
 except ImportError:
     HAS_TORCH_GEOMETRIC = False
 
+from pretrain_build.config import PretrainConfig
+from pretrain_build.grid_index import GridIndex
 from pretrain_build.sampler import EpochSample
 from pretrain_build.sequences import SequenceExtractor
-from pretrain_build.grid_index import GridIndex
-from pretrain_build.config import PretrainConfig
 
 
 class PretrainDataset(Dataset):
@@ -51,7 +57,7 @@ class PretrainDataset(Dataset):
         seq_extractor: SequenceExtractor,
         config: PretrainConfig,
         variable: str,
-        scaler: "MinMaxScaler",  # noqa: F821
+        scaler: "MinMaxScaler",
         windows_per_cell: int = 100,
         seed: Optional[int] = None,
         inject_missingness: bool = True,
@@ -373,7 +379,7 @@ class IterablePretrainDataset(torch.utils.data.IterableDataset):
         seq_extractor: SequenceExtractor,
         config: PretrainConfig,
         variable: str,
-        scaler: "MinMaxScaler",  # noqa: F821
+        scaler: "MinMaxScaler",
         samples_per_epoch: int = 100000,
         seed: Optional[int] = None,
         inject_missingness: bool = True,

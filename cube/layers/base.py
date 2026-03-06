@@ -5,12 +5,16 @@ All layer builders inherit from BaseLayer and implement the build() method
 to construct their specific data layer from source files.
 """
 
+import importlib.util
+import logging
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import Tuple, Dict, List, Optional, Any
-import logging
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
+
+from cube.config import COMPRESSION, CubeConfig
+from cube.grid import MasterGrid
 
 try:
     import zarr
@@ -19,15 +23,7 @@ try:
 except ImportError:
     HAS_ZARR = False
 
-try:
-    import xarray as xr  # noqa: F401
-
-    HAS_XARRAY = True
-except ImportError:
-    HAS_XARRAY = False
-
-from cube.grid import MasterGrid
-from cube.config import CubeConfig, COMPRESSION
+HAS_XARRAY = importlib.util.find_spec("xarray") is not None
 
 logger = logging.getLogger(__name__)
 
@@ -62,7 +58,7 @@ class BaseLayer(ABC):
             if grid is not None
             else MasterGrid(
                 bounds=config.bounds,
-                resolution_deg=config.resolution_deg,
+                resolution=config.resolution,
                 crs=config.crs,
             )
         )
@@ -91,9 +87,9 @@ class BaseLayer(ABC):
         Dimension names for this layer.
 
         Examples:
-            - ('lat', 'lon') for static layers
-            - ('time', 'lat', 'lon') for daily time series
-            - ('doy', 'lat', 'lon') for DOY-indexed layers
+            - ('y', 'x') for static layers
+            - ('time', 'y', 'x') for daily time series
+            - ('doy', 'y', 'x') for DOY-indexed layers
         """
         pass
 
@@ -184,10 +180,10 @@ class BaseLayer(ABC):
         """Get expected array shape based on dimensions."""
         shape = []
         for dim in self.dimensions:
-            if dim == "lat":
-                shape.append(self.grid.n_lat)
-            elif dim == "lon":
-                shape.append(self.grid.n_lon)
+            if dim == "y":
+                shape.append(self.grid.n_y)
+            elif dim == "x":
+                shape.append(self.grid.n_x)
             elif dim == "doy":
                 shape.append(365)
             elif dim == "time":
@@ -198,18 +194,19 @@ class BaseLayer(ABC):
                 end = pd.Timestamp(self.config.end_date)
                 shape.append((end - start).days + 1)
             elif dim == "composite_time":
-                # 16-day composites
                 import pandas as pd
+
+                from cube.config import N_PERIODS_PER_YEAR
 
                 start = pd.Timestamp(self.config.start_date)
                 end = pd.Timestamp(self.config.end_date)
-                n_days = (end - start).days + 1
-                shape.append(n_days // 16 + 1)
+                n_years = end.year - start.year + 1
+                shape.append(n_years * N_PERIODS_PER_YEAR)
             else:
                 raise ValueError(f"Unknown dimension: {dim}")
         return tuple(shape)
 
-    def _open_store(self, mode: str = "a") -> zarr.hierarchy.Group:
+    def _open_store(self, mode: str = "a") -> "zarr.Group":
         """
         Open or create the zarr store.
 
@@ -222,7 +219,7 @@ class BaseLayer(ABC):
         self.store_path.parent.mkdir(parents=True, exist_ok=True)
         return zarr.open(str(self.store_path), mode=mode)
 
-    def _ensure_group(self, store: zarr.hierarchy.Group) -> zarr.hierarchy.Group:
+    def _ensure_group(self, store: "zarr.Group") -> "zarr.Group":
         """
         Ensure layer group exists in store.
 
@@ -236,11 +233,11 @@ class BaseLayer(ABC):
 
     def _create_array(
         self,
-        group: zarr.hierarchy.Group,
+        group: "zarr.Group",
         name: str,
         shape: Tuple[int, ...],
         overwrite: bool = False,
-    ) -> zarr.Array:
+    ) -> "zarr.Array":
         """
         Create a zarr array in the group.
 
@@ -262,18 +259,18 @@ class BaseLayer(ABC):
             shape=shape,
             chunks=chunks,
             dtype=self.dtype,
-            compressor=self.compression,
+            compressors=self.compression,
             fill_value=self.fill_value,
             overwrite=overwrite,
         )
 
     def _write_array(
         self,
-        group: zarr.hierarchy.Group,
+        group: "zarr.Group",
         name: str,
         data: np.ndarray,
         overwrite: bool = False,
-    ) -> zarr.Array:
+    ) -> "zarr.Array":
         """
         Write data to a zarr array.
 
@@ -292,42 +289,75 @@ class BaseLayer(ABC):
 
         return group.create_dataset(
             name,
+            shape=data.shape,
             data=data,
             chunks=chunks,
             dtype=self.dtype,
-            compressor=self.compression,
+            compressors=self.compression,
             fill_value=self.fill_value,
             overwrite=overwrite,
         )
 
-    def _write_coords(self, store: zarr.hierarchy.Group) -> None:
+    def _write_coords(self, store: "zarr.Group") -> None:
         """
         Write coordinate arrays to store root.
+
+        Writes 1D y/x as dimension coords and 2D lat/lon as auxiliary coords.
 
         Args:
             store: Root zarr group
         """
-        # Latitude
-        if "lat" not in store:
-            store.create_dataset(
-                "lat",
-                data=self.grid.lat.astype(np.float64),
-                chunks=(len(self.grid.lat),),
+        # 1D projected dimension coords
+        if "y" not in store:
+            arr = store.create_dataset(
+                "y",
+                shape=self.grid.y.astype(np.float64).shape,
+                data=self.grid.y.astype(np.float64),
+                chunks=(len(self.grid.y),),
                 dtype="float64",
             )
+            arr.attrs["standard_name"] = "projection_y_coordinate"
+            arr.attrs["units"] = "m"
+            arr.attrs["axis"] = "Y"
 
-        # Longitude
-        if "lon" not in store:
-            store.create_dataset(
-                "lon",
-                data=self.grid.lon.astype(np.float64),
-                chunks=(len(self.grid.lon),),
+        if "x" not in store:
+            arr = store.create_dataset(
+                "x",
+                shape=self.grid.x.astype(np.float64).shape,
+                data=self.grid.x.astype(np.float64),
+                chunks=(len(self.grid.x),),
                 dtype="float64",
             )
+            arr.attrs["standard_name"] = "projection_x_coordinate"
+            arr.attrs["units"] = "m"
+            arr.attrs["axis"] = "X"
+
+        # 2D auxiliary geographic coords
+        if "lat" not in store:
+            arr = store.create_dataset(
+                "lat",
+                shape=self.grid.lat.astype(np.float64).shape,
+                data=self.grid.lat.astype(np.float64),
+                chunks=(min(256, self.grid.n_y), min(256, self.grid.n_x)),
+                dtype="float64",
+            )
+            arr.attrs["standard_name"] = "latitude"
+            arr.attrs["units"] = "degrees_north"
+
+        if "lon" not in store:
+            arr = store.create_dataset(
+                "lon",
+                shape=self.grid.lon.astype(np.float64).shape,
+                data=self.grid.lon.astype(np.float64),
+                chunks=(min(256, self.grid.n_y), min(256, self.grid.n_x)),
+                dtype="float64",
+            )
+            arr.attrs["standard_name"] = "longitude"
+            arr.attrs["units"] = "degrees_east"
 
     def _write_time_coord(
         self,
-        store: zarr.hierarchy.Group,
+        store: "zarr.Group",
         times: np.ndarray,
     ) -> None:
         """
@@ -342,6 +372,7 @@ class BaseLayer(ABC):
             times_int = times.astype("datetime64[D]").astype(np.int64)
             store.create_dataset(
                 "time",
+                shape=times_int.shape,
                 data=times_int,
                 chunks=(365,),
                 dtype="int64",
@@ -349,7 +380,7 @@ class BaseLayer(ABC):
             store["time"].attrs["units"] = "days since 1970-01-01"
             store["time"].attrs["calendar"] = "standard"
 
-    def _write_doy_coord(self, store: zarr.hierarchy.Group) -> None:
+    def _write_doy_coord(self, store: "zarr.Group") -> None:
         """
         Write DOY coordinate array.
 
@@ -357,12 +388,51 @@ class BaseLayer(ABC):
             store: Root zarr group
         """
         if "doy" not in store:
+            doy_data = np.arange(1, 366, dtype=np.int16)
             store.create_dataset(
                 "doy",
-                data=np.arange(1, 366, dtype=np.int16),
+                shape=doy_data.shape,
+                data=doy_data,
                 chunks=(365,),
                 dtype="int16",
             )
+
+    def _write_composite_time_coord(
+        self,
+        store: "zarr.Group",
+        start_year: int,
+        end_year: int,
+    ) -> None:
+        """
+        Write composite_time coordinate as mid-date of each seasonal period.
+
+        Args:
+            store: Root zarr group
+            start_year: First year (inclusive)
+            end_year: Last year (inclusive)
+        """
+        import pandas as pd
+
+        from cube.config import SEASONAL_PERIODS
+
+        if "composite_time" not in store:
+            dates = []
+            for yr in range(start_year, end_year + 1):
+                for _, start_mmdd, end_mmdd in SEASONAL_PERIODS:
+                    s = pd.Timestamp(f"{yr}-{start_mmdd}")
+                    e = pd.Timestamp(f"{yr}-{end_mmdd}")
+                    dates.append(s + (e - s) / 2)
+
+            times = np.array(dates, dtype="datetime64[D]")
+            arr = store.create_dataset(
+                "composite_time",
+                shape=times.astype(np.int64).shape,
+                data=times.astype(np.int64),
+                chunks=(len(times),),
+                dtype="int64",
+            )
+            arr.attrs["units"] = "days since 1970-01-01"
+            arr.attrs["calendar"] = "standard"
 
     def exists(self) -> bool:
         """Check if this layer already exists in the store."""

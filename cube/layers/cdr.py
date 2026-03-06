@@ -1,6 +1,11 @@
 """
 CDR (Climate Data Record) layer builder for the data cube.
 
+.. deprecated::
+    This module is deprecated. Use ``cube.layers.cdr_native.CDRNativeLayer``
+    instead, which stores CDR at the native 0.05-degree resolution and
+    avoids the broken EPSG:5070 bounds / 1 km resampling issues present here.
+
 Builds daily time series of NOAA CDR AVHRR/VIIRS surface reflectance and
 brightness temperature from NetCDF files.
 
@@ -16,9 +21,14 @@ The layer harmonizes AVHRR and VIIRS variable names and applies basic
 cross-calibration normalization.
 """
 
-from pathlib import Path
-from typing import Dict, List, Tuple, Optional
+from __future__ import annotations
+
 import logging
+from pathlib import Path
+from typing import TYPE_CHECKING, Dict, List, Optional, Tuple
+
+if TYPE_CHECKING:
+    from cube.builders.resampler import GridResampler
 
 import numpy as np
 import pandas as pd
@@ -37,8 +47,8 @@ try:
 except ImportError:
     HAS_ZARR = False
 
+from cube.config import CHUNKS, CubeConfig
 from cube.layers.base import BaseLayer
-from cube.config import CubeConfig, CHUNKS
 
 logger = logging.getLogger(__name__)
 
@@ -65,7 +75,7 @@ class CDRLayer(BaseLayer):
     Handles both AVHRR (1981-2013) and VIIRS (2014-present) sensors,
     harmonizing variable names and applying cross-calibration.
 
-    Output: (time, lat, lon) arrays for sr1, sr2, sr3, bt1, bt2, bt3
+    Output: (time, y, x) arrays for sr1, sr2, sr3, bt1, bt2, bt3
     """
 
     @property
@@ -78,7 +88,7 @@ class CDRLayer(BaseLayer):
 
     @property
     def dimensions(self) -> Tuple[str, ...]:
-        return ("time", "lat", "lon")
+        return ("time", "y", "x")
 
     @property
     def chunks(self) -> Dict[str, int]:
@@ -135,8 +145,8 @@ class CDRLayer(BaseLayer):
         group = self._ensure_group(store)
 
         # Create output arrays for each variable
-        shape = (n_times, self.grid.n_lat, self.grid.n_lon)
-        chunks = (self.chunks["time"], self.chunks["lat"], self.chunks["lon"])
+        shape = (n_times, self.grid.n_y, self.grid.n_x)
+        chunks = (self.chunks["time"], self.chunks["y"], self.chunks["x"])
 
         arrays = {}
         for var in self.variables:
@@ -149,7 +159,7 @@ class CDRLayer(BaseLayer):
                     shape=shape,
                     chunks=chunks,
                     dtype="float32",
-                    compressor=self.compression,
+                    compressors=self.compression,
                     fill_value=np.nan,
                     overwrite=overwrite,
                 )
@@ -226,7 +236,7 @@ class CDRLayer(BaseLayer):
         cdr_dir: Path,
         year: int,
         month: int,
-        resampler: "GridResampler",  # noqa: F821
+        resampler: "GridResampler",
         normalize_viirs: bool = True,
         avhrr_stats: Optional[Dict] = None,
     ) -> Optional[Dict[str, np.ndarray]]:
@@ -299,7 +309,7 @@ class CDRLayer(BaseLayer):
 
             # Resample each timestep
             resampled = np.empty(
-                (len(time_values), self.grid.n_lat, self.grid.n_lon), dtype=np.float32
+                (len(time_values), self.grid.n_y, self.grid.n_x), dtype=np.float32
             )
 
             for t in range(len(time_values)):

@@ -11,22 +11,21 @@ Builds static terrain features from DEM:
 These features match TERRAIN_FEATURES from prep/columns_desc.py.
 """
 
-from pathlib import Path
-from typing import Dict, List, Tuple, Optional
 import logging
+from pathlib import Path
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 
 try:
     import rasterio
-    from rasterio.warp import reproject, Resampling  # noqa: F401
 
     HAS_RASTERIO = True
 except ImportError:
     HAS_RASTERIO = False
 
 try:
-    from scipy.ndimage import uniform_filter, generic_filter  # noqa: F401
+    from scipy.ndimage import uniform_filter
 
     HAS_SCIPY = True
 except ImportError:
@@ -39,8 +38,8 @@ try:
 except ImportError:
     HAS_ZARR = False
 
-from cube.layers.base import BaseLayer
 from cube.config import CHUNKS
+from cube.layers.base import BaseLayer
 
 logger = logging.getLogger(__name__)
 
@@ -95,7 +94,7 @@ class TerrainLayer(BaseLayer):
 
     @property
     def dimensions(self) -> Tuple[str, ...]:
-        return ("lat", "lon")
+        return ("y", "x")
 
     @property
     def chunks(self) -> Dict[str, int]:
@@ -149,6 +148,7 @@ class TerrainLayer(BaseLayer):
         logger.info("Writing land_mask...")
         group.create_dataset(
             "land_mask",
+            shape=land_mask.shape,
             data=land_mask,
             chunks=tuple(self.chunks.values()),
             dtype="uint8",
@@ -197,13 +197,8 @@ class TerrainLayer(BaseLayer):
         resampler = GridResampler(self.grid)
 
         with rasterio.open(dem_path) as src:
-            # Get approximate cell size in meters for slope/aspect calculation
-            # (at grid center latitude)
-            center_lat = (self.grid.north + self.grid.south) / 2
-            # degrees to meters (approximate)
-            cell_size_m = (
-                self.grid.resolution_deg * 111320 * np.cos(np.radians(center_lat))
-            )
+            # Cell size in meters — exact in projected CRS
+            cell_size_m = self.grid.resolution
 
             # Read source nodata
             nodata = src.nodata

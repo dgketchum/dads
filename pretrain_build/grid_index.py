@@ -15,10 +15,11 @@ This allows O(1) random sampling without touching the actual data
 until we need temporal sequences.
 """
 
-import numpy as np
-from pathlib import Path
-from typing import Tuple, Optional
 from dataclasses import dataclass
+from pathlib import Path
+from typing import Optional, Tuple
+
+import numpy as np
 
 try:
     import zarr
@@ -41,7 +42,7 @@ try:
 except ImportError:
     HAS_XARRAY = False
 
-from pretrain_build.config import PretrainConfig, GridSource
+from pretrain_build.config import GridSource, PretrainConfig
 
 
 @dataclass
@@ -364,9 +365,7 @@ class GridIndex:
             var_name = source.variables[0]
             if var_name in ds:
                 print(f"[GridIndex] Checking data availability for {var_name}")
-                # Sample time coverage
-                # Check for valid data at each cell (sample check)
-                # For efficiency, just check a subset of times
+                # Sample time coverage — simplified check
 
                 # This is a simplified check - in practice you might want more thorough validation
                 valid_data_mask = np.ones(len(valid_lats), dtype=bool)

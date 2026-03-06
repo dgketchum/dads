@@ -8,12 +8,17 @@ Input format: Directory with 365 GeoTIFFs, one per DOY, named like:
     - rsun_doy_001.tif, rsun_doy_002.tif, ... rsun_doy_365.tif
     - OR organized by tile subdirectories with irradiance_day_{doy}_{tile}.tif
 
-Output: cube.zarr/doy_indexed/rsun with shape (365, n_lat, n_lon)
+Output: cube.zarr/doy_indexed/rsun with shape (365, n_y, n_x)
 """
 
-from pathlib import Path
-from typing import Dict, List, Tuple, Optional
+from __future__ import annotations
+
 import logging
+from pathlib import Path
+from typing import TYPE_CHECKING, Dict, List, Optional, Tuple
+
+if TYPE_CHECKING:
+    from cube.builders.resampler import GridResampler
 
 import numpy as np
 
@@ -32,8 +37,8 @@ try:
 except ImportError:
     HAS_ZARR = False
 
+from cube.config import CHUNKS, CubeConfig
 from cube.layers.base import BaseLayer
-from cube.config import CubeConfig, CHUNKS
 
 logger = logging.getLogger(__name__)
 
@@ -46,7 +51,7 @@ class RSUNLayer(BaseLayer):
         1. Single directory with files: rsun_doy_{doy:03d}.tif or rsun_{doy}.tif
         2. Tile-organized: {rsun_dir}/{tile}/irradiance_day_{doy}_{tile}.tif
 
-    Output: (365, lat, lon) array of daily total clear-sky irradiance (Wh/m²/day)
+    Output: (365, y, x) array of daily total clear-sky irradiance (Wh/m²/day)
     """
 
     @property
@@ -59,7 +64,7 @@ class RSUNLayer(BaseLayer):
 
     @property
     def dimensions(self) -> Tuple[str, ...]:
-        return ("doy", "lat", "lon")
+        return ("doy", "y", "x")
 
     @property
     def chunks(self) -> Dict[str, int]:
@@ -105,8 +110,8 @@ class RSUNLayer(BaseLayer):
         group = self._ensure_group(store)
 
         # Create output array
-        shape = (365, self.grid.n_lat, self.grid.n_lon)
-        chunks = (self.chunks["doy"], self.chunks["lat"], self.chunks["lon"])
+        shape = (365, self.grid.n_y, self.grid.n_x)
+        chunks = (self.chunks["doy"], self.chunks["y"], self.chunks["x"])
 
         if "rsun" in group and not overwrite:
             logger.info(
@@ -119,7 +124,7 @@ class RSUNLayer(BaseLayer):
             shape=shape,
             chunks=chunks,
             dtype="float32",
-            compressor=self.compression,
+            compressors=self.compression,
             fill_value=np.nan,
             overwrite=overwrite,
         )
@@ -191,7 +196,7 @@ class RSUNLayer(BaseLayer):
         self,
         rsun_dir: Path,
         doy: int,
-        resampler: "GridResampler",  # noqa: F821
+        resampler: "GridResampler",
     ) -> np.ndarray:
         """Load a single DOY from flat file organization."""
         # Try different naming conventions
@@ -213,7 +218,7 @@ class RSUNLayer(BaseLayer):
         self,
         rsun_dir: Path,
         doy: int,
-        resampler: "GridResampler",  # noqa: F821
+        resampler: "GridResampler",
         merge_tiles: bool = True,
     ) -> np.ndarray:
         """Load a single DOY from tile-organized structure."""
@@ -248,7 +253,7 @@ class RSUNLayer(BaseLayer):
     def _merge_and_resample(
         self,
         tile_files: List[Path],
-        resampler: "GridResampler",  # noqa: F821
+        resampler: "GridResampler",
     ) -> np.ndarray:
         """Merge tiles using rasterio.merge then resample to grid."""
 
@@ -279,12 +284,12 @@ class RSUNLayer(BaseLayer):
     def _resample_and_combine(
         self,
         tile_files: List[Path],
-        resampler: "GridResampler",  # noqa: F821
+        resampler: "GridResampler",
     ) -> np.ndarray:
         """Resample each tile independently and combine using nanmean."""
         # Initialize accumulator
-        combined = np.full((self.grid.n_lat, self.grid.n_lon), np.nan, dtype=np.float32)
-        count = np.zeros((self.grid.n_lat, self.grid.n_lon), dtype=np.int32)
+        combined = np.full((self.grid.n_y, self.grid.n_x), np.nan, dtype=np.float32)
+        count = np.zeros((self.grid.n_y, self.grid.n_x), dtype=np.int32)
 
         for filepath in tile_files:
             try:
@@ -347,7 +352,7 @@ class RSUNLayer(BaseLayer):
             doy: Day of year (1-365)
 
         Returns:
-            2D array (lat, lon) of rsun values
+            2D array (y, x) of rsun values
         """
         if not self.store_path.exists():
             raise FileNotFoundError(f"Cube not found: {self.store_path}")

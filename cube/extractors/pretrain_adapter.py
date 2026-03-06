@@ -5,9 +5,12 @@ Provides drop-in replacements for pretrain_build/sequences.py and
 pretrain_build/grid_index.py that source data from the unified cube.
 """
 
-from pathlib import Path
-from typing import Tuple, Optional, Dict
 import logging
+from pathlib import Path
+from typing import TYPE_CHECKING, Dict, Optional, Tuple
+
+if TYPE_CHECKING:
+    from pretrain_build.config import PretrainConfig
 
 import numpy as np
 
@@ -37,7 +40,7 @@ class CubeSequenceExtractor:
     def __init__(
         self,
         cube_path: str,
-        config: "PretrainConfig",  # noqa: F821
+        config: "PretrainConfig",
     ):
         """
         Initialize adapter.
@@ -140,7 +143,8 @@ class CubeGridIndex:
     Drop-in replacement for pretrain_build/grid_index.GridIndex.
 
     Uses the cube's land mask and coordinates directly instead of
-    maintaining a separate spatial index.
+    maintaining a separate spatial index. BallTree uses euclidean metric
+    on EPSG:5070 projected coordinates for exact distance queries.
     """
 
     def __init__(self, cube_path: str):
@@ -162,11 +166,20 @@ class CubeGridIndex:
         # Store row/col indices
         self.grid_indices = valid_cells  # (N, 2) [row, col]
 
-        # Store coordinates
-        self.coords = np.stack(
+        # Store projected coordinates for BallTree (easting, northing)
+        self.proj_coords = np.stack(
             [
-                self.cube.lat[valid_cells[:, 0]],
-                self.cube.lon[valid_cells[:, 1]],
+                self.cube.x_coords[valid_cells[:, 1]],
+                self.cube.y_coords[valid_cells[:, 0]],
+            ],
+            axis=-1,
+        )  # (N, 2) [easting, northing]
+
+        # Store geographic coordinates for feature vectors
+        self.geo_coords = np.stack(
+            [
+                self.cube.lat_2d[valid_cells[:, 0], valid_cells[:, 1]],
+                self.cube.lon_2d[valid_cells[:, 0], valid_cells[:, 1]],
             ],
             axis=-1,
         )  # (N, 2) [lat, lon]
@@ -184,9 +197,8 @@ class CubeGridIndex:
         self._build_tree()
 
     def _build_tree(self):
-        """Build BallTree for neighbor queries using haversine metric."""
-        coords_rad = np.deg2rad(self.coords)
-        self.tree = BallTree(coords_rad, metric="haversine")
+        """Build BallTree for neighbor queries using euclidean metric on projected coords."""
+        self.tree = BallTree(self.proj_coords, metric="euclidean")
 
     def __len__(self) -> int:
         return self.n_cells
@@ -198,7 +210,7 @@ class CubeGridIndex:
         k: int,
     ) -> Tuple[np.ndarray, np.ndarray]:
         """
-        Return indices and distances (km) of k nearest cells.
+        Return indices and distances (meters) of k nearest cells.
 
         Args:
             lat: Query latitude
@@ -206,19 +218,20 @@ class CubeGridIndex:
             k: Number of neighbors to return
 
         Returns:
-            (indices, distances_km) tuple
+            (indices, distances_m) tuple
         """
-        point = np.deg2rad([[lat, lon]])
+        # Project query point to EPSG:5070
+        easting, northing = self.cube.grid.latlon_to_xy(lat, lon)
+        point = np.array([[easting, northing]])
         k = min(k, len(self.cell_ids))
         dist, idx = self.tree.query(point, k=k)
-        dist_km = dist[0] * 6371.0  # Earth radius in km
-        return idx[0], dist_km
+        return idx[0], dist[0]
 
     def query_radius(
         self,
         lat: float,
         lon: float,
-        radius_km: float,
+        radius_m: float,
     ) -> Tuple[np.ndarray, np.ndarray]:
         """
         Return indices and distances of cells within radius.
@@ -226,22 +239,21 @@ class CubeGridIndex:
         Args:
             lat: Query latitude
             lon: Query longitude
-            radius_km: Search radius in kilometers
+            radius_m: Search radius in meters
 
         Returns:
-            (indices, distances_km) tuple
+            (indices, distances_m) tuple
         """
-        point = np.deg2rad([[lat, lon]])
-        radius_rad = radius_km / 6371.0
-        idx, dist = self.tree.query_radius(point, r=radius_rad, return_distance=True)
-        dist_km = dist[0] * 6371.0
-        return idx[0], dist_km
+        easting, northing = self.cube.grid.latlon_to_xy(lat, lon)
+        point = np.array([[easting, northing]])
+        idx, dist = self.tree.query_radius(point, r=radius_m, return_distance=True)
+        return idx[0], dist[0]
 
     def sample_cells(
         self,
         n: int,
         strategy: str = "uniform",
-        min_spacing_km: Optional[float] = None,
+        min_spacing_m: Optional[float] = None,
         rng: Optional[np.random.Generator] = None,
     ) -> np.ndarray:
         """
@@ -250,11 +262,11 @@ class CubeGridIndex:
         Args:
             n: Number of cells to sample
             strategy: 'uniform', 'poisson_disk', or 'stratified'
-            min_spacing_km: Minimum spacing for poisson_disk sampling
+            min_spacing_m: Minimum spacing in meters for poisson_disk sampling
             rng: Random number generator
 
         Returns:
-            Array of indices into self.coords / self.cell_ids
+            Array of indices into self.proj_coords / self.cell_ids
         """
         if rng is None:
             rng = np.random.default_rng()
@@ -265,7 +277,7 @@ class CubeGridIndex:
             return rng.choice(len(self.cell_ids), size=n, replace=False)
 
         elif strategy == "poisson_disk":
-            return self._sample_poisson_disk(n, min_spacing_km or 20.0, rng)
+            return self._sample_poisson_disk(n, min_spacing_m or 20000.0, rng)
 
         elif strategy == "stratified":
             return self._sample_stratified(n, rng)
@@ -276,10 +288,10 @@ class CubeGridIndex:
     def _sample_poisson_disk(
         self,
         n: int,
-        min_spacing_km: float,
+        min_spacing_m: float,
         rng: np.random.Generator,
     ) -> np.ndarray:
-        """Greedy Poisson disk sampling with minimum spacing."""
+        """Greedy Poisson disk sampling with minimum spacing in meters."""
         selected = []
         available = set(range(len(self.cell_ids)))
         candidates = list(available)
@@ -294,13 +306,13 @@ class CubeGridIndex:
             selected.append(idx)
             available.discard(idx)
 
-            # Remove cells within min_spacing_km
-            lat, lon = self.coords[idx]
-            nbr_idx, nbr_dist = self.query_neighbors(
-                lat, lon, k=min(500, len(available) + 1)
+            # Remove cells within min_spacing_m using projected coords
+            point = self.proj_coords[idx : idx + 1]
+            nbr_idx_arr, nbr_dist_arr = self.tree.query_radius(
+                point, r=min_spacing_m, return_distance=True
             )
-            for ni, nd in zip(nbr_idx, nbr_dist):
-                if nd < min_spacing_km and ni in available:
+            for ni, nd in zip(nbr_idx_arr[0], nbr_dist_arr[0]):
+                if nd < min_spacing_m and ni in available:
                     available.discard(ni)
 
         return np.array(selected)
@@ -310,29 +322,29 @@ class CubeGridIndex:
         n: int,
         rng: np.random.Generator,
     ) -> np.ndarray:
-        """Stratified sampling by dividing domain into tiles."""
-        lat_min, lat_max = self.coords[:, 0].min(), self.coords[:, 0].max()
-        lon_min, lon_max = self.coords[:, 1].min(), self.coords[:, 1].max()
+        """Stratified sampling by dividing domain into tiles using projected coords."""
+        x_min, x_max = self.proj_coords[:, 0].min(), self.proj_coords[:, 0].max()
+        y_min, y_max = self.proj_coords[:, 1].min(), self.proj_coords[:, 1].max()
 
         n_tiles = int(np.sqrt(n))
-        lat_step = (lat_max - lat_min) / n_tiles
-        lon_step = (lon_max - lon_min) / n_tiles
+        x_step = (x_max - x_min) / n_tiles
+        y_step = (y_max - y_min) / n_tiles
 
         selected = []
         samples_per_tile = max(1, n // (n_tiles * n_tiles))
 
         for i in range(n_tiles):
             for j in range(n_tiles):
-                lat_lo = lat_min + i * lat_step
-                lat_hi = lat_min + (i + 1) * lat_step
-                lon_lo = lon_min + j * lon_step
-                lon_hi = lon_min + (j + 1) * lon_step
+                x_lo = x_min + j * x_step
+                x_hi = x_min + (j + 1) * x_step
+                y_lo = y_min + i * y_step
+                y_hi = y_min + (i + 1) * y_step
 
                 mask = (
-                    (self.coords[:, 0] >= lat_lo)
-                    & (self.coords[:, 0] < lat_hi)
-                    & (self.coords[:, 1] >= lon_lo)
-                    & (self.coords[:, 1] < lon_hi)
+                    (self.proj_coords[:, 0] >= x_lo)
+                    & (self.proj_coords[:, 0] < x_hi)
+                    & (self.proj_coords[:, 1] >= y_lo)
+                    & (self.proj_coords[:, 1] < y_hi)
                 )
                 tile_indices = np.where(mask)[0]
 
@@ -359,8 +371,7 @@ class CubeGridIndex:
 
 
 def create_cube_adapter(
-    cube_path: str,
-    config: "PretrainConfig",  # noqa: F821
+    cube_path: str, config: "PretrainConfig"
 ) -> Tuple[CubeGridIndex, CubeSequenceExtractor]:
     """
     Create cube-based replacements for GridIndex and SequenceExtractor.
@@ -392,12 +403,12 @@ if __name__ == "__main__":
         index = CubeGridIndex(cube_path)
         print(f"  {len(index):,} valid cells")
         print(
-            f"  Coordinate range: lat [{index.coords[:, 0].min():.2f}, {index.coords[:, 0].max():.2f}]"
+            f"  Projected coord range: x [{index.proj_coords[:, 0].min():.0f}, {index.proj_coords[:, 0].max():.0f}]"
         )
         print(f"  Terrain shape: {index.terrain.shape}")
 
         # Test sampling
-        sample = index.sample_cells(100, strategy="poisson_disk", min_spacing_km=50)
+        sample = index.sample_cells(100, strategy="poisson_disk", min_spacing_m=50000.0)
         print(f"  Sampled {len(sample)} cells with poisson_disk")
 
         index.close()

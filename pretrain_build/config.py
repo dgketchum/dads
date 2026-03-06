@@ -7,8 +7,8 @@ direct grid sampling.
 """
 
 from dataclasses import dataclass, field
-from typing import Tuple, List, Optional, Dict
 from pathlib import Path
+from typing import Dict, List, Optional, Tuple
 
 
 @dataclass

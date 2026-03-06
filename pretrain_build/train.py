@@ -1,7 +1,7 @@
 """
 Pre-training loop for DADS on gridded data.
 
-Key differences from models/dads_cube/train.py:
+Key differences from models/dads/train.py:
     1. Rebuilds graph structure each epoch via EpochSampler
     2. Uses PretrainDataset instead of DadsDataset
     3. Saves checkpoints compatible with fine-tuning on observations
@@ -13,26 +13,27 @@ observational data.
 """
 
 import json
+import os
 from pathlib import Path
-from typing import Optional, Dict, Any
+from typing import Any, Dict, Optional
 
+import lightning.pytorch as pl
 import numpy as np
 import torch
-import lightning.pytorch as pl
 from lightning.pytorch.callbacks import (
-    ModelCheckpoint,
     EarlyStopping,
     LearningRateMonitor,
+    ModelCheckpoint,
 )
 from torch.utils.data import DataLoader
 
 from models.dads_cube.dads_gnn import DadsMetGNN
 from models.components.scalers import MinMaxScaler
-from pretrain_build.config import PretrainConfig, GridSource
+from pretrain_build.config import GridSource, PretrainConfig
+from pretrain_build.dataset import PretrainDataset, pretrain_collate_fn
 from pretrain_build.grid_index import GridIndex
 from pretrain_build.sampler import EpochSampler, ValidationSampler
-from pretrain_build.sequences import SequenceExtractor, CachedSequenceExtractor
-from pretrain_build.dataset import PretrainDataset, pretrain_collate_fn
+from pretrain_build.sequences import CachedSequenceExtractor, SequenceExtractor
 
 
 def pretrain(
@@ -426,6 +427,11 @@ def load_pretrained_model(
         Loaded DadsMetGNN model
     """
     checkpoint = torch.load(checkpoint_path, map_location="cpu")
+
+    # Load config if available
+    if config_path and os.path.exists(config_path):
+        with open(config_path, "r") as f:
+            json.load(f)
 
     # Extract model hyperparameters from checkpoint
     hparams = checkpoint.get("hyper_parameters", {})

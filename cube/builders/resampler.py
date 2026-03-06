@@ -2,23 +2,22 @@
 Resampling utilities for aligning multi-resolution sources to master grid.
 
 Handles reprojection and resampling from various source formats (GeoTIFF,
-NetCDF, zarr) to the unified 1km WGS84 grid.
+NetCDF, zarr) to the unified 1km EPSG:5070 grid.
 """
 
-from pathlib import Path
-from typing import Tuple, Optional, Union
 import logging
+from pathlib import Path
+from typing import Optional, Tuple, Union
 
 import numpy as np
 
 try:
     import rasterio
-    from rasterio.warp import (
-        calculate_default_transform,  # noqa: F401
-        reproject,
-        Resampling,
-    )
     from rasterio.crs import CRS
+    from rasterio.warp import (
+        Resampling,
+        reproject,
+    )
 
     HAS_RASTERIO = True
 except ImportError:
@@ -32,7 +31,7 @@ except ImportError:
     HAS_XARRAY = False
 
 try:
-    import rioxarray as rxr  # noqa: F401
+    import rioxarray as rxr  # noqa: F401  (side-effect: registers .rio accessor)
 
     HAS_RIOXARRAY = True
 except ImportError:
@@ -63,7 +62,7 @@ class GridResampler:
     Resamples raster data to the master grid.
 
     Handles various source formats and resolutions, projecting everything
-    to the unified 1km WGS84 grid.
+    to the unified 1km EPSG:5070 grid.
 
     Typical source resolutions:
         - DEM: 30-90m -> 1km (aggregation with mean)
@@ -104,7 +103,7 @@ class GridResampler:
             band: Band number to read (1-indexed)
 
         Returns:
-            2D array resampled to master grid shape (n_lat, n_lon)
+            2D array resampled to master grid shape (n_y, n_x)
         """
         resampling = RESAMPLING_METHODS.get(method, Resampling.bilinear)
 
@@ -199,10 +198,6 @@ class GridResampler:
             transform=self.dst_transform,
             resampling=resampling,
         )
-
-        # Rename coordinates to match our convention
-        if "y" in da_resampled.dims:
-            da_resampled = da_resampled.rename({"y": "lat", "x": "lon"})
 
         return da_resampled
 
@@ -301,29 +296,25 @@ def compute_source_to_target_mapping(
 
 
 def get_recommended_method(
-    src_resolution: float,
+    src_resolution_m: float,
     layer_type: str = "continuous",
+    target_resolution_m: float = 1000.0,
 ) -> str:
     """
     Get recommended resampling method based on source resolution.
 
     Args:
-        src_resolution: Source resolution in degrees
+        src_resolution_m: Source resolution in meters
         layer_type: 'continuous', 'categorical', or 'terrain'
+        target_resolution_m: Target resolution in meters (default 1000)
 
     Returns:
         Recommended resampling method name
     """
-    target_resolution = 0.008333333  # 1km
-
     if layer_type == "categorical":
         return "mode"
 
-    if layer_type == "terrain" and src_resolution < target_resolution:
-        # Aggregating fine DEM to coarser grid
-        return "average"
-
-    if src_resolution < target_resolution:
+    if src_resolution_m < target_resolution_m:
         # Aggregating (fine -> coarse)
         return "average"
     else:

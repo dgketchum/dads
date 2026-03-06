@@ -21,9 +21,14 @@ Source priority:
 Each source provides different variable subsets, and the layer merges them.
 """
 
-from pathlib import Path
-from typing import Dict, List, Tuple, Optional
+from __future__ import annotations
+
 import logging
+from pathlib import Path
+from typing import TYPE_CHECKING, Dict, List, Optional, Tuple
+
+if TYPE_CHECKING:
+    from cube.builders.resampler import GridResampler
 
 import numpy as np
 import pandas as pd
@@ -42,8 +47,8 @@ try:
 except ImportError:
     HAS_ZARR = False
 
-from cube.layers.base import BaseLayer
 from cube.config import CHUNKS, MET_FEATURES
+from cube.layers.base import BaseLayer
 
 logger = logging.getLogger(__name__)
 
@@ -85,7 +90,7 @@ class MetLayer(BaseLayer):
     Supports multiple input sources (NLDAS, GridMET, PRISM) with automatic
     variable mapping and unit conversion.
 
-    Output: (time, lat, lon) arrays for tmax, tmin, prcp, rsds, vpd, wind, ea
+    Output: (time, y, x) arrays for tmax, tmin, prcp, rsds, vpd, wind, ea
     """
 
     @property
@@ -98,7 +103,7 @@ class MetLayer(BaseLayer):
 
     @property
     def dimensions(self) -> Tuple[str, ...]:
-        return ("time", "lat", "lon")
+        return ("time", "y", "x")
 
     @property
     def chunks(self) -> Dict[str, int]:
@@ -149,8 +154,8 @@ class MetLayer(BaseLayer):
         group = self._ensure_group(store)
 
         # Create output arrays for each variable
-        shape = (n_times, self.grid.n_lat, self.grid.n_lon)
-        chunks = (self.chunks["time"], self.chunks["lat"], self.chunks["lon"])
+        shape = (n_times, self.grid.n_y, self.grid.n_x)
+        chunks = (self.chunks["time"], self.chunks["y"], self.chunks["x"])
 
         arrays = {}
         for var in self.variables:
@@ -163,7 +168,7 @@ class MetLayer(BaseLayer):
                     shape=shape,
                     chunks=chunks,
                     dtype="float32",
-                    compressor=self.compression,
+                    compressors=self.compression,
                     fill_value=np.nan,
                     overwrite=overwrite,
                 )
@@ -205,7 +210,7 @@ class MetLayer(BaseLayer):
         source_dir: Path,
         arrays: Dict[str, zarr.Array],
         dates: pd.DatetimeIndex,
-        resampler: "GridResampler",  # noqa: F821
+        resampler: "GridResampler",
     ) -> None:
         """Process GridMET NetCDF files."""
         # GridMET has one file per variable per year: {var}_{year}.nc
@@ -249,7 +254,7 @@ class MetLayer(BaseLayer):
         dates: pd.DatetimeIndex,
         year_start: pd.Timestamp,
         year_end: pd.Timestamp,
-        resampler: "GridResampler",  # noqa: F821
+        resampler: "GridResampler",
     ) -> None:
         """Process a single GridMET file."""
         ds = xr.open_dataset(nc_file)
@@ -314,7 +319,7 @@ class MetLayer(BaseLayer):
         source_dir: Path,
         arrays: Dict[str, zarr.Array],
         dates: pd.DatetimeIndex,
-        resampler: "GridResampler",  # noqa: F821
+        resampler: "GridResampler",
     ) -> None:
         """Process PRISM NetCDF files."""
         # PRISM files can be organized as: {var}_{YYYYMM}.nc or similar
@@ -360,7 +365,7 @@ class MetLayer(BaseLayer):
         out_var: str,
         arrays: Dict[str, zarr.Array],
         dates: pd.DatetimeIndex,
-        resampler: "GridResampler",  # noqa: F821
+        resampler: "GridResampler",
     ) -> None:
         """Process a single PRISM file."""
         ds = xr.open_dataset(nc_file)
@@ -420,7 +425,7 @@ class MetLayer(BaseLayer):
         source_dir: Path,
         arrays: Dict[str, zarr.Array],
         dates: pd.DatetimeIndex,
-        resampler: "GridResampler",  # noqa: F821
+        resampler: "GridResampler",
     ) -> None:
         """Process NLDAS NetCDF files (hourly -> daily aggregation)."""
         # NLDAS files: NLDAS_FORA0125_H.A{YYYYMMDD}.{HHMM}.*.nc
@@ -447,7 +452,7 @@ class MetLayer(BaseLayer):
         month: int,
         arrays: Dict[str, zarr.Array],
         dates: pd.DatetimeIndex,
-        resampler: "GridResampler",  # noqa: F821
+        resampler: "GridResampler",
     ) -> None:
         """Process a month of NLDAS hourly data."""
         date_string = f"{year}{month:02d}"

@@ -3,10 +3,10 @@ DADS Unified Data Cube
 
 A zarr/xarray-based data cube for pre-training DADS on gridded climate data.
 Provides unified access to meteorological, remote sensing, and terrain data
-at 1km resolution over CONUS.
+at 1km resolution over CONUS in EPSG:5070 (Albers Equal Area Conic).
 
 Main components:
-    - MasterGrid: Defines the 1km WGS84 coordinate system
+    - MasterGrid: Defines the 1km EPSG:5070 coordinate system
     - DataCubeExtractor: Extracts training sequences from the cube
     - Layer classes: Build individual data layers (terrain, CDR, met, etc.)
     - Adapters: Drop-in replacements for pretrain_build compatibility
@@ -35,12 +35,12 @@ Example usage:
     terrain.build()
 """
 
-from cube.config import CubeConfig, CHUNKS, COMPRESSION, default_conus_config
-from cube.grid import MasterGrid, create_conus_grid
+from cube.config import CHUNKS, COMPRESSION, CubeConfig, default_conus_config
 from cube.extractors.data_cube_extractor import DataCubeExtractor
-from cube.extractors.pretrain_adapter import CubeSequenceExtractor, CubeGridIndex
+from cube.extractors.pretrain_adapter import CubeGridIndex, CubeSequenceExtractor
+from cube.grid import MasterGrid, create_conus_grid, create_test_region_grid
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 __all__ = [
     # Config
@@ -51,6 +51,7 @@ __all__ = [
     # Grid
     "MasterGrid",
     "create_conus_grid",
+    "create_test_region_grid",
     # Extractors
     "DataCubeExtractor",
     "CubeSequenceExtractor",

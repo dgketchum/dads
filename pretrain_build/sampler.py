@@ -11,12 +11,13 @@ The sampler maintains:
     - Edge attributes (terrain differences, bearing, distance)
 """
 
-import numpy as np
-from typing import Dict, List, Tuple, Optional
 from dataclasses import dataclass, field
+from typing import Dict, List, Optional, Tuple
 
-from pretrain_build.grid_index import GridIndex
+import numpy as np
+
 from pretrain_build.config import PretrainConfig
+from pretrain_build.grid_index import GridIndex
 
 
 @dataclass
@@ -403,9 +404,10 @@ class ValidationSampler:
 
 if __name__ == "__main__":
     # Example usage
+    import sys
+
     from pretrain_build.config import PretrainConfig
     from pretrain_build.grid_index import GridIndex
-    import sys
 
     if len(sys.argv) < 2:
         print("Usage: python sampler.py <grid_index_path>")
