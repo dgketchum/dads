@@ -20,7 +20,7 @@ import numpy as np
 import rasterio
 from rasterio.warp import Resampling, reproject
 
-from prep.build_terrain_grid import RTMA_CRS, _pnw_rtma_transform_and_shape
+from terrain.grid import RTMA_CRS, _pnw_rtma_transform_and_shape
 from prep.pnw_1km_grid import PNW_1KM_CRS, PNW_1KM_SHAPE, PNW_1KM_TRANSFORM
 
 LANDSAT_DIR = "/nas/dads/landsat_composites"
