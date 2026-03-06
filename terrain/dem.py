@@ -5,7 +5,6 @@ import time
 import ee
 import pandas as pd
 
-sys.path.insert(0, os.path.abspath("../.."))
 from extract.rs.earth_engine.ee_utils import is_authorized
 from utils.station_parameters import station_par_map
 

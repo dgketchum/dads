@@ -14,7 +14,7 @@ import numpy as np
 import rasterio
 from scipy.interpolate import interp1d
 
-from process.terrain.sun import compute_horizon, worker_calculate_single_tile_irradiance
+from terrain.sun import compute_horizon, worker_calculate_single_tile_irradiance
 
 # 24 DOYs spanning the year, roughly every 15 days
 SPARSE_DOYS = [
@@ -51,7 +51,7 @@ MAPSET = "dads_map"
 HORIZON_STEP = 5
 HORIZON_MAXDIST = 50000
 
-# PNW tiles with existing rsun rasters
+# PNW tiles with existing EPSG:5071 rsun rasters (correctable via sparse-DOY ratios)
 PNW_EXISTING = [
     "10TCM",
     "10TCN",
@@ -85,14 +85,8 @@ PNW_EXISTING = [
     "10TGR",
     "10TGS",
     "10TGT",
-    "10UCU",
-    "10UCV",
-    "10UDU",
-    "10UDV",
     "10UEU",
-    "10UEV",
     "10UFU",
-    "10UFV",
     "10UGU",
     "11TKG",
     "11TKH",
@@ -138,13 +132,9 @@ PNW_EXISTING = [
     "11TQN",
     "11UKP",
     "11ULP",
-    "11ULQ",
     "11UMP",
-    "11UMQ",
     "11UNP",
-    "11UNQ",
     "11UPP",
-    "11UPQ",
     "11UQP",
     "12TTM",
     "12TTN",
@@ -188,15 +178,10 @@ PNW_EXISTING = [
     "12TYS",
     "12TYT",
     "12UTU",
-    "12UTV",
     "12UUU",
-    "12UUV",
     "12UVU",
-    "12UVV",
     "12UWU",
-    "12UWV",
     "12UXU",
-    "12UXV",
     "12UYU",
     "13TBG",
     "13TBH",
@@ -228,15 +213,14 @@ PNW_EXISTING = [
     "13TEN",
     "13UBP",
     "13UCP",
-    "13UCQ",
     "13UDP",
-    "13UDQ",
     "13UEP",
-    "13UEQ",
 ]
 
-# PNW tiles missing rsun — all have DEMs
-PNW_MISSING = [
+# PNW tiles needing full generation — either no rsun exists or existing rsun is
+# EPSG:3978 (Canada Lambert) and must be regenerated in EPSG:5071 (CONUS Albers).
+PNW_GENERATE = [
+    # originally missing
     "10TCQ",
     "10TCU",
     "10TDU",
@@ -258,6 +242,25 @@ PNW_MISSING = [
     "13TBP",
     "13TCP",
     "13TEP",
+    # existing rsun in EPSG:3978 — regenerate in EPSG:5071 with horizons
+    "10UCU",
+    "10UCV",
+    "10UDU",
+    "10UDV",
+    "10UEV",
+    "10UFV",
+    "11ULQ",
+    "11UMQ",
+    "11UNQ",
+    "11UPQ",
+    "12UTV",
+    "12UUV",
+    "12UVV",
+    "12UWV",
+    "12UXV",
+    "13UCQ",
+    "13UDQ",
+    "13UEQ",
 ]
 
 
@@ -526,17 +529,33 @@ def _correct_single_tile(args):
     _cleanup_horizon_grass(tile)
     subprocess.run(["rm", "-rf", tmpdir], check=True)
 
+    # marker so we can resume without redoing this tile
+    marker = os.path.join(existing_dir, ".horizon_corrected")
+    with open(marker, "w") as f:
+        f.write("done\n")
+
     print(f"[correct] {tile}: done")
     return tile
+
+
+def _tile_already_corrected(tile):
+    """Check if a tile was already horizon-corrected by looking for a marker file."""
+    marker = os.path.join(RSUN_DIR, tile, ".horizon_corrected")
+    return os.path.exists(marker)
 
 
 def run_correct(nprocs=16, tiles=None, mapset=MAPSET):
     """Apply horizon correction to existing PNW tiles (serial)."""
     target = tiles if tiles else PNW_EXISTING
-    print(f"[correct] {len(target)} tiles, serial, r.sun nprocs={nprocs}")
+    skipped = [t for t in target if _tile_already_corrected(t)]
+    remaining = [t for t in target if not _tile_already_corrected(t)]
+    print(
+        f"[correct] {len(target)} tiles total, {len(skipped)} already done, "
+        f"{len(remaining)} remaining, r.sun nprocs={nprocs}"
+    )
 
-    for i, tile in enumerate(target):
-        print(f"[correct] tile {i + 1}/{len(target)}: {tile}")
+    for i, tile in enumerate(remaining):
+        print(f"[correct] tile {i + 1}/{len(remaining)}: {tile}")
         _correct_single_tile((tile, mapset, nprocs))
 
 
@@ -601,19 +620,28 @@ def _generate_single_tile(args):
         out = os.path.join(tile_out, f"irradiance_day_{doy}_{tile}.tif")
         _grass_export_tif(grass_name, mapset, out)
 
-    # cleanup
+    # cleanup and marker
     _cleanup_horizon_grass(tile)
+    marker = os.path.join(tile_out, ".horizon_corrected")
+    with open(marker, "w") as f:
+        f.write("done\n")
+
     print(f"[generate] {tile}: done")
     return tile
 
 
 def run_generate(nprocs=16, tiles=None, mapset=MAPSET):
-    """Generate rsun with horizons for missing PNW tiles (serial)."""
-    target = tiles if tiles else PNW_MISSING
-    print(f"[generate] {len(target)} tiles, serial, r.sun nprocs={nprocs}")
+    """Generate rsun with horizons for missing/CRS-mismatched PNW tiles (serial)."""
+    target = tiles if tiles else PNW_GENERATE
+    skipped = [t for t in target if _tile_already_corrected(t)]
+    remaining = [t for t in target if not _tile_already_corrected(t)]
+    print(
+        f"[generate] {len(target)} tiles total, {len(skipped)} already done, "
+        f"{len(remaining)} remaining, r.sun nprocs={nprocs}"
+    )
 
-    for i, tile in enumerate(target):
-        print(f"[generate] tile {i + 1}/{len(target)}: {tile}")
+    for i, tile in enumerate(remaining):
+        print(f"[generate] tile {i + 1}/{len(remaining)}: {tile}")
         _generate_single_tile((tile, mapset, nprocs))
 
 
