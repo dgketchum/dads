@@ -14,16 +14,29 @@ import tomli_w
 # Each group maps to a set of individual channel names used by the dataset.
 
 FEATURE_GROUPS: dict[str, tuple[str, ...]] = {
-    "rtma_weather": ("tmp_c", "ugrd", "vgrd", "pres_kpa", "tcdc_pct", "prcp_mm"),
-    "rtma_humidity": ("dpt_c", "ea_kpa"),
-    "rtma_all": (
+    # URMA-based groups (11-band daily COGs from prep/build_urma_1km.py)
+    "urma_weather": (
         "tmp_c",
+        "tmax_c",
+        "tmin_c",
+        "ugrd",
+        "vgrd",
+        "gust",
+        "pres_kpa",
+        "tcdc_pct",
+    ),
+    "urma_humidity": ("dpt_c", "spfh", "ea_kpa"),
+    "urma_all": (
+        "tmp_c",
+        "tmax_c",
+        "tmin_c",
         "dpt_c",
         "ugrd",
         "vgrd",
+        "gust",
+        "spfh",
         "pres_kpa",
         "tcdc_pct",
-        "prcp_mm",
         "ea_kpa",
     ),
     "terrain": (
@@ -79,7 +92,7 @@ def resolve_channels(features: list[str]) -> tuple[str, ...]:
 
 
 # ── Which channels belong to which data source ─────────────────────────
-_RTMA_CHANNELS = set(FEATURE_GROUPS["rtma_all"])
+_RTMA_CHANNELS = set(FEATURE_GROUPS["urma_all"])
 _TERRAIN_CHANNELS = set(FEATURE_GROUPS["terrain"])
 _RSUN_CHANNELS = set(FEATURE_GROUPS["rsun"])
 _LANDSAT_CHANNELS = set(FEATURE_GROUPS["landsat"])
@@ -95,7 +108,7 @@ class ExperimentConfig:
 
     # Features
     features: list[str] = field(
-        default_factory=lambda: ["rtma_all", "terrain", "rsun", "landsat"]
+        default_factory=lambda: ["urma_all", "terrain", "rsun", "landsat"]
     )
 
     # Model / training
@@ -105,16 +118,27 @@ class ExperimentConfig:
     batch_size: int = 64
     epochs: int = 5
 
+    # Multi-task
+    n_heads: int = 1
+    target_cols: list[str] | None = None  # overrides target_col when set
+    task_weights: list[float] | None = None
+    physics_weight: float = 0.0
+    task: str = "ea"  # primary task for single-head mode: ea|tmax
+    pair_head_idx: int | None = None
+
     # Data
     patch_size: int = 64
     val_frac: float = 0.2
     seed: int = 42
+    val_mgrs_tiles: list[str] | None = None
     target_col: str = "delta_log_ea"
     start_date: str | None = None
     end_date: str | None = None
+    use_pairwise_loss: bool = False
 
     # Paths
     patch_index: str = ""
+    pair_index: str | None = None
     tif_root: str = ""
     out_dir: str = ""
     terrain_tif: str | None = None
@@ -126,6 +150,12 @@ class ExperimentConfig:
     num_workers: int = 2
     preload: bool = True
     decoded: bool = False
+    model: str = "unet"
+    pair_k: int = 8
+    pair_dmax_km: float = 35.0
+    pair_loss_weight: float = 0.3
+    pair_sample_per_batch: int | None = None
+    pair_distance_bins: list[float] | None = None
 
     # ── Derived properties ──────────────────────────────────────────────
 
