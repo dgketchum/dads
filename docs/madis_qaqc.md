@@ -39,8 +39,8 @@ Authentication is via username/password over HTTPS. Downloads are parallelized w
 
 Our QC strategy combines two philosophically different approaches: an operational,
 spatially-aware system adapted from NOAA's Real-Time Mesoscale Analysis (RTMA), and a
-statistical, station-centric system drawn from the agricultural weather community. These are
-complementary by design.
+statistical, station-centric system drawn from Christian Dunkerly's agweather-qaqc code
+developed at Desert Research Institute. These are complementary by design.
 
 ### Phase 1: Extract-Time Filtering
 
