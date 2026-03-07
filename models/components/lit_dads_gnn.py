@@ -62,7 +62,7 @@ class LitDadsGNN(L.LightningModule):
         else:
             self.huber = nn.HuberLoss(delta=huber_delta, reduction="none")
             self.val_mae_speed = MeanAbsoluteError()
-            self.val_mae_speed_rtma = MeanAbsoluteError()
+            self.val_baseline_speed_mae = MeanAbsoluteError()
             self.val_mae_par = MeanAbsoluteError()
             self.val_mae_perp = MeanAbsoluteError()
             self.val_vector_mse_sum = MeanMetric()
@@ -88,7 +88,7 @@ class LitDadsGNN(L.LightningModule):
     def _wind_loss(self, pred, batch):
         loss_per_sample = self.huber(pred, batch.y).mean(dim=-1)
         w = torch.clamp(
-            batch.rtma_wind / self.hparams.calm_threshold,
+            batch.baseline_wind / self.hparams.calm_threshold,
             min=self.hparams.calm_min_weight,
             max=1.0,
         )
@@ -141,7 +141,7 @@ class LitDadsGNN(L.LightningModule):
     def _wind_val_step(self, pred, batch):
         loss_per_sample = self.huber(pred, batch.y).mean(dim=-1)
         w = torch.clamp(
-            batch.rtma_wind / self.hparams.calm_threshold,
+            batch.baseline_wind / self.hparams.calm_threshold,
             min=self.hparams.calm_min_weight,
             max=1.0,
         )
@@ -163,19 +163,19 @@ class LitDadsGNN(L.LightningModule):
         self.val_vector_mse_sum.update((diff**2).sum(dim=-1))
 
         eps = 1e-6
-        rtma_spd = batch.rtma_wind.clamp(min=eps)
-        e_par_x = batch.ugrd_rtma / rtma_spd
-        e_par_y = batch.vgrd_rtma / rtma_spd
+        rtma_spd = batch.baseline_wind.clamp(min=eps)
+        e_par_x = batch.ugrd_baseline / rtma_spd
+        e_par_y = batch.vgrd_baseline / rtma_spd
         e_perp_x = -e_par_y
         e_perp_y = e_par_x
 
-        u_corr = batch.ugrd_rtma + pred[:, 0] * e_par_x + pred[:, 1] * e_perp_x
-        v_corr = batch.vgrd_rtma + pred[:, 0] * e_par_y + pred[:, 1] * e_perp_y
+        u_corr = batch.ugrd_baseline + pred[:, 0] * e_par_x + pred[:, 1] * e_perp_x
+        v_corr = batch.vgrd_baseline + pred[:, 0] * e_par_y + pred[:, 1] * e_perp_y
         speed_corr = torch.sqrt(u_corr**2 + v_corr**2)
         speed_obs = torch.sqrt(batch.u_obs**2 + batch.v_obs**2)
 
         self.val_mae_speed.update(speed_corr, speed_obs)
-        self.val_mae_speed_rtma.update(rtma_spd, speed_obs)
+        self.val_baseline_speed_mae.update(rtma_spd, speed_obs)
         self._speed_mae_sum.update(torch.abs(speed_corr - speed_obs))
         self._rtma_mae_sum.update(torch.abs(rtma_spd - speed_obs))
 
@@ -217,7 +217,7 @@ class LitDadsGNN(L.LightningModule):
         self.log("val/vector_rmse", torch.sqrt(mean_mse))
         self.val_vector_mse_sum.reset()
         self.log("val/speed_mae", self.val_mae_speed)
-        self.log("val/baseline_speed_mae", self.val_mae_speed_rtma)
+        self.log("val/baseline_speed_mae", self.val_baseline_speed_mae)
         model_mae = self._speed_mae_sum.compute()
         rtma_mae = self._rtma_mae_sum.compute()
         self.log("val/pct_improvement", 1.0 - model_mae / rtma_mae.clamp(min=1e-6))

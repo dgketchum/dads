@@ -246,12 +246,12 @@ class HRRRGraphDataset(Dataset):
 
         data = Data(x=x, y=y, edge_index=edge_index, edge_attr=edge_attr, fids=fids)
         if hrrr_wind is not None:
-            data.rtma_wind = torch.from_numpy(hrrr_wind.astype("float32"))
+            data.baseline_wind = torch.from_numpy(hrrr_wind.astype("float32"))
         if "ugrd_hrrr" in day_df.columns:
-            data.ugrd_rtma = torch.from_numpy(
+            data.ugrd_baseline = torch.from_numpy(
                 day_df["ugrd_hrrr"].values.astype("float32")
             )
-            data.vgrd_rtma = torch.from_numpy(
+            data.vgrd_baseline = torch.from_numpy(
                 day_df["vgrd_hrrr"].values.astype("float32")
             )
         if "u_obs" in day_df.columns:

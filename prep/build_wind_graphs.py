@@ -9,7 +9,7 @@ in PrecomputedWindDataset.
 Output structure:
     {out_dir}/
         meta.json       # {all_feature_cols, edge_dim, n_days}
-        2018-01-01.pt   # {x, y, edge_index, edge_attr, rtma_wind, fids}
+        2018-01-01.pt   # {x, y, edge_index, edge_attr, baseline_wind, fids}
         ...
 """
 
@@ -30,6 +30,7 @@ except ImportError:
     Data = None
 
 from models.wind_bias.wind_dataset import TARGET_COLS, _get_feature_cols
+from prep.paths import MVP_ROOT
 from prep.graph_utils import (
     build_edges_for_day,
     build_knn_map,
@@ -42,10 +43,10 @@ def _parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Precompute wind GNN graphs.")
     p.add_argument(
         "--table-path",
-        default="/nas/dads/mvp/station_day_wind_pnw_2018_2024.parquet",
+        default=f"{MVP_ROOT}/station_day_wind_pnw_2018_2024.parquet",
     )
     p.add_argument("--stations-csv", default="artifacts/madis_pnw.csv")
-    p.add_argument("--out-dir", default="/nas/dads/mvp/wind_graphs_pnw")
+    p.add_argument("--out-dir", default=f"{MVP_ROOT}/wind_graphs_pnw")
     p.add_argument("--k", type=int, default=16)
     p.add_argument("--max-radius-km", type=float, default=150.0)
     return p.parse_args()
@@ -123,7 +124,7 @@ def main() -> None:
             y=torch.from_numpy(y),
             edge_index=edge_index,
             edge_attr=edge_attr,
-            rtma_wind=torch.from_numpy(rtma_wind),
+            baseline_wind=torch.from_numpy(rtma_wind),
             num_nodes=len(fids),
         )
         # Store fids as a list attr (not tensor)

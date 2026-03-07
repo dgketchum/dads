@@ -248,8 +248,8 @@ class WindGraphDataset(Dataset):
         # Targets
         y = day_df[self.target_cols].values.astype("float32")
 
-        # RTMA wind for metrics/loss weighting
-        rtma_wind = (
+        # Baseline wind for metrics/loss weighting
+        baseline_wind = (
             np.sqrt(
                 day_df["ugrd_rtma"].values ** 2 + day_df["vgrd_rtma"].values ** 2
             ).astype("float32")
@@ -268,12 +268,12 @@ class WindGraphDataset(Dataset):
             if "v_obs" in day_df.columns
             else np.zeros(len(fids), dtype="float32")
         )
-        ugrd_rtma = (
+        ugrd_baseline = (
             day_df["ugrd_rtma"].values.astype("float32")
             if "ugrd_rtma" in day_df.columns
             else np.zeros(len(fids), dtype="float32")
         )
-        vgrd_rtma = (
+        vgrd_baseline = (
             day_df["vgrd_rtma"].values.astype("float32")
             if "vgrd_rtma" in day_df.columns
             else np.zeros(len(fids), dtype="float32")
@@ -281,21 +281,21 @@ class WindGraphDataset(Dataset):
 
         x_t = torch.from_numpy(x)
         y_t = torch.from_numpy(y)
-        rtma_wind_t = torch.from_numpy(rtma_wind)
+        baseline_wind_t = torch.from_numpy(baseline_wind)
         u_obs_t = torch.from_numpy(u_obs)
         v_obs_t = torch.from_numpy(v_obs)
-        ugrd_rtma_t = torch.from_numpy(ugrd_rtma)
-        vgrd_rtma_t = torch.from_numpy(vgrd_rtma)
+        ugrd_baseline_t = torch.from_numpy(ugrd_baseline)
+        vgrd_baseline_t = torch.from_numpy(vgrd_baseline)
 
         if not self.use_graph:
             return Data(
                 x=x_t,
                 y=y_t,
-                rtma_wind=rtma_wind_t,
+                baseline_wind=baseline_wind_t,
                 u_obs=u_obs_t,
                 v_obs=v_obs_t,
-                ugrd_rtma=ugrd_rtma_t,
-                vgrd_rtma=vgrd_rtma_t,
+                ugrd_baseline=ugrd_baseline_t,
+                vgrd_baseline=vgrd_baseline_t,
                 num_nodes=len(fids),
             )
 
@@ -316,11 +316,11 @@ class WindGraphDataset(Dataset):
             y=y_t,
             edge_index=edge_index,
             edge_attr=edge_attr,
-            rtma_wind=rtma_wind_t,
+            baseline_wind=baseline_wind_t,
             u_obs=u_obs_t,
             v_obs=v_obs_t,
-            ugrd_rtma=ugrd_rtma_t,
-            vgrd_rtma=vgrd_rtma_t,
+            ugrd_baseline=ugrd_baseline_t,
+            vgrd_baseline=vgrd_baseline_t,
             num_nodes=len(fids),
         )
 
@@ -469,7 +469,7 @@ class PrecomputedWindDataset(Dataset):
         col_idx = self._col_indices
         x = g.x[:, col_idx].clone()
         y = g.y.clone()
-        rtma_wind = g.rtma_wind.clone()
+        baseline_wind = g.baseline_wind.clone()
         edge_index = g.edge_index.clone() if self.use_graph else None
         edge_attr = g.edge_attr.clone() if self.use_graph else None
         fids = g.fids  # list[str]
@@ -482,7 +482,7 @@ class PrecomputedWindDataset(Dataset):
             if not keep.all():
                 x = x[keep]
                 y = y[keep]
-                rtma_wind = rtma_wind[keep]
+                baseline_wind = baseline_wind[keep]
                 if edge_index is not None and edge_index.numel() > 0:
                     # Remap node indices
                     old_to_new = torch.full((len(fids),), -1, dtype=torch.long)
@@ -503,14 +503,14 @@ class PrecomputedWindDataset(Dataset):
 
         n_nodes = x.shape[0]
         if not self.use_graph or edge_index is None:
-            return Data(x=x, y=y, rtma_wind=rtma_wind, num_nodes=n_nodes)
+            return Data(x=x, y=y, baseline_wind=baseline_wind, num_nodes=n_nodes)
 
         return Data(
             x=x,
             y=y,
             edge_index=edge_index,
             edge_attr=edge_attr,
-            rtma_wind=rtma_wind,
+            baseline_wind=baseline_wind,
             num_nodes=n_nodes,
         )
 
