@@ -4,6 +4,7 @@ from models.components.edge_gated_gnn import (
     EdgeGatedAttention as EdgeGatedAttention,
     EdgeGatedGNN as EdgeGatedGNN,
 )
+from models.components.lit_dads_gnn import LitDadsGNN as LitDadsGNN
 from models.components.scalers import (
     MinMaxScaler as MinMaxScaler,
     Scaler as Scaler,
