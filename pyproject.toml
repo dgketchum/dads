@@ -24,11 +24,18 @@ dependencies = [
   "cfgrib>=0.9.15.1",
   "boto3>=1.38.0",
   "rioxarray>=0.18.0",
+  "obsmet",
 ]
+
+[tool.uv.sources]
+obsmet = { path = "../obsmet", editable = true }
 
 [dependency-groups]
 dev = [
     "pre-commit>=4.5.1",
     "ruff>=0.15.0",
+]
+docs = [
+    "mkdocs-material>=9.6.0",
 ]
 

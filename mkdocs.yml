@@ -1,88 +1,89 @@
-site_name: DADS
-site_description: Data Assimilation and DownScaling — spatial meteorological prediction
-site_url: https://dads.readthedocs.io
+site_name: DADS Documentation
+site_description: Data Assimilation and Downscaling — terrain-aware surface reanalysis for the Pacific Northwest
 repo_url: https://github.com/dgketchum/dads
 repo_name: dgketchum/dads
 
 theme:
   name: material
   palette:
-    - media: "(prefers-color-scheme: light)"
-      scheme: default
-      primary: teal
-      accent: teal
-      toggle:
-        icon: material/brightness-7
-        name: Switch to dark mode
     - media: "(prefers-color-scheme: dark)"
       scheme: slate
       primary: teal
-      accent: teal
+      accent: cyan
+      toggle:
+        icon: material/brightness-7
+        name: Switch to light mode
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: teal
+      accent: cyan
       toggle:
         icon: material/brightness-4
-        name: Switch to light mode
+        name: Switch to dark mode
   font:
-    text: Inter
     code: JetBrains Mono
-  icon:
-    repo: fontawesome/brands/github
   features:
     - navigation.sections
     - navigation.expand
-    - navigation.instant
-    - navigation.top
-    - search.suggest
-    - search.highlight
+    - navigation.indexes
     - content.code.copy
-    - header.autohide
+    - toc.follow
 
-plugins:
-  - search
+nav:
+  - Home: index.md
+  - Project Overview: dads_project_overview.md
+  - MADIS Observation QC: madis_qaqc.md
+  - RTMA Bias Correction:
+    - rtma/index.md
+    - Humidity:
+      - rtma/humidity/index.md
+      - Algorithms: rtma/humidity/algorithms.md
+      - Architecture: rtma/humidity/architecture.md
+      - Data Provenance: rtma/humidity/data_provenance.md
+    - Wind:
+      - rtma/wind/index.md
+      - Algorithms: rtma/wind/algorithms.md
+      - Architecture: rtma/wind/architecture.md
+      - Data Provenance: rtma/wind/data_provenance.md
+    - Temperature: rtma/temperature/index.md
+    - Shortwave: rtma/shortwave/index.md
+  - HRRR Reanalysis: hrrr/index.md
+  - DADS Cube:
+    - cube/index.md
+    - Architecture: cube/architecture.md
+    - Cube Schema: cube/cube_schema.md
+    - Data Provenance: cube/data_provenance.md
+    - Algorithms: cube/algorithms.md
+    - Design Decisions: cube/decisions.md
 
 markdown_extensions:
-  - tables
-  - fenced_code
-  - pymdownx.highlight:
-      anchor_linenums: true
+  # Math
+  - pymdownx.arithmatex:
+      generic: true
+  # Admonitions
+  - admonition
+  - pymdownx.details
   - pymdownx.superfences:
       custom_fences:
         - name: mermaid
           class: mermaid
           format: !!python/name:pymdownx.superfences.fence_code_format
-  - pymdownx.arithmatex:
-      generic: true
-  - admonition
-  - pymdownx.details
+  # Code blocks
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  # Tables
+  - tables
+  # Table of contents
   - toc:
       permalink: true
 
 extra_javascript:
   - javascripts/mathjax.js
   - https://unpkg.com/mathjax@3/es5/tex-mml-chtml.js
-  - https://unpkg.com/mermaid@10/dist/mermaid.min.js
 
-nav:
-  - Home: index.md
-  - MADIS Observation QC: madis_qaqc.md
-  - DADS Cube:
-    - Overview: cube/index.md
-    - System Architecture: cube/architecture.md
-    - Data Provenance: cube/data_provenance.md
-    - Data Cube Schema: cube/cube_schema.md
-    - Algorithms: cube/algorithms.md
-    - Design Decisions: cube/decisions.md
-  - RTMA Bias Correction:
-    - Overview: rtma/index.md
-    - Humidity:
-      - Overview: rtma/humidity/index.md
-      - System Architecture: rtma/humidity/architecture.md
-      - Data Provenance: rtma/humidity/data_provenance.md
-      - Algorithms: rtma/humidity/algorithms.md
-    - Wind:
-      - Overview: rtma/wind/index.md
-      - System Architecture: rtma/wind/architecture.md
-      - Data Provenance: rtma/wind/data_provenance.md
-      - Algorithms: rtma/wind/algorithms.md
-    - Shortwave Radiation: rtma/shortwave/index.md
-    - Temperature: rtma/temperature/index.md
-  - HRRR Reanalysis: hrrr/index.md
+extra_css: []
+
+plugins:
+  - search
