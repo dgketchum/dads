@@ -151,7 +151,7 @@ def build_edges_for_day(
     Parameters
     ----------
     fids : list of station IDs present this day
-    ugrd, vgrd : RTMA u/v wind components per station (same order as fids)
+    ugrd, vgrd : gridded u/v wind components per station (same order as fids)
     knn_map : {fid: [neighbor_fids]}
     static_edges : {fid_i: {fid_j: {attr: val}}}
     edge_norm : {dist_mean, dist_std, delev_mean, delev_std}
