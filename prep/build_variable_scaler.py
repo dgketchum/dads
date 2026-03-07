@@ -7,7 +7,7 @@ import torch
 from tqdm import tqdm
 
 from models.components.scalers import MinMaxScaler
-from models.dads_cube.value_limits import FEATURE_LIMITS, TARGET_LIMITS
+from cube.model.value_limits import FEATURE_LIMITS, TARGET_LIMITS
 from concurrent.futures import ProcessPoolExecutor
 
 

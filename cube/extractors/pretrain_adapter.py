@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Dict, Optional, Tuple
 
 if TYPE_CHECKING:
-    from pretrain_build.config import PretrainConfig
+    from cube.pretrain.config import PretrainConfig
 
 import numpy as np
 

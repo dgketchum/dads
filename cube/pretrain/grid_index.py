@@ -42,7 +42,7 @@ try:
 except ImportError:
     HAS_XARRAY = False
 
-from pretrain_build.config import GridSource, PretrainConfig
+from cube.pretrain.config import GridSource, PretrainConfig
 
 
 @dataclass
@@ -389,7 +389,7 @@ class GridIndex:
 
         # Extract terrain features if DEM available
         if dem_path and dem_path.exists():
-            from pretrain_build.terrain import extract_terrain_at_points
+            from cube.pretrain.terrain import extract_terrain_at_points
 
             print(f"[GridIndex] Extracting terrain features from {dem_path}")
             terrain = extract_terrain_at_points(

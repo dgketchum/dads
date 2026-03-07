@@ -19,12 +19,12 @@ Modules:
     train: Pre-training loop with epoch-wise graph resampling
 """
 
-from pretrain_build.config import GridSource, PretrainConfig
-from pretrain_build.dataset import PretrainDataset
-from pretrain_build.grid_index import GridIndex
-from pretrain_build.sampler import EpochSample, EpochSampler
-from pretrain_build.sequences import SequenceExtractor
-from pretrain_build.terrain import extract_terrain_at_points
+from cube.pretrain.config import GridSource, PretrainConfig
+from cube.pretrain.dataset import PretrainDataset
+from cube.pretrain.grid_index import GridIndex
+from cube.pretrain.sampler import EpochSample, EpochSampler
+from cube.pretrain.sequences import SequenceExtractor
+from cube.pretrain.terrain import extract_terrain_at_points
 
 __all__ = [
     "PretrainConfig",

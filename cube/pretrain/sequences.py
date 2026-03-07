@@ -24,7 +24,7 @@ try:
 except ImportError:
     HAS_XARRAY = False
 
-from pretrain_build.config import GridSource, PretrainConfig
+from cube.pretrain.config import GridSource, PretrainConfig
 
 
 class SequenceExtractor:

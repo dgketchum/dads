@@ -27,13 +27,13 @@ from lightning.pytorch.callbacks import (
 )
 from torch.utils.data import DataLoader
 
-from models.dads_cube.dads_gnn import DadsMetGNN
+from cube.model.dads_gnn import DadsMetGNN
 from models.components.scalers import MinMaxScaler
-from pretrain_build.config import GridSource, PretrainConfig
-from pretrain_build.dataset import PretrainDataset, pretrain_collate_fn
-from pretrain_build.grid_index import GridIndex
-from pretrain_build.sampler import EpochSampler, ValidationSampler
-from pretrain_build.sequences import CachedSequenceExtractor, SequenceExtractor
+from cube.pretrain.config import GridSource, PretrainConfig
+from cube.pretrain.dataset import PretrainDataset, pretrain_collate_fn
+from cube.pretrain.grid_index import GridIndex
+from cube.pretrain.sampler import EpochSampler, ValidationSampler
+from cube.pretrain.sequences import CachedSequenceExtractor, SequenceExtractor
 
 
 def pretrain(

@@ -6,7 +6,7 @@ import numpy as np
 import pandas as pd
 from pyarrow.lib import ArrowInvalid
 from tqdm import tqdm
-from models.dads_cube.value_limits import TARGET_LIMITS
+from cube.model.value_limits import TARGET_LIMITS
 
 
 def _unique_val_stations(val_dir: str, limit_files: int = 0) -> List[str]:

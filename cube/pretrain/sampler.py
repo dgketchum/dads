@@ -16,8 +16,8 @@ from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 
-from pretrain_build.config import PretrainConfig
-from pretrain_build.grid_index import GridIndex
+from cube.pretrain.config import PretrainConfig
+from cube.pretrain.grid_index import GridIndex
 
 
 @dataclass
@@ -406,8 +406,8 @@ if __name__ == "__main__":
     # Example usage
     import sys
 
-    from pretrain_build.config import PretrainConfig
-    from pretrain_build.grid_index import GridIndex
+    from cube.pretrain.config import PretrainConfig
+    from cube.pretrain.grid_index import GridIndex
 
     if len(sys.argv) < 2:
         print("Usage: python sampler.py <grid_index_path>")

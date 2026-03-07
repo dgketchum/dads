@@ -9,8 +9,8 @@ from torch_geometric.loader import DataLoader
 import torch  # set matmul precision for Tensor Cores
 import torch.multiprocessing as mp  # control sharing strategy for large batches
 
-from models.dads_cube.dads_gnn import DadsMetGNN
-from models.dads_cube.dataset import DadsDataset
+from cube.model.dads_gnn import DadsMetGNN
+from cube.model.dataset import DadsDataset
 from prep.build_variable_scaler import load_variable_scaler
 
 

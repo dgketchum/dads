@@ -32,10 +32,10 @@ try:
 except ImportError:
     HAS_TORCH_GEOMETRIC = False
 
-from pretrain_build.config import PretrainConfig
-from pretrain_build.grid_index import GridIndex
-from pretrain_build.sampler import EpochSample
-from pretrain_build.sequences import SequenceExtractor
+from cube.pretrain.config import PretrainConfig
+from cube.pretrain.grid_index import GridIndex
+from cube.pretrain.sampler import EpochSample
+from cube.pretrain.sequences import SequenceExtractor
 
 
 class PretrainDataset(Dataset):
