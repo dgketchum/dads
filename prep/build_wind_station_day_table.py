@@ -28,6 +28,9 @@ import numpy as np
 import pandas as pd
 import rasterio
 
+from prep.obsmet_adapter import load_station_daily
+from prep.paths import MVP_ROOT
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -103,13 +106,14 @@ def _sample_terrain_at_stations(
 
 
 def build_wind_station_day_table(
-    obs_dir: str,
+    obsmet_source: str,
     rtma_dir: str,
     sx_path: str,
     terrain_tif: str,
     stations_csv: str,
     out_path: str,
     overwrite: bool = False,
+    obsmet_channel: str = "prod",
     synoptic_crosswalk_path: str | None = None,
     most_factors_path: str | None = None,
 ) -> str:
@@ -122,6 +126,21 @@ def build_wind_station_day_table(
     id_col = "station_id" if "station_id" in stations.columns else "fid"
     fids = set(stations[id_col].astype(str))
     print(f"Stations: {len(fids)}")
+
+    # Load wind obs via obsmet adapter
+    obs_all = load_station_daily(
+        obsmet_source,
+        channel=obsmet_channel,
+        variables=["wind", "wind_dir"],
+        fids=fids,
+    )
+
+    # Decompose wind/wind_dir into u/v components
+    wdir_rad = np.deg2rad(obs_all["wind_dir"])
+    obs_all["u"] = -obs_all["wind"] * np.sin(wdir_rad)
+    obs_all["v"] = -obs_all["wind"] * np.cos(wdir_rad)
+
+    obs_fids = set(obs_all.index.get_level_values("fid").unique())
 
     # Load Synoptic wind height crosswalk for FAO-56 correction
     wind_ht: dict[str, float] = {}
@@ -177,14 +196,16 @@ def build_wind_station_day_table(
     processed = 0
 
     for fid in sorted(fids):
-        obs_path = os.path.join(obs_dir, f"{fid}.parquet")
         rtma_path = os.path.join(rtma_dir, f"{fid}.parquet")
-        if not os.path.exists(obs_path) or not os.path.exists(rtma_path):
+        if not os.path.exists(rtma_path):
+            continue
+        if fid not in obs_fids:
             continue
         if fid not in station_static.index:
             continue
 
-        obs = _read_station_daily(obs_path)
+        # Extract this station's obs from the adapter-loaded DataFrame
+        obs = obs_all.loc[[fid]].droplevel(0)
         rtma = _read_station_daily(rtma_path)
 
         # Require wind obs columns
@@ -208,6 +229,7 @@ def build_wind_station_day_table(
             else:
                 # Pure FAO-56 neutral fallback
                 factor = ln_10m / np.log(67.8 * zw - 5.42)
+                obs = obs.copy()
                 for col in ("u", "v", "wind"):
                     if col in obs.columns:
                         obs[col] = obs[col] * factor
@@ -404,13 +426,22 @@ def _parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
         description="Build wind station-day table for GNN training."
     )
-    p.add_argument("--obs-dir", default="/data/ssd2/madis/daily/")
-    p.add_argument("--rtma-dir", default="/nas/dads/mvp/rtma_daily_pnw_2018_2024/")
-    p.add_argument("--sx-path", default="/nas/dads/mvp/station_sx_pnw.parquet")
-    p.add_argument("--terrain-tif", default="/nas/dads/mvp/terrain_pnw_rtma.tif")
+    p.add_argument(
+        "--obsmet-source",
+        default="madis",
+        help="obsmet source identifier (default: madis).",
+    )
+    p.add_argument(
+        "--obsmet-channel",
+        default="prod",
+        help="obsmet release channel (default: prod).",
+    )
+    p.add_argument("--rtma-dir", default=f"{MVP_ROOT}/rtma_daily_pnw_2018_2024/")
+    p.add_argument("--sx-path", default=f"{MVP_ROOT}/station_sx_pnw.parquet")
+    p.add_argument("--terrain-tif", default=f"{MVP_ROOT}/terrain_pnw_rtma.tif")
     p.add_argument("--stations-csv", default="artifacts/madis_pnw.csv")
     p.add_argument(
-        "--out", default="/nas/dads/mvp/station_day_wind_pnw_2018_2024.parquet"
+        "--out", default=f"{MVP_ROOT}/station_day_wind_pnw_2018_2024.parquet"
     )
     p.add_argument(
         "--synoptic-crosswalk",
@@ -429,13 +460,14 @@ def _parse_args() -> argparse.Namespace:
 def main() -> None:
     a = _parse_args()
     build_wind_station_day_table(
-        obs_dir=a.obs_dir,
+        obsmet_source=a.obsmet_source,
         rtma_dir=a.rtma_dir,
         sx_path=a.sx_path,
         terrain_tif=a.terrain_tif,
         stations_csv=a.stations_csv,
         out_path=a.out,
         overwrite=a.overwrite,
+        obsmet_channel=a.obsmet_channel,
         synoptic_crosswalk_path=a.synoptic_crosswalk,
         most_factors_path=a.most_factors,
     )
