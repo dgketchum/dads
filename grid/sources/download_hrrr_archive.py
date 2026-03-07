@@ -31,21 +31,23 @@ import os
 import signal
 import sys
 import time
-import urllib.error
-import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, datetime, timedelta
 
 import pandas as pd
 
+from grid.sources.hrrr_common import (
+    ARCHIVE_START,
+    fetch_byte_range,
+    fetch_idx,
+    grib_url,
+    parse_idx_for_var,
+    version_for_date,
+)
+
 # ── constants ────────────────────────────────────────────────────────────────
 
-BUCKET = "noaa-hrrr-bdp-pds"
-BASE_URL = f"https://{BUCKET}.s3.amazonaws.com"
-ARCHIVE_START = date(2014, 9, 30)
-
 _HOURS = list(range(24))
-_MAX_RETRIES = 3
 
 TARGET_FIELDS = [
     ("TMP", "2 m above ground"),
@@ -59,109 +61,12 @@ TARGET_FIELDS = [
     ("SPFH", "2 m above ground"),
 ]
 
-_VERSION_BOUNDARIES = [
-    (date(2020, 12, 2), "v4"),
-    (date(2018, 7, 12), "v3"),
-    (date(2016, 8, 23), "v2"),
-    (date(2014, 9, 30), "v1"),
-]
-
-
-def _version_for_date(d: date) -> str:
-    for cutoff, ver in _VERSION_BOUNDARIES:
-        if d >= cutoff:
-            return ver
-    return "v1"
-
-
-# ── URL helpers ──────────────────────────────────────────────────────────────
-
-
-def _s3_prefix(d: date, hour: int) -> str:
-    return f"hrrr.{d:%Y%m%d}/conus/hrrr.t{hour:02d}z.wrfsfcf00.grib2"
-
-
-def _grib_url(d: date, hour: int) -> str:
-    return f"{BASE_URL}/{_s3_prefix(d, hour)}"
-
-
-def _idx_url(d: date, hour: int) -> str:
-    return f"{BASE_URL}/{_s3_prefix(d, hour)}.idx"
-
 
 def _local_path(dest: str, d: date, hour: int) -> str:
-    ver = _version_for_date(d)
+    ver = version_for_date(d)
     return os.path.join(
         dest, ver, f"{d:%Y}", f"{d:%Y%m%d}", f"hrrr.t{hour:02d}z.9var.grib2"
     )
-
-
-# ── IDX parsing + byte-range fetch ──────────────────────────────────────────
-
-
-def _fetch_idx(d: date, hour: int) -> str | None:
-    """Fetch the .idx sidecar file content.  Returns None on 404."""
-    url = _idx_url(d, hour)
-    for attempt in range(_MAX_RETRIES):
-        try:
-            with urllib.request.urlopen(url, timeout=30) as resp:
-                return resp.read().decode("utf-8")
-        except urllib.error.HTTPError as e:
-            if e.code == 404:
-                return None
-            if attempt == _MAX_RETRIES - 1:
-                return None
-            time.sleep(2**attempt)
-        except Exception:
-            if attempt == _MAX_RETRIES - 1:
-                return None
-            time.sleep(2**attempt)
-    return None
-
-
-def _parse_idx_for_var(idx_text: str, var: str, level: str) -> tuple[int, int] | None:
-    """Parse IDX text to find byte range for a given variable and level.
-
-    Returns (start_byte, end_byte) or None if not found.
-    end_byte is -1 if it's the last message.
-    """
-    lines = [ln.strip() for ln in idx_text.strip().split("\n") if ln.strip()]
-    for i, line in enumerate(lines):
-        parts = line.split(":")
-        if len(parts) >= 5 and parts[3] == var and parts[4] == level:
-            start = int(parts[1])
-            if i + 1 < len(lines):
-                next_parts = lines[i + 1].split(":")
-                end = int(next_parts[1]) - 1
-            else:
-                end = -1
-            return start, end
-    return None
-
-
-def _fetch_byte_range(url: str, start: int, end: int) -> bytes | None:
-    """Fetch a byte range from a URL.  Returns None on failure."""
-    if end == -1:
-        range_header = f"bytes={start}-"
-    else:
-        range_header = f"bytes={start}-{end}"
-
-    req = urllib.request.Request(url, headers={"Range": range_header})
-    for attempt in range(_MAX_RETRIES):
-        try:
-            with urllib.request.urlopen(req, timeout=60) as resp:
-                return resp.read()
-        except urllib.error.HTTPError as e:
-            if e.code == 404:
-                return None
-            if attempt == _MAX_RETRIES - 1:
-                return None
-            time.sleep(2**attempt)
-        except Exception:
-            if attempt == _MAX_RETRIES - 1:
-                return None
-            time.sleep(2**attempt)
-    return None
 
 
 # ── scheduling ───────────────────────────────────────────────────────────────
@@ -230,10 +135,10 @@ def _download_hour(d: date, hour: int, dest: str) -> dict:
 
     Returns a manifest row dict.
     """
-    grib_url = _grib_url(d, hour)
+    url = grib_url(d, hour)
     dest_path = _local_path(dest, d, hour)
     ds = d.isoformat()
-    ver = _version_for_date(d)
+    ver = version_for_date(d)
 
     base_row = {
         "model": "hrrr",
@@ -241,12 +146,12 @@ def _download_hour(d: date, hour: int, dest: str) -> dict:
         "hour": hour,
         "product": "sfc9",
         "version": ver,
-        "s3_url": grib_url,
+        "s3_url": url,
         "local_path": dest_path,
     }
 
     # Fetch IDX
-    idx_text = _fetch_idx(d, hour)
+    idx_text = fetch_idx(d, hour)
     if idx_text is None:
         return {
             **base_row,
@@ -260,10 +165,10 @@ def _download_hour(d: date, hour: int, dest: str) -> dict:
     chunks: list[bytes] = []
     n_found = 0
     for var, level in TARGET_FIELDS:
-        rng = _parse_idx_for_var(idx_text, var, level)
+        rng = parse_idx_for_var(idx_text, var, level)
         if rng is None:
             continue
-        data = _fetch_byte_range(grib_url, rng[0], rng[1])
+        data = fetch_byte_range(url, rng[0], rng[1])
         if data is not None:
             chunks.append(data)
             n_found += 1

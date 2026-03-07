@@ -28,23 +28,22 @@ import os
 import signal
 import sys
 import time
-import urllib.error
-import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, datetime, timedelta
 
 import eccodes
 import numpy as np
 import pandas as pd
-from sklearn.neighbors import BallTree
 
+from grid.sources.hrrr_common import (
+    ARCHIVE_START,
+    fetch_byte_range,
+    fetch_idx,
+    grib_url,
+    parse_idx_for_var,
+)
 from grid.sources.hrrr_stability import daily_mean_most_factor
-
-# ── constants ────────────────────────────────────────────────────────────────
-
-BUCKET = "noaa-hrrr-bdp-pds"
-BASE_URL = f"https://{BUCKET}.s3.amazonaws.com"
-ARCHIVE_START = date(2014, 9, 30)
+from grid.station_extract import build_haversine_tree, query_nearest
 
 ACCEPTED_FIDS_PATH = "artifacts/rtma_wind_accepted_fids.json"
 CROSSWALK_PATH = "artifacts/synoptic_wind_height_crosswalk.csv"
@@ -52,8 +51,6 @@ Z0_ARTIFACT = "artifacts/hrrr_z0_at_wind_stations.json"
 STATIONS_CSV = "artifacts/madis_pnw.csv"
 OUT_DIR = "/nas/dads/mvp/hrrr_stability"
 RTMA_DAILY_DIR = "/nas/dads/mvp/rtma_daily_pnw_2018_2024"
-
-MAX_RETRIES = 3
 
 # ── signal handling ──────────────────────────────────────────────────────────
 
@@ -65,87 +62,6 @@ def _signal_handler(signum, frame):
     _shutdown = True
     print("\n  Shutdown requested — finishing current batch ...")
     sys.stdout.flush()
-
-
-# ── IDX parsing + byte-range fetch ───────────────────────────────────────────
-
-
-def _hrrr_s3_prefix(d: date, hour: int) -> str:
-    """S3 key prefix for an HRRR analysis file."""
-    return f"hrrr.{d:%Y%m%d}/conus/hrrr.t{hour:02d}z.wrfsfcf00.grib2"
-
-
-def _idx_url(d: date, hour: int) -> str:
-    return f"{BASE_URL}/{_hrrr_s3_prefix(d, hour)}.idx"
-
-
-def _grib_url(d: date, hour: int) -> str:
-    return f"{BASE_URL}/{_hrrr_s3_prefix(d, hour)}"
-
-
-def _fetch_idx(d: date, hour: int) -> str | None:
-    """Fetch the .idx sidecar file content.  Returns None on 404."""
-    url = _idx_url(d, hour)
-    for attempt in range(MAX_RETRIES):
-        try:
-            with urllib.request.urlopen(url, timeout=30) as resp:
-                return resp.read().decode("utf-8")
-        except urllib.error.HTTPError as e:
-            if e.code == 404:
-                return None
-            if attempt == MAX_RETRIES - 1:
-                return None
-            time.sleep(2**attempt)
-        except Exception:
-            if attempt == MAX_RETRIES - 1:
-                return None
-            time.sleep(2**attempt)
-    return None
-
-
-def _parse_idx_for_var(idx_text: str, var: str, level: str) -> tuple[int, int] | None:
-    """Parse IDX text to find byte range for a given variable and level.
-
-    Returns (start_byte, end_byte) or None if not found.
-    end_byte is -1 if it's the last message.
-    """
-    lines = [ln.strip() for ln in idx_text.strip().split("\n") if ln.strip()]
-    for i, line in enumerate(lines):
-        parts = line.split(":")
-        if len(parts) >= 5 and parts[3] == var and parts[4] == level:
-            start = int(parts[1])
-            if i + 1 < len(lines):
-                next_parts = lines[i + 1].split(":")
-                end = int(next_parts[1]) - 1
-            else:
-                end = -1  # last message
-            return start, end
-    return None
-
-
-def _fetch_byte_range(url: str, start: int, end: int) -> bytes | None:
-    """Fetch a byte range from a URL.  Returns None on failure."""
-    if end == -1:
-        range_header = f"bytes={start}-"
-    else:
-        range_header = f"bytes={start}-{end}"
-
-    req = urllib.request.Request(url, headers={"Range": range_header})
-    for attempt in range(MAX_RETRIES):
-        try:
-            with urllib.request.urlopen(req, timeout=60) as resp:
-                return resp.read()
-        except urllib.error.HTTPError as e:
-            if e.code == 404:
-                return None
-            if attempt == MAX_RETRIES - 1:
-                return None
-            time.sleep(2**attempt)
-        except Exception:
-            if attempt == MAX_RETRIES - 1:
-                return None
-            time.sleep(2**attempt)
-    return None
 
 
 # ── GRIB decode with eccodes ─────────────────────────────────────────────────
@@ -163,29 +79,6 @@ def _decode_grib_message(
         return values.astype(np.float32), lats, lons
     finally:
         eccodes.codes_release(msgid)
-
-
-# ── BallTree grid indexing ───────────────────────────────────────────────────
-
-
-def _build_ball_tree(lats: np.ndarray, lons: np.ndarray) -> BallTree:
-    """Build a BallTree from GRIB grid lat/lon (degrees).
-
-    lons are in [0, 360) from HRRR.
-    """
-    coords = np.deg2rad(np.column_stack([lats, lons]))
-    return BallTree(coords, metric="haversine")
-
-
-def _query_stations(
-    tree: BallTree,
-    sta_lats: np.ndarray,
-    sta_lons_360: np.ndarray,
-) -> np.ndarray:
-    """Find nearest GRIB grid index for each station.  Returns 1-D index array."""
-    coords = np.deg2rad(np.column_stack([sta_lats, sta_lons_360]))
-    _, indices = tree.query(coords, k=1)
-    return indices.ravel()
 
 
 # ── station loading ──────────────────────────────────────────────────────────
@@ -217,18 +110,18 @@ def _run_z0_sample() -> None:
     hour = 0
 
     print(f"Fetching IDX for {d} {hour:02d}Z ...")
-    idx_text = _fetch_idx(d, hour)
+    idx_text = fetch_idx(d, hour)
     if idx_text is None:
         print("ERROR: could not fetch IDX file")
         sys.exit(1)
 
-    rng = _parse_idx_for_var(idx_text, "SFCR", "surface")
+    rng = parse_idx_for_var(idx_text, "SFCR", "surface")
     if rng is None:
         print("ERROR: SFCR:surface not found in IDX")
         sys.exit(1)
 
     print(f"Fetching SFCR byte range {rng[0]}-{rng[1]} ...")
-    data = _fetch_byte_range(_grib_url(d, hour), rng[0], rng[1])
+    data = fetch_byte_range(grib_url(d, hour), rng[0], rng[1])
     if data is None:
         print("ERROR: could not fetch SFCR data")
         sys.exit(1)
@@ -243,10 +136,10 @@ def _run_z0_sample() -> None:
         f"GRIB grid: {len(values)} points, lon range [{lons.min():.1f}, {lons.max():.1f}]"
     )
 
-    tree = _build_ball_tree(lats, lons)
+    tree = build_haversine_tree(lats, lons)
 
     sta_lons_360 = stations["longitude"].values % 360.0
-    indices = _query_stations(tree, stations["latitude"].values, sta_lons_360)
+    indices = query_nearest(tree, stations["latitude"].values, sta_lons_360)
 
     z0_dict = {}
     for i, fid in enumerate(stations["fid"]):
@@ -271,7 +164,7 @@ def _run_z0_sample() -> None:
 def _fetch_hour_tskin(
     d: date,
     hour: int,
-    grib_url: str,
+    url: str,
     station_indices: np.ndarray,
     fids: list[str],
     tree_ref: list,
@@ -281,15 +174,15 @@ def _fetch_hour_tskin(
     Returns list of dicts or None on failure.
     tree_ref is a mutable list holding [tree, lats, lons] — built on first call.
     """
-    idx_text = _fetch_idx(d, hour)
+    idx_text = fetch_idx(d, hour)
     if idx_text is None:
         return None
 
-    rng = _parse_idx_for_var(idx_text, "TMP", "surface")
+    rng = parse_idx_for_var(idx_text, "TMP", "surface")
     if rng is None:
         return None
 
-    data = _fetch_byte_range(grib_url, rng[0], rng[1])
+    data = fetch_byte_range(url, rng[0], rng[1])
     if data is None:
         return None
 
@@ -301,7 +194,7 @@ def _fetch_hour_tskin(
 
     # Build tree on first call
     if tree_ref[0] is None:
-        tree_ref[0] = _build_ball_tree(lats, lons)
+        tree_ref[0] = build_haversine_tree(lats, lons)
         tree_ref[1] = lats
         tree_ref[2] = lons
 
@@ -373,12 +266,12 @@ def _run_download(args: argparse.Namespace) -> None:
         with ThreadPoolExecutor(max_workers=args.workers) as pool:
             futures = {}
             for h in range(24):
-                grib_url = _grib_url(day, h)
+                url = grib_url(day, h)
                 fut = pool.submit(
                     _fetch_hour_tskin,
                     day,
                     h,
-                    grib_url,
+                    url,
                     station_indices
                     if station_indices is not None
                     else np.arange(len(fids)),
@@ -395,7 +288,7 @@ def _run_download(args: argparse.Namespace) -> None:
 
         # After first day, compute station indices from the BallTree
         if station_indices is None and tree_ref[0] is not None:
-            station_indices = _query_stations(tree_ref[0], sta_lats, sta_lons_360)
+            station_indices = query_nearest(tree_ref[0], sta_lats, sta_lons_360)
             # Re-fetch this day's data with correct indices if we used dummy ones
             all_hour_rows = []
             n_hours_ok = 0
@@ -403,7 +296,7 @@ def _run_download(args: argparse.Namespace) -> None:
                 rows = _fetch_hour_tskin(
                     day,
                     h,
-                    _grib_url(day, h),
+                    grib_url(day, h),
                     station_indices,
                     fids,
                     tree_ref,

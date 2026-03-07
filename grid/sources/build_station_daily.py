@@ -46,8 +46,9 @@ from datetime import datetime, timedelta
 import numpy as np
 import pandas as pd
 import rasterio
-from pyproj import Transformer
 from rasterio.windows import Window
+
+from grid.station_extract import load_station_csv, project_to_lcc_pixels
 
 # ------------------------------------------------------------------ constants
 
@@ -77,9 +78,6 @@ _E2C = {
     "TCDC": "tcdc",
 }
 
-# Station-ID column candidates in inventory CSVs
-_ID_CANDIDATES = ("fid", "station_id", "STAID")
-
 # ---- worker globals (set once per process via _init_worker) ----
 _W_GRIB_ROOT: str = ""
 _W_MODEL: str = ""
@@ -91,33 +89,6 @@ _W_N_STATIONS: int = 0
 
 
 # ----------------------------------------------------------- helper functions
-
-
-def _load_stations(
-    csv_path: str,
-    bounds: tuple[float, float, float, float] | None = None,
-) -> pd.DataFrame:
-    """Load station inventory, optionally clipping to lon/lat bounds."""
-    df = pd.read_csv(csv_path)
-    for col in _ID_CANDIDATES:
-        if col in df.columns:
-            df = df.rename(columns={col: "fid"})
-            break
-    if "fid" not in df.columns:
-        raise KeyError(f"No station-ID column found; tried {_ID_CANDIDATES}")
-    df["fid"] = df["fid"].astype(str)
-    df["latitude"] = pd.to_numeric(df["latitude"], errors="coerce")
-    df["longitude"] = pd.to_numeric(df["longitude"], errors="coerce")
-    df = df.dropna(subset=["fid", "latitude", "longitude"])
-    if bounds is not None:
-        w, s, e, n = bounds
-        df = df[
-            (df["longitude"] >= w)
-            & (df["longitude"] <= e)
-            & (df["latitude"] >= s)
-            & (df["latitude"] <= n)
-        ]
-    return df[["fid", "latitude", "longitude"]].reset_index(drop=True)
 
 
 def _find_grib(grib_root: str, model: str, day_str: str, hour: int) -> str | None:
@@ -143,30 +114,6 @@ def _build_band_map(grib_path: str) -> dict[str, int]:
     if missing:
         print(f"  Warning: GRIB missing elements {sorted(missing)}", flush=True)
     return band_map
-
-
-def _station_pixel_coords(
-    grib_path: str, lons: np.ndarray, lats: np.ndarray
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, int, int]:
-    """Project lon/lat -> pixel row/col in the GRIB grid.
-
-    Returns ``(rows, cols, valid_mask, grid_height, grid_width)``.
-    """
-    with rasterio.open(grib_path) as src:
-        crs = src.crs
-        transform = src.transform
-        h, w = src.height, src.width
-
-    xformer = Transformer.from_crs("EPSG:4326", crs, always_xy=True)
-    xs, ys = xformer.transform(lons, lats)
-
-    inv = ~transform
-    cols_f, rows_f = inv * (xs, ys)
-    rows = np.round(rows_f).astype(int)
-    cols = np.round(cols_f).astype(int)
-
-    valid = (rows >= 0) & (rows < h) & (cols >= 0) & (cols < w)
-    return rows, cols, valid, h, w
 
 
 def _ea_from_dpt(dpt_c: np.ndarray) -> np.ndarray:
@@ -325,7 +272,7 @@ def build_station_daily(
     workers: int = 1,
 ) -> int:
     """Build per-station daily Parquets from hourly GRIB2 archives."""
-    stations = _load_stations(stations_csv, bounds)
+    stations = load_station_csv(stations_csv, bounds)
     n = len(stations)
     print(f"Stations loaded: {n}", flush=True)
 
@@ -348,7 +295,7 @@ def build_station_daily(
     band_map = _build_band_map(ref_path)
     print(f"Band map (reference): {band_map}", flush=True)
 
-    rows, cols, valid, grid_h, grid_w = _station_pixel_coords(
+    rows, cols, valid, grid_h, grid_w = project_to_lcc_pixels(
         ref_path, stations["longitude"].values, stations["latitude"].values
     )
     n_valid = int(valid.sum())
