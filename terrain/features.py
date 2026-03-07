@@ -4,7 +4,7 @@ import time
 
 import ee
 import pandas as pd
-from utils.station_parameters import station_par_map
+from prep.station_parameters import station_par_map
 
 
 from extract.rs.earth_engine.ee_utils import is_authorized

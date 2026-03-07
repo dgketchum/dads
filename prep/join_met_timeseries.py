@@ -6,7 +6,7 @@ import numpy as np
 import pandas as pd
 import pyarrow
 
-from utils.station_parameters import station_par_map
+from prep.station_parameters import station_par_map
 from concurrent.futures import ProcessPoolExecutor
 
 warnings.filterwarnings("ignore", category=FutureWarning)

@@ -10,7 +10,7 @@ from concurrent.futures import ProcessPoolExecutor
 import pyarrow.parquet as pq
 
 from prep.columns_desc import GEO_FEATURES
-from utils.station_parameters import station_par_map
+from prep.station_parameters import station_par_map
 
 GRAPH_FEATURES = [
     "lat",

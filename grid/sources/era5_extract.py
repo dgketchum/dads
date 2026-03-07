@@ -6,7 +6,7 @@ import cdsapi
 import pandas as pd
 import xarray as xr
 
-from utils.station_parameters import station_par_map
+from prep.station_parameters import station_par_map
 
 
 def download_era5(target_dir, overwrite=False):

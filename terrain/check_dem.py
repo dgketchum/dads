@@ -8,7 +8,7 @@ from rasterio.crs import CRS
 from rasterio.warp import transform_geom
 from shapely.geometry import Point, box
 
-from utils.station_parameters import station_par_map
+from prep.station_parameters import station_par_map
 
 
 def get_mgrs_code_from_filename(filename, known_mgrs_codes):
