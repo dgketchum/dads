@@ -169,3 +169,5 @@ cython_debug/
 CLAUDE.md
 lightning_logs/
 logs/
+gdex_token.txt
+uv.lock
