@@ -41,8 +41,10 @@ HRRR_WEATHER_COLS = [
     "dpt_hrrr",
     "pres_hrrr",
     "tcdc_hrrr",
-    "prcp_hrrr",
     "ea_hrrr",
+    "dswrf_hrrr",
+    "hpbl_hrrr",
+    "spfh_hrrr",
     "tmp_dpt_diff",
 ]
 
@@ -194,14 +196,8 @@ class HRRRGraphDataset(Dataset):
             self.norm_stats = norm_stats
 
         # Station metadata for graph construction
-        stations = pd.read_csv(stations_csv)
-        id_col = "station_id" if "station_id" in stations.columns else "fid"
-        stations[id_col] = stations[id_col].astype(str)
-        stations = stations.set_index(id_col)
-
-        active_fids = sorted(df["fid"].unique())
-        self.knn_map = build_knn_map(active_fids, stations, k=k)
-        self.static_edges = build_static_edge_attrs(active_fids, stations)
+        self.knn_map = build_knn_map(stations_csv, k=k)
+        self.static_edges = build_static_edge_attrs(stations_csv, self.knn_map)
         self.edge_norm = compute_edge_norm(self.static_edges)
         self.edge_dim = 7
 
