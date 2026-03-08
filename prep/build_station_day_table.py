@@ -71,6 +71,7 @@ class Inputs:
     rtma_daily_dir: str | None = None
     urma_daily_dir: str | None = None
     cdr_daily_dir: str | None = None
+    geosat_daily_dir: str | None = None
     stations_csv: str | None = None
     station_id_col: str = "fid"
 
@@ -247,6 +248,11 @@ def build_station_day_table(
             if os.path.exists(p):
                 cdr = _read_station_daily_parquet(p)
                 merged = merged.join(cdr, how="left")
+        if inputs.geosat_daily_dir:
+            p = os.path.join(inputs.geosat_daily_dir, f"{fid}.parquet")
+            if os.path.exists(p):
+                geosat = _read_station_daily_parquet(p)
+                merged = merged.join(geosat, how="left")
         merged = merged.reset_index(level="fid", drop=True)
         merged["fid"] = str(fid)
         merged["day"] = merged.index.normalize()
@@ -392,6 +398,11 @@ def _parse_args() -> argparse.Namespace:
         default=None,
         help="Directory of per-station daily CDR Parquets (NOAA CDR surface reflectance).",
     )
+    p.add_argument(
+        "--geosat-daily-dir",
+        default=None,
+        help="Directory of per-station daily geosat Parquets (GridSat/GOES IR+WV+VIS).",
+    )
     p.add_argument("--out-file", required=True, help="Output Parquet path.")
     p.add_argument(
         "--stations-csv",
@@ -423,6 +434,7 @@ def main() -> None:
         rtma_daily_dir=a.rtma_daily_dir,
         urma_daily_dir=a.urma_daily_dir,
         cdr_daily_dir=a.cdr_daily_dir,
+        geosat_daily_dir=a.geosat_daily_dir,
         stations_csv=a.stations_csv,
         station_id_col=str(a.station_id_col),
     )
