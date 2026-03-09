@@ -50,6 +50,7 @@ TARGET_RES_DEG = 0.07
 # ── satellite selection ───────────────────────────────────────────────────────
 
 GOES18_OPERATIONAL = date(2022, 9, 1)
+GOES16_DECOMMISSIONED = date(2025, 4, 8)
 SAT_LON_SPLIT = -105.0  # GOES-18 west, GOES-16 east
 
 
@@ -57,6 +58,8 @@ def satellites_for_date(d: date) -> list[str]:
     """Return list of satellite keys to use for a given date."""
     if d < GOES18_OPERATIONAL:
         return ["goes16"]
+    if d >= GOES16_DECOMMISSIONED:
+        return ["goes18"]
     return ["goes16", "goes18"]
 
 

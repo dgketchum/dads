@@ -22,10 +22,10 @@ import time
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from datetime import date, datetime, timedelta
 
+import netCDF4
 import numpy as np
 import pandas as pd
 import rasterio
-import xarray as xr
 from pyproj import CRS
 from rasterio.transform import from_bounds
 from rasterio.warp import Resampling, reproject
@@ -64,32 +64,32 @@ _CHANNELS = list(BAND_MAP.keys())
 # ── reprojection ──────────────────────────────────────────────────────────────
 
 
-def _crs_from_mcmip(ds: xr.Dataset) -> CRS:
+def _crs_from_mcmip(ds: netCDF4.Dataset) -> CRS:
     """Build a pyproj CRS from MCMIP-C ``goes_imager_projection`` metadata."""
-    proj = ds["goes_imager_projection"]
+    proj = ds.variables["goes_imager_projection"]
     return CRS.from_cf(
         {
             "grid_mapping_name": "geostationary",
             "longitude_of_projection_origin": float(
-                proj.attrs["longitude_of_projection_origin"]
+                proj.longitude_of_projection_origin
             ),
-            "perspective_point_height": float(proj.attrs["perspective_point_height"]),
-            "semi_major_axis": float(proj.attrs["semi_major_axis"]),
-            "semi_minor_axis": float(proj.attrs["semi_minor_axis"]),
-            "sweep_angle_axis": str(proj.attrs["sweep_angle_axis"]),
+            "perspective_point_height": float(proj.perspective_point_height),
+            "semi_major_axis": float(proj.semi_major_axis),
+            "semi_minor_axis": float(proj.semi_minor_axis),
+            "sweep_angle_axis": str(proj.sweep_angle_axis),
         }
     )
 
 
-def _src_transform(ds: xr.Dataset) -> rasterio.transform.Affine:
+def _src_transform(ds: netCDF4.Dataset) -> rasterio.transform.Affine:
     """Build source affine transform from MCMIP-C x/y scanning-angle coords.
 
     The x and y variables are in radians and must be scaled by the satellite
     height to produce metres in the geostationary projection.
     """
-    h = float(ds["goes_imager_projection"].attrs["perspective_point_height"])
-    x = ds["x"].values * h
-    y = ds["y"].values * h
+    h = float(ds.variables["goes_imager_projection"].perspective_point_height)
+    x = np.array(ds.variables["x"][:]) * h
+    y = np.array(ds.variables["y"][:]) * h
 
     dx = abs(float(x[1] - x[0]))
     dy = abs(float(y[1] - y[0]))
@@ -241,15 +241,16 @@ def download_and_process(
             continue
 
         try:
-            ds = xr.open_dataset(local_nc, engine="netcdf4")
+            ds = netCDF4.Dataset(local_nc, "r")
             crs = _crs_from_mcmip(ds)
             src_tf = _src_transform(ds)
 
             bands: dict[str, np.ndarray] = {}
             for ch_name, abi_var in BAND_MAP.items():
-                if abi_var not in ds.data_vars:
+                if abi_var not in ds.variables:
                     continue
-                raw = ds[abi_var].values
+                ma = ds.variables[abi_var][:]
+                raw = np.where(ma.mask, np.nan, ma.data).astype(np.float32)
                 if raw.ndim == 3:
                     raw = raw[0]
                 bands[ch_name] = _reproject_band(raw, crs, src_tf)
