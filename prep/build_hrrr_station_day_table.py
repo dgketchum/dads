@@ -2,19 +2,33 @@
 Build a flat station-day table for HRRR bias correction GNN.
 
 Joins HRRR daily baselines + obs (via obsmet adapter) + terrain + Sx into
-one Parquet keyed by (fid, day).  Computes parallel/perpendicular wind
-residual targets and flow-terrain interaction features.
+one Parquet keyed by (fid, day).  Computes residual targets for all
+supported variables; missing obs propagate as NaN (not dropped).
 
-Output schema matches what ``models/hrrr_da/hrrr_dataset.py`` expects:
-  Targets:   delta_w_par, delta_w_perp
-  Obs:       u_obs, v_obs, wind_obs, wdir_obs
-  HRRR weather: ugrd_hrrr, vgrd_hrrr, wind_hrrr, tmp_hrrr, dpt_hrrr, ...
-  Derived:   tmp_dpt_diff
-  Terrain:   elevation, slope, aspect_sin, aspect_cos, tpi_4, tpi_10
-  Sx:        sx_*_2k, sx_*_10k, terrain_openness, terrain_directionality
-  Flow-terrain: flow_upslope, flow_cross, wind_aligned_sx
-  Temporal:  doy_sin, doy_cos
-  Location:  latitude, longitude
+Output schema
+-------------
+Targets (may be NaN):
+  delta_tmax, delta_tmin, delta_tair, delta_ea, delta_rsds,
+  delta_w_par, delta_w_perp
+Obs (may be NaN):
+  tmax_obs, tmin_obs, tair_obs, td_obs, ea_obs, rsds_obs,
+  wind_obs, wdir_obs, u_obs, v_obs
+HRRR weather:
+  ugrd_hrrr, vgrd_hrrr, wind_hrrr, tmp_hrrr, tmax_hrrr, tmin_hrrr,
+  dpt_hrrr, ea_hrrr, dswrf_hrrr, pres_hrrr, tcdc_hrrr, hpbl_hrrr,
+  spfh_hrrr, wdir_hrrr
+Derived:
+  tmp_dpt_diff
+Terrain:
+  elevation, slope, aspect_sin, aspect_cos, tpi_4, tpi_10
+Sx:
+  sx_*_2k, sx_*_10k, terrain_openness, terrain_directionality
+Flow-terrain:
+  flow_upslope, flow_cross, wind_aligned_sx
+Temporal:
+  doy_sin, doy_cos
+Location:
+  latitude, longitude
 """
 
 from __future__ import annotations
@@ -30,6 +44,20 @@ from prep.obsmet_adapter import load_station_daily
 from prep.paths import MVP_ROOT
 
 EPS = 1e-6
+# HRRR dswrf_hrrr is W/m²; MADIS rsds is MJ/m²/day
+_WM2_TO_MJD = 86400.0 / 1e6
+
+OBS_VARS = ["tmax", "tmin", "tair", "td", "wind", "wind_dir", "rsds"]
+
+_OBS_TARGET_COLS = [
+    "delta_tmax",
+    "delta_tmin",
+    "delta_tair",
+    "delta_ea",
+    "delta_rsds",
+    "delta_w_par",
+    "delta_w_perp",
+]
 
 
 def _read_station_daily(path: str) -> pd.DataFrame:
@@ -98,6 +126,8 @@ def build_hrrr_station_day_table(
     out_path: str,
     overwrite: bool = False,
     obsmet_channel: str = "prod",
+    por_path: str | None = None,
+    n_stations: int | None = None,
 ) -> str:
     if os.path.exists(out_path) and not overwrite:
         print(f"Output exists: {out_path}")
@@ -109,16 +139,17 @@ def build_hrrr_station_day_table(
     fids = set(stations[id_col].astype(str))
     print(f"Stations: {len(fids)}")
 
-    # Load wind obs via obsmet adapter
+    # Load all obs variables via obsmet adapter
     obs_all = load_station_daily(
         obsmet_source,
         channel=obsmet_channel,
-        variables=["wind", "wind_dir"],
+        por_path=por_path,
+        variables=OBS_VARS,
         fids=fids,
     )
 
-    # Decompose wind/wind_dir into u/v
-    wdir_rad = np.deg2rad(obs_all["wind_dir"])
+    # Vectorised u/v decomposition (NaN-safe: NaN wind_dir → NaN u/v)
+    wdir_rad = np.deg2rad(obs_all["wind_dir"].values)
     obs_all["u"] = -obs_all["wind"] * np.sin(wdir_rad)
     obs_all["v"] = -obs_all["wind"] * np.cos(wdir_rad)
     obs_fids = set(obs_all.index.get_level_values("fid").unique())
@@ -150,10 +181,17 @@ def build_hrrr_station_day_table(
 
     # Process station by station
     all_rows = []
-    n_dropped = {"wind_range": 0, "delta_range": 0, "nan_wind": 0}
+    n_qc = {
+        "wind_range": 0,
+        "wind_delta": 0,
+        "temp_qc": 0,
+        "ea_qc": 0,
+        "rsds_qc": 0,
+        "no_obs": 0,
+    }
     processed = 0
 
-    for fid in sorted(fids):
+    for fid in sorted(fids)[:n_stations] if n_stations else sorted(fids):
         hrrr_path = os.path.join(hrrr_dir, f"{fid}.parquet")
         if not os.path.exists(hrrr_path):
             continue
@@ -165,80 +203,162 @@ def build_hrrr_station_day_table(
         obs = obs_all.loc[[fid]].droplevel(0)
         hrrr = _read_station_daily(hrrr_path)
 
-        if "u" not in obs.columns or "v" not in obs.columns:
-            continue
-
-        # Join obs + hrrr on day
-        merged = obs[["u", "v", "wind", "wind_dir"]].join(hrrr, how="inner")
+        # Inner join: keep days where both obs row AND hrrr row exist.
+        # Individual obs columns may still be NaN after the join.
+        obs_cols = [
+            c
+            for c in [
+                "tmax",
+                "tmin",
+                "tair",
+                "td",
+                "wind",
+                "wind_dir",
+                "rsds",
+                "u",
+                "v",
+            ]
+            if c in obs.columns
+        ]
+        merged = obs[obs_cols].join(hrrr, how="inner")
         if merged.empty:
             continue
 
+        # Rename obs columns
         merged = merged.rename(
             columns={
-                "u": "u_obs",
-                "v": "v_obs",
+                "tmax": "tmax_obs",
+                "tmin": "tmin_obs",
+                "tair": "tair_obs",
+                "td": "td_obs",
                 "wind": "wind_obs",
                 "wind_dir": "wdir_obs",
+                "rsds": "rsds_obs",
+                "u": "u_obs",
+                "v": "v_obs",
             }
         )
 
-        # QC: drop NaN wind
-        mask_nan = (
-            merged["wind_obs"].isna() | merged["u_obs"].isna() | merged["v_obs"].isna()
-        )
-        n_dropped["nan_wind"] += mask_nan.sum()
-        merged = merged[~mask_nan]
+        # ---- Compute ea_obs from td_obs (Tetens, NaN-safe) ----
+        if "td_obs" in merged.columns:
+            td = merged["td_obs"]
+            merged["ea_obs"] = 0.6108 * np.exp(17.27 * td / (td + 237.3))
 
-        # Wind range
-        mask_range = (merged["wind_obs"] < 0) | (merged["wind_obs"] > 50)
-        n_dropped["wind_range"] += mask_range.sum()
-        merged = merged[~mask_range]
+        # ---- Delta columns (NaN propagates naturally) ----
+        if "tmax_obs" in merged.columns and "tmax_hrrr" in merged.columns:
+            merged["delta_tmax"] = merged["tmax_obs"] - merged["tmax_hrrr"]
+        if "tmin_obs" in merged.columns and "tmin_hrrr" in merged.columns:
+            merged["delta_tmin"] = merged["tmin_obs"] - merged["tmin_hrrr"]
+        if "tair_obs" in merged.columns and "tmp_hrrr" in merged.columns:
+            merged["delta_tair"] = merged["tair_obs"] - merged["tmp_hrrr"]
+        if "ea_obs" in merged.columns and "ea_hrrr" in merged.columns:
+            merged["delta_ea"] = merged["ea_obs"] - merged["ea_hrrr"]
+        if "rsds_obs" in merged.columns and "dswrf_hrrr" in merged.columns:
+            # dswrf_hrrr is W/m²; rsds_obs is MJ/m²/day
+            merged["delta_rsds"] = (
+                merged["rsds_obs"] - merged["dswrf_hrrr"] * _WM2_TO_MJD
+            )
 
-        # Require HRRR u/v
-        if "ugrd_hrrr" not in merged.columns or "vgrd_hrrr" not in merged.columns:
+        # ---- Wind decomposition (NaN-safe via u_obs/v_obs) ----
+        if "ugrd_hrrr" in merged.columns and "vgrd_hrrr" in merged.columns:
+            wind_hrrr_spd = np.sqrt(
+                merged["ugrd_hrrr"].values ** 2 + merged["vgrd_hrrr"].values ** 2
+            )
+            e_par_x = merged["ugrd_hrrr"].values / (wind_hrrr_spd + EPS)
+            e_par_y = merged["vgrd_hrrr"].values / (wind_hrrr_spd + EPS)
+            e_perp_x = -e_par_y
+            e_perp_y = e_par_x
+
+            if "u_obs" in merged.columns and "v_obs" in merged.columns:
+                delta_u = merged["u_obs"].values - merged["ugrd_hrrr"].values
+                delta_v = merged["v_obs"].values - merged["vgrd_hrrr"].values
+                merged["delta_w_par"] = delta_u * e_par_x + delta_v * e_par_y
+                merged["delta_w_perp"] = delta_u * e_perp_x + delta_v * e_perp_y
+        else:
+            # HRRR u/v missing — can't compute flow basis; set defaults
+            e_par_x = np.ones(len(merged))
+            e_par_y = np.zeros(len(merged))
+
+        # ---- QC: set flagged values to NaN, do NOT drop rows ----
+
+        # Temperature QC
+        for dcol, ocol in [("delta_tmax", "tmax_obs"), ("delta_tmin", "tmin_obs")]:
+            if dcol in merged.columns:
+                bad = merged[dcol].abs() > 20
+                n_qc["temp_qc"] += int(bad.sum())
+                merged.loc[bad, [ocol, dcol]] = np.nan
+
+        # ea QC
+        if "ea_obs" in merged.columns and "delta_ea" in merged.columns:
+            bad_ea = (merged["ea_obs"] < 0) | (merged["delta_ea"].abs() > 3)
+            n_qc["ea_qc"] += int(bad_ea.sum())
+            merged.loc[bad_ea, ["ea_obs", "delta_ea"]] = np.nan
+
+        # rsds QC
+        if "rsds_obs" in merged.columns:
+            bad_rs = merged["rsds_obs"] < 0
+            n_qc["rsds_qc"] += int(bad_rs.sum())
+            merged.loc[bad_rs, ["rsds_obs", "delta_rsds"]] = np.nan
+
+        # Wind QC (range + delta)
+        if "wind_obs" in merged.columns:
+            bad_range = (merged["wind_obs"] < 0) | (merged["wind_obs"] > 50)
+            n_qc["wind_range"] += int(bad_range.sum())
+            merged.loc[
+                bad_range,
+                [
+                    "wind_obs",
+                    "wdir_obs",
+                    "u_obs",
+                    "v_obs",
+                    "delta_w_par",
+                    "delta_w_perp",
+                ],
+            ] = np.nan
+
+        if "delta_w_par" in merged.columns:
+            # Recompute delta_u/delta_v for range check from current u/v
+            if "u_obs" in merged.columns and "ugrd_hrrr" in merged.columns:
+                du = merged["u_obs"] - merged["ugrd_hrrr"]
+                dv = merged["v_obs"] - merged["vgrd_hrrr"]
+                bad_delta = (du.abs() > 20) | (dv.abs() > 20)
+                # Only flag where obs actually exists (not already NaN)
+                bad_delta = bad_delta & merged["u_obs"].notna()
+                n_qc["wind_delta"] += int(bad_delta.sum())
+                merged.loc[
+                    bad_delta,
+                    [
+                        "wind_obs",
+                        "wdir_obs",
+                        "u_obs",
+                        "v_obs",
+                        "delta_w_par",
+                        "delta_w_perp",
+                    ],
+                ] = np.nan
+
+        # Row filter: keep rows with at least one non-NaN target
+        target_cols_present = [c for c in _OBS_TARGET_COLS if c in merged.columns]
+        if not target_cols_present:
             continue
-
-        # Raw residuals
-        merged["delta_u"] = merged["u_obs"] - merged["ugrd_hrrr"]
-        merged["delta_v"] = merged["v_obs"] - merged["vgrd_hrrr"]
-
-        # Delta range filter
-        mask_delta = (merged["delta_u"].abs() > 20) | (merged["delta_v"].abs() > 20)
-        n_dropped["delta_range"] += mask_delta.sum()
-        merged = merged[~mask_delta]
-
+        has_any = merged[target_cols_present].notna().any(axis=1)
+        n_qc["no_obs"] += int((~has_any).sum())
+        merged = merged[has_any]
         if merged.empty:
             continue
 
-        # Parallel/perpendicular targets
-        wind_hrrr = np.sqrt(
-            merged["ugrd_hrrr"].values ** 2 + merged["vgrd_hrrr"].values ** 2
-        )
-        e_par_x = merged["ugrd_hrrr"].values / (wind_hrrr + EPS)
-        e_par_y = merged["vgrd_hrrr"].values / (wind_hrrr + EPS)
-        e_perp_x = -e_par_y
-        e_perp_y = e_par_x
-
-        merged["delta_w_par"] = (
-            merged["delta_u"].values * e_par_x + merged["delta_v"].values * e_par_y
-        )
-        merged["delta_w_perp"] = (
-            merged["delta_u"].values * e_perp_x + merged["delta_v"].values * e_perp_y
-        )
-
-        # Stability proxy
+        # ---- Stability proxy ----
         if "tmp_hrrr" in merged.columns and "dpt_hrrr" in merged.columns:
             merged["tmp_dpt_diff"] = merged["tmp_hrrr"] - merged["dpt_hrrr"]
 
-        # Temporal features
+        # ---- Temporal features ----
         doy = merged.index.dayofyear
         merged["doy_sin"] = np.sin(2 * np.pi * doy / 365.25)
         merged["doy_cos"] = np.cos(2 * np.pi * doy / 365.25)
 
-        # Static features
+        # ---- Static features ----
         static_row = station_static.loc[fid]
 
-        # Sx columns
         for col in sx_cols:
             merged[col] = float(static_row[col]) if col in static_row.index else np.nan
         if "terrain_openness" in static_row.index:
@@ -248,7 +368,6 @@ def build_hrrr_station_day_table(
                 static_row["terrain_directionality"]
             )
 
-        # Terrain
         for col in [
             "elevation",
             "slope",
@@ -260,11 +379,20 @@ def build_hrrr_station_day_table(
             if col in static_row.index:
                 merged[col] = float(static_row[col])
 
-        # Location
         merged["latitude"] = float(static_row.get("latitude", np.nan))
         merged["longitude"] = float(static_row.get("longitude", np.nan))
 
-        # Flow-terrain interaction features
+        # ---- Flow-terrain interaction (uses HRRR wind basis, always available) ----
+        # Recompute wind basis after row filter — pre-filter arrays have stale length.
+        if "ugrd_hrrr" in merged.columns and "vgrd_hrrr" in merged.columns:
+            _spd = np.sqrt(
+                merged["ugrd_hrrr"].values ** 2 + merged["vgrd_hrrr"].values ** 2
+            )
+            e_par_x = merged["ugrd_hrrr"].values / (_spd + EPS)
+            e_par_y = merged["vgrd_hrrr"].values / (_spd + EPS)
+        else:
+            e_par_x = np.ones(len(merged))
+            e_par_y = np.zeros(len(merged))
         if "aspect_sin" in static_row.index and "aspect_cos" in static_row.index:
             asp_sin = float(static_row["aspect_sin"])
             asp_cos = float(static_row["aspect_cos"])
@@ -272,15 +400,18 @@ def build_hrrr_station_day_table(
             e_up_y = -asp_cos
             e_cross_x = e_up_y
             e_cross_y = -e_up_x
-
             merged["flow_upslope"] = e_par_x * e_up_x + e_par_y * e_up_y
             merged["flow_cross"] = e_par_x * e_cross_x + e_par_y * e_cross_y
         else:
             merged["flow_upslope"] = 0.0
             merged["flow_cross"] = 0.0
 
-        # Wind-aligned Sx
-        if len(sx_cols_10k) > 0 and fid in sx_df.index:
+        # ---- Wind-aligned Sx ----
+        if (
+            len(sx_cols_10k) > 0
+            and fid in sx_df.index
+            and "ugrd_hrrr" in merged.columns
+        ):
             sx_10k_vals = sx_df.loc[fid, sx_cols_10k].values.astype("float64")
             wdir_from = (
                 np.degrees(
@@ -304,7 +435,7 @@ def build_hrrr_station_day_table(
             print(f"  {processed} stations processed")
 
     print(f"Processed {processed} stations")
-    print(f"Dropped rows: {n_dropped}")
+    print(f"QC counts: {n_qc}")
 
     if not all_rows:
         raise RuntimeError("No rows produced — check input paths")
@@ -314,7 +445,7 @@ def build_hrrr_station_day_table(
 
     os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
     out.to_parquet(out_path)
-    print(f"Written: {out_path}  ({len(out)} rows, {len(out.columns)} columns)")
+    print(f"Written: {out_path}  ({len(out):,} rows, {len(out.columns)} columns)")
     return out_path
 
 
@@ -325,7 +456,7 @@ def build_hrrr_station_day_table(
 
 def _parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
-        description="Build HRRR station-day table for GNN training."
+        description="Build multivariable HRRR station-day table for GNN training."
     )
     p.add_argument(
         "--obsmet-source",
@@ -337,12 +468,23 @@ def _parse_args() -> argparse.Namespace:
         default="prod",
         help="obsmet release channel (default: prod).",
     )
+    p.add_argument(
+        "--por-path",
+        default=None,
+        help="Direct path to permissive obsmet station_por dir (bypasses channel).",
+    )
     p.add_argument("--hrrr-dir", default=f"{MVP_ROOT}/hrrr_daily")
     p.add_argument("--sx-path", default=f"{MVP_ROOT}/station_sx_pnw.parquet")
     p.add_argument("--terrain-tif", default=f"{MVP_ROOT}/terrain_pnw_rtma.tif")
     p.add_argument("--stations-csv", default="artifacts/madis_pnw.csv")
     p.add_argument("--out", default=f"{MVP_ROOT}/station_day_hrrr_pnw.parquet")
     p.add_argument("--overwrite", action="store_true")
+    p.add_argument(
+        "--n-stations",
+        type=int,
+        default=None,
+        help="Limit to first N stations (for testing).",
+    )
     return p.parse_args()
 
 
@@ -357,6 +499,8 @@ def main() -> None:
         out_path=a.out,
         overwrite=a.overwrite,
         obsmet_channel=a.obsmet_channel,
+        por_path=a.por_path,
+        n_stations=a.n_stations,
     )
 
 

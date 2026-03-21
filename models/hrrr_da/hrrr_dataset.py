@@ -61,7 +61,14 @@ SX_DERIVED_COLS = ["terrain_openness", "terrain_directionality"]
 FLOW_TERRAIN_COLS = ["flow_upslope", "flow_cross", "wind_aligned_sx"]
 TEMPORAL_COLS = ["doy_sin", "doy_cos"]
 LOCATION_COLS = ["latitude", "longitude"]
-TARGET_COLS = ["delta_w_par", "delta_w_perp"]
+TARGET_COLS = [
+    "delta_tmax",  # 0
+    "delta_tmin",  # 1
+    "delta_ea",  # 2
+    "delta_rsds",  # 3
+    "delta_w_par",  # 4  ← wind heads start here
+    "delta_w_perp",  # 5
+]
 
 
 def _get_sx_cols(df: pd.DataFrame) -> list[str]:
@@ -184,6 +191,18 @@ class HRRRGraphDataset(Dataset):
         if exclude_fids is not None:
             df = df[~df["fid"].isin(exclude_fids)]
 
+        # Warn if fewer than 4 of 6 canonical targets are present (likely old table)
+        found_targets = [c for c in TARGET_COLS if c in df.columns]
+        if len(found_targets) < 4:
+            import warnings
+
+            warnings.warn(
+                f"Only {len(found_targets)}/{len(TARGET_COLS)} TARGET_COLS found in table "
+                f"({found_targets}). Run build_hrrr_station_day_table with the new "
+                "multivariable builder to include all targets.",
+                stacklevel=2,
+            )
+
         self.feature_cols = _get_feature_cols(
             df, use_sx=use_sx, use_flow_terrain=use_flow_terrain
         )
@@ -218,11 +237,17 @@ class HRRRGraphDataset(Dataset):
 
         x = torch.from_numpy(features)
 
-        # Targets
-        y_cols = [c for c in TARGET_COLS if c in day_df.columns]
-        y = torch.from_numpy(day_df[y_cols].values.astype("float32"))
-        if y.shape[1] == 1:
-            y = y.squeeze(-1)
+        # Build y and valid_mask across all canonical targets.
+        # WARNING: NaN targets are filled with 0.0. Always gate on valid_mask before loss.
+        n_nodes = len(day_df)
+        y_raw = np.full((n_nodes, len(TARGET_COLS)), np.nan, dtype="float32")
+        for col_idx, col in enumerate(TARGET_COLS):
+            if col in day_df.columns:
+                y_raw[:, col_idx] = day_df[col].values.astype("float32")
+        valid_mask_np = ~np.isnan(y_raw)
+        y_raw[np.isnan(y_raw)] = 0.0
+        y = torch.from_numpy(y_raw)  # (N, 6) float32
+        valid_mask = torch.from_numpy(valid_mask_np)  # (N, 6) bool
 
         # Edges
         if self.use_graph:
@@ -240,7 +265,14 @@ class HRRRGraphDataset(Dataset):
             day_df["wind_hrrr"].values if "wind_hrrr" in day_df.columns else None
         )
 
-        data = Data(x=x, y=y, edge_index=edge_index, edge_attr=edge_attr, fids=fids)
+        data = Data(
+            x=x,
+            y=y,
+            edge_index=edge_index,
+            edge_attr=edge_attr,
+            fids=fids,
+            valid_mask=valid_mask,
+        )
         if hrrr_wind is not None:
             data.baseline_wind = torch.from_numpy(hrrr_wind.astype("float32"))
         if "ugrd_hrrr" in day_df.columns:
@@ -262,7 +294,12 @@ class HRRRGraphDataset(Dataset):
 
 
 class PrecomputedHRRRDataset(Dataset):
-    """Load pre-built .pt graph files from a directory."""
+    """Load pre-built .pt graph files from a directory.
+
+    valid_mask is embedded at .pt build time via HRRRGraphDataset.__getitem__.
+    Pre-built files without valid_mask (built before the multivariable rewrite)
+    are stale and must be rebuilt to use task="multitask".
+    """
 
     def __init__(
         self,

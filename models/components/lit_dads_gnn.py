@@ -1,9 +1,10 @@
 """
 Unified Lightning module for DADS bias-correction GNN.
 
-Supports two tasks:
+Supports three tasks:
   - "scalar": single-target bias correction (tmax, EA, etc.)
   - "wind": dual-target wind bias correction (delta_par, delta_perp)
+  - "multitask": masked multi-target bias correction (all variables)
 
 Each task defines its own loss computation and validation metrics.
 """
@@ -35,11 +36,22 @@ class LitDadsGNN(L.LightningModule):
         calm_threshold: float = 2.0,
         calm_min_weight: float = 0.1,
         correction_penalty: float = 0.0,
+        # Multitask-specific
+        target_names: list[str] | None = None,
+        wind_target_indices: list[int] | None = None,
     ):
         super().__init__()
         self.save_hyperparameters()
 
-        out_dim = 1 if task == "scalar" else 2
+        if task == "scalar":
+            out_dim = 1
+        elif task == "wind":
+            out_dim = 2
+        else:  # multitask
+            if not target_names:
+                raise ValueError("task='multitask' requires target_names")
+            out_dim = len(target_names)
+
         self.model = EdgeGatedGNN(
             node_dim=node_dim,
             edge_dim=edge_dim,
@@ -59,7 +71,7 @@ class LitDadsGNN(L.LightningModule):
             self.val_bias_count = 0
             self.val_baseline_ae_sum = 0.0
             self.val_baseline_count = 0
-        else:
+        elif task == "wind":
             self.huber = nn.HuberLoss(delta=huber_delta, reduction="none")
             self.val_mae_speed = MeanAbsoluteError()
             self.val_baseline_speed_mae = MeanAbsoluteError()
@@ -70,6 +82,15 @@ class LitDadsGNN(L.LightningModule):
             self._dir_count = 0
             self._speed_mae_sum = MeanMetric()
             self._rtma_mae_sum = MeanMetric()
+        else:  # multitask
+            self.huber = nn.HuberLoss(delta=huber_delta, reduction="none")
+            self.val_mae_per_target = nn.ModuleDict(
+                {name: MeanAbsoluteError() for name in (target_names or [])}
+            )
+            self._mt_speed_mae = MeanAbsoluteError()
+            self._mt_baseline_speed_mae = MeanAbsoluteError()
+            self._mt_speed_mae_sum = MeanMetric()
+            self._mt_rtma_mae_sum = MeanMetric()
 
     def forward(self, data):
         return self.model(
@@ -103,9 +124,11 @@ class LitDadsGNN(L.LightningModule):
         pred = self(batch)
         if self.hparams.task == "scalar":
             loss, bs = self._scalar_loss(pred, batch)
-        else:
+        elif self.hparams.task == "wind":
             loss, bs = self._wind_loss(pred, batch)
-        self.log("train_loss", loss, prog_bar=True, batch_size=bs)
+        else:
+            loss, bs = self._multitask_loss(pred, batch)
+        self.log("train_loss", loss, prog_bar=True, batch_size=max(bs, 1))
         return loss
 
     # ---- Validation ----
@@ -114,8 +137,10 @@ class LitDadsGNN(L.LightningModule):
         pred = self(batch)
         if self.hparams.task == "scalar":
             return self._scalar_val_step(pred, batch)
-        else:
+        elif self.hparams.task == "wind":
             return self._wind_val_step(pred, batch)
+        else:
+            return self._multitask_val_step(pred, batch)
 
     def _scalar_val_step(self, pred, batch):
         pred = pred.squeeze(-1)
@@ -193,8 +218,10 @@ class LitDadsGNN(L.LightningModule):
     def on_validation_epoch_end(self):
         if self.hparams.task == "scalar":
             self._scalar_val_epoch_end()
-        else:
+        elif self.hparams.task == "wind":
             self._wind_val_epoch_end()
+        else:
+            self._multitask_val_epoch_end()
 
     def _scalar_val_epoch_end(self):
         self.log("val/target_mae", self.val_mae, prog_bar=True)
@@ -227,6 +254,101 @@ class LitDadsGNN(L.LightningModule):
             self.log("val/direction_mae_deg", self._dir_ae_sum / self._dir_count)
         self._dir_ae_sum = 0.0
         self._dir_count = 0
+
+    # ---- Multitask ----
+
+    def _multitask_loss(self, pred: torch.Tensor, batch) -> tuple[torch.Tensor, int]:
+        """Masked per-head Huber loss with calm-weighting for wind heads.
+
+        pred          : (N, n_targets)
+        batch.y       : (N, n_targets) — NaN filled with 0.0
+        batch.valid_mask : (N, n_targets) bool — True where obs is available
+        """
+        wind_idx = set(self.hparams.wind_target_indices or [])
+        head_losses = []
+        for i, _name in enumerate(self.hparams.target_names):
+            mask = batch.valid_mask[:, i]
+            if hasattr(batch, "loss_mask"):
+                mask = mask & batch.loss_mask
+            if not mask.any():
+                continue
+            pred_i, tgt_i = pred[mask, i], batch.y[mask, i]
+            elems = self.huber(pred_i, tgt_i)  # (M,) elementwise
+            if i in wind_idx and hasattr(batch, "baseline_wind"):
+                w = torch.clamp(
+                    batch.baseline_wind[mask] / self.hparams.calm_threshold,
+                    min=self.hparams.calm_min_weight,
+                    max=1.0,
+                )
+                head_losses.append((elems * w).mean())
+            else:
+                head_losses.append(elems.mean())
+        if not head_losses:
+            return pred.sum() * 0.0, 0  # zero grad, no crash on empty batch
+        loss = torch.stack(head_losses).mean()
+        if self.hparams.correction_penalty > 0:
+            loss = loss + self.hparams.correction_penalty * pred.pow(2).mean()
+        return loss, batch.num_nodes
+
+    def _multitask_val_step(self, pred: torch.Tensor, batch) -> torch.Tensor:
+        loss, bs = self._multitask_loss(pred, batch)
+        self.log("val_loss", loss, prog_bar=True, batch_size=max(bs, 1), sync_dist=True)
+        wind_idx = set(self.hparams.wind_target_indices or [])
+        for i, name in enumerate(self.hparams.target_names):
+            mask = batch.valid_mask[:, i]
+            if hasattr(batch, "loss_mask"):
+                mask = mask & batch.loss_mask
+            if mask.any():
+                self.val_mae_per_target[name].update(pred[mask, i], batch.y[mask, i])
+        # Wind speed reconstruction
+        if len(wind_idx) >= 2 and hasattr(batch, "ugrd_baseline"):
+            par_i, perp_i = sorted(wind_idx)
+            wind_mask = batch.valid_mask[:, par_i] & batch.valid_mask[:, perp_i]
+            if hasattr(batch, "loss_mask"):
+                wind_mask = wind_mask & batch.loss_mask
+            if wind_mask.any():
+                eps = 1e-6
+                spd = batch.baseline_wind[wind_mask].clamp(min=eps)
+                e_par_x = batch.ugrd_baseline[wind_mask] / spd
+                e_par_y = batch.vgrd_baseline[wind_mask] / spd
+                u_corr = (
+                    batch.ugrd_baseline[wind_mask]
+                    + pred[wind_mask, par_i] * e_par_x
+                    + pred[wind_mask, perp_i] * (-e_par_y)
+                )
+                v_corr = (
+                    batch.vgrd_baseline[wind_mask]
+                    + pred[wind_mask, par_i] * e_par_y
+                    + pred[wind_mask, perp_i] * e_par_x
+                )
+                speed_corr = torch.sqrt(u_corr**2 + v_corr**2)
+                speed_obs = torch.sqrt(
+                    batch.u_obs[wind_mask] ** 2 + batch.v_obs[wind_mask] ** 2
+                )
+                self._mt_speed_mae.update(speed_corr, speed_obs)
+                self._mt_baseline_speed_mae.update(spd, speed_obs)
+                self._mt_speed_mae_sum.update(torch.abs(speed_corr - speed_obs))
+                self._mt_rtma_mae_sum.update(torch.abs(spd - speed_obs))
+        return loss
+
+    def _multitask_val_epoch_end(self) -> None:
+        wind_idx = set(self.hparams.wind_target_indices or [])
+        for i, (name, metric) in enumerate(self.val_mae_per_target.items()):
+            self.log(f"val/mae_{name}", metric, prog_bar=(i == 0), sync_dist=True)
+        if wind_idx:
+            self.log("val/speed_mae", self._mt_speed_mae, sync_dist=True)
+            self.log(
+                "val/baseline_speed_mae", self._mt_baseline_speed_mae, sync_dist=True
+            )
+            model_mae = self._mt_speed_mae_sum.compute()
+            rtma_mae = self._mt_rtma_mae_sum.compute()
+            self.log(
+                "val/pct_improvement_speed",
+                1.0 - model_mae / rtma_mae.clamp(min=1e-6),
+                sync_dist=True,
+            )
+            self._mt_speed_mae_sum.reset()
+            self._mt_rtma_mae_sum.reset()
 
     def configure_optimizers(self):
         opt = torch.optim.AdamW(

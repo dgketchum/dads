@@ -2,6 +2,17 @@
 
 Reads QC-passed daily station observations from an obsmet channel/release
 and returns DataFrames in the conventions expected by dads builders.
+
+Two access modes
+----------------
+channel mode (production)
+    Uses the /nas/climate/obsmet/channels/{channel} symlink created by
+    obsmet's build_release().  Pass channel="prod" (default).
+
+direct-path mode (development)
+    Pass por_path="/path/to/station_por/madis/permissive" to read straight
+    from a permissive product directory, bypassing the channels mechanism.
+    Use this until build_release() populates the prod channel.
 """
 
 from __future__ import annotations
@@ -29,6 +40,7 @@ def load_station_daily(
     source: str,
     *,
     channel: str = "prod",
+    por_path: str | Path | None = None,
     variables: list[str] | None = None,
     fids: set[str] | None = None,
     start: str | None = None,
@@ -41,7 +53,11 @@ def load_station_daily(
     source : str
         obsmet source identifier (e.g. "madis", "ghcnd").
     channel : str
-        Release channel (default "prod").
+        Release channel (default "prod").  Ignored when por_path is given.
+    por_path : str | Path | None
+        Direct path to a station_por leaf directory (e.g. the permissive
+        product dir).  When provided, bypasses the channels/release
+        infrastructure.  Production should use build_release() instead.
     variables : list[str] | None
         dads variable names to keep (e.g. ["tmax", "tmin", "ea"]).
         If None, keep all metric columns.
@@ -54,11 +70,6 @@ def load_station_daily(
     -------
     DataFrame indexed by (fid, day) with requested variable columns.
     """
-    release_dir = resolve_release(channel)
-    por_dir = release_dir / "station_por" / source
-    if not por_dir.is_dir():
-        raise FileNotFoundError(f"No station_por for source={source}: {por_dir}")
-
     # Build the obsmet column set to read
     obsmet_cols: set[str] | None = None
     if variables is not None:
@@ -67,11 +78,34 @@ def load_station_daily(
     start_ts = pd.Timestamp(start) if start else None
     end_ts = pd.Timestamp(end) if end else None
 
-    chunks: list[pd.DataFrame] = []
-    for pq_path in sorted(por_dir.glob("*.parquet")):
-        station_key = pq_path.stem
-        fid = station_key.split(":", 1)[1] if ":" in station_key else station_key
+    if por_path is not None:
+        # NOTE: Direct path bypasses channels/release infrastructure.
+        # Production should use build_release() which sets up the
+        # /nas/climate/obsmet/channels/{channel} symlink.
+        por_dir = Path(por_path)
+        manifest = pd.read_parquet(por_dir / "manifest.parquet")
+        manifest = manifest.loc[manifest["source"] == source]
+        manifest = manifest.loc[manifest["state"] == "done"]
+        station_iter = [
+            (
+                row["key"].split(":", 1)[1],
+                por_dir / (row["key"].replace(":", "_") + ".parquet"),
+            )
+            for _, row in manifest.iterrows()
+        ]
+    else:
+        release_dir = resolve_release(channel)
+        por_dir = release_dir / "station_por" / source
+        if not por_dir.is_dir():
+            raise FileNotFoundError(f"No station_por for source={source}: {por_dir}")
+        station_iter = []
+        for pq_path in sorted(por_dir.glob("*.parquet")):
+            stem = pq_path.stem
+            fid = stem.split(":", 1)[1] if ":" in stem else stem
+            station_iter.append((fid, pq_path))
 
+    chunks: list[pd.DataFrame] = []
+    for fid, pq_path in station_iter:
         if fids is not None and fid not in fids:
             continue
 
@@ -154,21 +188,39 @@ def load_station_daily(
     return out
 
 
-def load_station_metadata(source: str, *, channel: str = "prod") -> pd.DataFrame:
+def load_station_metadata(
+    source: str,
+    *,
+    channel: str = "prod",
+    por_path: str | Path | None = None,
+) -> pd.DataFrame:
     """Load release manifest metadata for a given source.
 
-    Returns a DataFrame with columns: fid, source, row_count, date_min,
-    date_max (and sha256/qc_summary if present).
+    Returns a DataFrame with columns: fid, source, and whatever columns the
+    manifest carries (row_count/date_min/date_max in release manifests;
+    state/updated_utc/run_id/message in permissive product manifests).
+
+    Parameters
+    ----------
+    por_path : str | Path | None
+        Direct path to the station_por leaf directory.  When provided,
+        bypasses the channels/release infrastructure (development mode).
+        Production should use build_release().
     """
-    release_dir = resolve_release(channel)
-    manifest_path = release_dir / "manifest.parquet"
+    if por_path is not None:
+        # NOTE: Direct path bypasses channels/release infrastructure.
+        manifest_path = Path(por_path) / "manifest.parquet"
+    else:
+        release_dir = resolve_release(channel)
+        manifest_path = release_dir / "manifest.parquet"
+
     if not manifest_path.exists():
         raise FileNotFoundError(f"No manifest at {manifest_path}")
 
     mf = pd.read_parquet(manifest_path)
     mf = mf.loc[mf["source"] == source].copy()
 
-    # Extract fid from station_key
+    # Extract fid from station_key or key column
     key_col = "station_key" if "station_key" in mf.columns else "key"
     mf["fid"] = mf[key_col].str.split(":", n=1).str[1]
     return mf

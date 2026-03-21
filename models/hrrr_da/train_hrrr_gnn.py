@@ -26,6 +26,7 @@ from torch_geometric.loader import DataLoader
 
 from models.components.lit_dads_gnn import LitDadsGNN
 from models.hrrr_da.hrrr_dataset import HRRRGraphDataset, PrecomputedHRRRDataset
+from prep.paths import MVP_ROOT
 
 
 # ---------------------------------------------------------------------------
@@ -58,10 +59,23 @@ class HRRRGNNConfig:
     k_neighbors: int = 16
     task: str = "wind"
 
+    # Multitask configuration
+    target_names: list[str] = field(
+        default_factory=lambda: [
+            "delta_tmax",
+            "delta_tmin",
+            "delta_ea",
+            "delta_rsds",
+            "delta_w_par",
+            "delta_w_perp",
+        ]
+    )
+    wind_target_indices: list[int] = field(default_factory=lambda: [4, 5])
+
     # Data
-    table_path: str = "/nas/dads/mvp/station_day_hrrr_pnw.parquet"
+    table_path: str = f"{MVP_ROOT}/station_day_hrrr_pnw.parquet"
     stations_csv: str = "artifacts/madis_pnw.csv"
-    out_dir: str = "/nas/dads/mvp/hrrr_wind_gnn_v1"
+    out_dir: str = f"{MVP_ROOT}/hrrr_wind_gnn_v1"
     graph_dir: str | None = None
     train_years: list[int] = field(
         default_factory=lambda: [2018, 2019, 2020, 2021, 2022, 2023]
@@ -255,6 +269,10 @@ def main() -> None:
         calm_threshold=cfg.calm_threshold,
         calm_min_weight=cfg.calm_min_weight,
         correction_penalty=cfg.correction_penalty,
+        target_names=cfg.target_names if cfg.task == "multitask" else None,
+        wind_target_indices=cfg.wind_target_indices
+        if cfg.task == "multitask"
+        else None,
     )
 
     if cfg.device and cfg.device.startswith("cuda"):
