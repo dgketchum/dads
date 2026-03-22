@@ -82,7 +82,8 @@ class HRRRGNNConfig:
     )
     val_years: list[int] = field(default_factory=lambda: [2024])
 
-    # Spatial holdout
+    # Spatial holdout — supply a JSON fid list to use the canonical URMA holdout
+    holdout_fids_json: str | None = "artifacts/canonical_holdout_fids.json"
     spatial_holdout_frac: float = 0.1
     spatial_holdout_seed: int = 99
 
@@ -186,19 +187,28 @@ def main() -> None:
     val_days = set(df[df["day"].dt.year.isin(cfg.val_years)]["day"].unique())
     print(f"Train days: {len(train_days)}, Val days: {len(val_days)}")
 
-    # Spatial holdout: stratified by elevation quartile
-    fid_elev = df.groupby("fid")["elevation"].first().dropna()
-    fids_with_elev = fid_elev.index.tolist()
-    rng = np.random.default_rng(cfg.spatial_holdout_seed)
-    n_holdout = max(1, int(len(fids_with_elev) * cfg.spatial_holdout_frac))
-    quartiles = pd.qcut(fid_elev, q=4, labels=False, duplicates="drop")
-    holdout_fids: set[str] = set()
-    for q in sorted(quartiles.unique()):
-        q_fids = quartiles[quartiles == q].index.tolist()
-        n_q = max(1, round(n_holdout * len(q_fids) / len(fids_with_elev)))
-        chosen = rng.choice(q_fids, size=min(n_q, len(q_fids)), replace=False)
-        holdout_fids.update(chosen)
-    print(f"Spatial holdout: {len(holdout_fids)} stations (elevation-stratified)")
+    # Spatial holdout
+    all_fids = set(df["fid"].unique())
+    if cfg.holdout_fids_json:
+        with open(cfg.holdout_fids_json) as f:
+            holdout_fids: set[str] = set(json.load(f)) & all_fids
+        print(
+            f"Spatial holdout: {len(holdout_fids)} stations "
+            f"(canonical URMA MGRS holdout ∩ dataset)"
+        )
+    else:
+        fid_elev = df.groupby("fid")["elevation"].first().dropna()
+        fids_with_elev = fid_elev.index.tolist()
+        rng = np.random.default_rng(cfg.spatial_holdout_seed)
+        n_holdout = max(1, int(len(fids_with_elev) * cfg.spatial_holdout_frac))
+        quartiles = pd.qcut(fid_elev, q=4, labels=False, duplicates="drop")
+        holdout_fids = set()
+        for q in sorted(quartiles.unique()):
+            q_fids = quartiles[quartiles == q].index.tolist()
+            n_q = max(1, round(n_holdout * len(q_fids) / len(fids_with_elev)))
+            chosen = rng.choice(q_fids, size=min(n_q, len(q_fids)), replace=False)
+            holdout_fids.update(chosen)
+        print(f"Spatial holdout: {len(holdout_fids)} stations (elevation-stratified)")
 
     with open(os.path.join(cfg.out_dir, "holdout_fids.json"), "w") as f:
         json.dump(sorted(holdout_fids), f)
