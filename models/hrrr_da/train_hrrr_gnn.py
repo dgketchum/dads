@@ -40,7 +40,7 @@ class HRRRGNNConfig:
     description: str = ""
 
     # Model
-    hidden_dim: int = 64
+    hidden_dim: int = 128
     n_hops: int = 1
     use_graph: bool = True
     use_sx: bool = True
