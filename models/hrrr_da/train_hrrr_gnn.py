@@ -126,7 +126,7 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--seed", type=int, default=None)
     p.add_argument("--device", default=None)
     p.add_argument("--num-workers", type=int, default=None)
-    p.add_argument("--task", default=None, choices=["scalar", "wind"])
+    p.add_argument("--task", default=None, choices=["scalar", "wind", "multitask"])
     return p.parse_args()
 
 
