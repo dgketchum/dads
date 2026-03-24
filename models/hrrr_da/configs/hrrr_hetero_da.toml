@@ -1,0 +1,37 @@
+name = "hrrr_hetero_da_v1"
+description = "Grid/station hetero DA GNN over daily HRRR backgrounds"
+
+hidden_dim = 128
+n_hops = 1
+dropout = 0.1
+lr = 0.001
+weight_decay = 1e-05
+huber_delta = 1.0
+batch_size = 32
+epochs = 30
+num_workers = 16
+grid_radius_cells = 1
+max_samples_per_epoch = 200000
+seed = 42
+grid_radius_cells = 2
+station_radius_km = 150.0
+max_neighbor_stations = 16
+
+target_names = [
+  "delta_tmax",
+  "delta_tmin",
+  "delta_ea",
+  "delta_rsds",
+  "delta_w_par",
+  "delta_w_perp",
+]
+
+table_path = "/nas/dads/mvp/station_day_hrrr_pnw.parquet"
+background_dir = "/nas/dads/mvp/hrrr_1km_pnw"
+background_pattern = "HRRR_1km_{date}.tif"
+terrain_tif = "/nas/dads/mvp/terrain_pnw_1km.tif"
+out_dir = "/nas/dads/mvp/hrrr_hetero_da_v1"
+
+train_years = [2018, 2019, 2020, 2021, 2022, 2023]
+val_years = [2024]
+holdout_fids_json = "artifacts/canonical_holdout_fids.json"
