@@ -1,0 +1,32 @@
+name = "patch_assim_e0"
+description = "Raster-patch HRRR bias correction (E0, no obs channels)"
+
+patch_size = 64
+hidden_dim = 32
+lr = 3e-4
+tv_weight = 1e-3
+huber_delta = 1.0
+batch_size = 16
+epochs = 30
+seed = 42
+days_per_epoch = 250
+num_workers = 4
+
+target_names = [
+  "delta_tmax",
+  "delta_tmin",
+  "delta_ea",
+  "delta_rsds",
+  "delta_w_par",
+  "delta_w_perp",
+]
+
+table_path = "/nas/dads/mvp/station_day_hrrr_pnw.parquet"
+background_dir = "/nas/dads/mvp/hrrr_1km_pnw"
+background_pattern = "HRRR_1km_{date}.tif"
+static_tifs = ["/nas/dads/mvp/terrain_pnw_1km.tif"]
+landsat_tif = "/nas/dads/mvp/landsat_pnw_1km.tif"
+out_dir = "/nas/dads/mvp/patch_assim_e0"
+train_years = [2018, 2019, 2020, 2021, 2022, 2023]
+val_years = [2024]
+holdout_fids_json = "artifacts/canonical_holdout_fids.json"
