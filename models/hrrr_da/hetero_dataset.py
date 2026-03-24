@@ -444,6 +444,10 @@ class HRRRHeteroTileDataset(Dataset):
             s_rows = np.clip(np.asarray(s_rows, dtype=int), 0, s_data.shape[1] - 1)
             s_cols = np.clip(np.asarray(s_cols, dtype=int), 0, s_data.shape[2] - 1)
             static_feats = s_data[:, s_rows, s_cols].T.astype("float32")
+            # Fill nodata (nan) with 0 — rasterio nodata=nan marks ocean/cloud-masked
+            # pixels (~1.7% of Landsat domain).  0 reflectance is a physically
+            # valid fill; after z-score norm it maps to ≈ −1.5, finite in fp16.
+            np.nan_to_num(static_feats, copy=False, nan=0.0)
             feats.append(static_feats)
 
         doy_sin, doy_cos = _doy_features(day)
