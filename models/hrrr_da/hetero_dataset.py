@@ -37,6 +37,26 @@ DEFAULT_TARGET_NAMES = [
     "delta_w_perp",
 ]
 
+# Winstral Sx: 16 azimuths (0°–337.5° in 22.5° steps) × 2 search distances.
+_SX_AZIMUTHS = [
+    0,
+    22,
+    45,
+    67,
+    90,
+    112,
+    135,
+    157,
+    180,
+    202,
+    225,
+    247,
+    270,
+    292,
+    315,
+    337,
+]
+
 DEFAULT_STATION_FEATURE_CANDIDATES = [
     "ugrd_hrrr",
     "vgrd_hrrr",
@@ -65,6 +85,9 @@ DEFAULT_STATION_FEATURE_CANDIDATES = [
     "flow_upslope",
     "flow_cross",
     "wind_aligned_sx",
+    *[f"sx_{az:03d}_{sc}" for az in _SX_AZIMUTHS for sc in ("2k", "10k")],
+    "terrain_openness",
+    "terrain_directionality",
     "doy_sin",
     "doy_cos",
     "latitude",
@@ -175,6 +198,7 @@ class HRRRHeteroTileDataset(Dataset):
         background_dir: str,
         background_pattern: str = "HRRR_1km_{date}.tif",
         terrain_tif: str | None = None,
+        static_tifs: list[str] | None = None,
         target_names: list[str] | None = None,
         station_feature_cols: list[str] | None = None,
         background_feature_names: list[str] | None = None,
@@ -190,12 +214,23 @@ class HRRRHeteroTileDataset(Dataset):
         super().__init__()
         self.background_dir = background_dir
         self.background_pattern = background_pattern
-        self.terrain_tif = terrain_tif
+        # Resolve static TIFs: static_tifs takes precedence over terrain_tif.
+        if static_tifs is not None:
+            self.static_tifs = list(static_tifs)
+        elif terrain_tif is not None:
+            self.static_tifs = [terrain_tif]
+        else:
+            self.static_tifs = []
+        self.terrain_tif = (
+            self.static_tifs[0] if self.static_tifs else None
+        )  # backward compat
         self.target_names = target_names or list(DEFAULT_TARGET_NAMES)
         self.grid_radius_cells = int(grid_radius_cells)
         self.station_radius_km = float(station_radius_km)
         self.max_neighbor_stations = int(max_neighbor_stations)
-        self.raster_cache = _RasterCache(max_items=cache_size)
+        # Ensure cache can hold all static TIFs plus at least 2 daily HRRR files.
+        actual_cache = max(cache_size, len(self.static_tifs) + 2)
+        self.raster_cache = _RasterCache(max_items=actual_cache)
 
         df = pd.read_parquet(table_path)
         if isinstance(df.index, pd.MultiIndex):
@@ -263,10 +298,15 @@ class HRRRHeteroTileDataset(Dataset):
         self.background_feature_names = (
             background_feature_names or _discover_band_names(example_bg, "bg")
         )
-        if terrain_tif is not None:
-            self.terrain_feature_names = _discover_band_names(terrain_tif, "terrain")
-        else:
-            self.terrain_feature_names = []
+        # Discover band names for each static TIF (terrain, Landsat, …).
+        self.terrain_feature_names: list[str] = []
+        self._static_tif_band_names: list[list[str]] = []
+        for tif_path in self.static_tifs:
+            prefix = os.path.splitext(os.path.basename(tif_path))[0]
+            names = _discover_band_names(tif_path, prefix)
+            self.terrain_feature_names.extend(names)
+            self._static_tif_band_names.append(names)
+
         self.grid_feature_names = (
             list(self.background_feature_names)
             + list(self.terrain_feature_names)
@@ -275,11 +315,21 @@ class HRRRHeteroTileDataset(Dataset):
         self.grid_node_dim = len(self.grid_feature_names)
         self.edge_dim = 7
 
-        # Feature stats come from station samples; grid features share the same semantics.
+        # Feature stats from station table (covers HRRR + terrain columns).
         self.grid_norm_stats = self._compute_norm_stats(
             self.samples,
             [c for c in self.grid_feature_names if c in self.samples.columns],
         )
+        # For static TIF features absent from the station table (e.g. Landsat),
+        # sample the raster directly to compute mean/std.
+        for tif_path, tif_names in zip(self.static_tifs, self._static_tif_band_names):
+            uncovered = [n for n in tif_names if n not in self.grid_norm_stats]
+            if uncovered:
+                raster_stats = self._compute_raster_norm_stats(tif_path, tif_names)
+                for n in uncovered:
+                    if n in raster_stats:
+                        self.grid_norm_stats[n] = raster_stats[n]
+
         self.station_norm_stats = self._compute_norm_stats(
             self.samples,
             [c for c in self.station_feature_cols if c in self.samples.columns],
@@ -306,6 +356,25 @@ class HRRRHeteroTileDataset(Dataset):
             stats[col] = {
                 "mean": float(vals.mean()),
                 "std": float(max(vals.std(), 1e-8)),
+            }
+        return stats
+
+    @staticmethod
+    def _compute_raster_norm_stats(
+        path: str, band_names: list[str]
+    ) -> dict[str, dict[str, float]]:
+        """Compute mean/std from all valid pixels in a raster (for features absent from the station table)."""
+        stats: dict[str, dict[str, float]] = {}
+        with rasterio.open(path) as src:
+            data = src.read().astype("float32")
+        for i, name in enumerate(band_names):
+            band = data[i].ravel()
+            valid = band[np.isfinite(band)]
+            if len(valid) == 0:
+                continue
+            stats[name] = {
+                "mean": float(valid.mean()),
+                "std": float(max(valid.std(), 1e-8)),
             }
         return stats
 
@@ -356,26 +425,26 @@ class HRRRHeteroTileDataset(Dataset):
 
         feats = [bg_feats]
 
-        if self.terrain_tif is not None:
-            terrain = self.raster_cache.get(self.terrain_tif)
-            t_data = terrain["data"]
-            t_tf = terrain["transform"]
-            t_crs = terrain["crs"]
-            if t_data.shape[0] != len(self.terrain_feature_names):
+        for tif_path, tif_names in zip(self.static_tifs, self._static_tif_band_names):
+            static = self.raster_cache.get(tif_path)
+            s_data = static["data"]
+            s_tf = static["transform"]
+            s_crs = static["crs"]
+            if s_data.shape[0] != len(tif_names):
                 raise ValueError(
-                    "Terrain feature names do not match raster band count: "
-                    f"{t_data.shape[0]} vs {len(self.terrain_feature_names)}"
+                    f"{os.path.basename(tif_path)}: band count mismatch: "
+                    f"{s_data.shape[0]} vs {len(tif_names)}"
                 )
-            if str(t_crs) == str(bg_crs):
-                tr, tc = rowcol(t_tf, x_proj, y_proj)
+            if str(s_crs) == str(bg_crs):
+                s_rows, s_cols = rowcol(s_tf, x_proj, y_proj)
             else:
-                to_terrain = Transformer.from_crs(bg_crs, t_crs, always_xy=True)
-                tx, ty = to_terrain.transform(x_proj, y_proj)
-                tr, tc = rowcol(t_tf, tx, ty)
-            tr = np.clip(np.asarray(tr, dtype=int), 0, t_data.shape[1] - 1)
-            tc = np.clip(np.asarray(tc, dtype=int), 0, t_data.shape[2] - 1)
-            terrain_feats = t_data[:, tr, tc].T.astype("float32")
-            feats.append(terrain_feats)
+                to_static = Transformer.from_crs(bg_crs, s_crs, always_xy=True)
+                sx_proj, sy_proj = to_static.transform(x_proj, y_proj)
+                s_rows, s_cols = rowcol(s_tf, sx_proj, sy_proj)
+            s_rows = np.clip(np.asarray(s_rows, dtype=int), 0, s_data.shape[1] - 1)
+            s_cols = np.clip(np.asarray(s_cols, dtype=int), 0, s_data.shape[2] - 1)
+            static_feats = s_data[:, s_rows, s_cols].T.astype("float32")
+            feats.append(static_feats)
 
         doy_sin, doy_cos = _doy_features(day)
         temporal = np.full((len(rr_flat), 2), [doy_sin, doy_cos], dtype="float32")

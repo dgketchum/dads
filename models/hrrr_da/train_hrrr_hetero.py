@@ -26,12 +26,68 @@ from lightning.pytorch.callbacks import (
     LearningRateMonitor,
     ModelCheckpoint,
 )
-from torch.utils.data import RandomSampler, Subset
+from torch.utils.data import RandomSampler
 from torch_geometric.loader import DataLoader
 
 from models.hrrr_da.hetero_dataset import HRRRHeteroTileDataset
 from models.hrrr_da.lit_hetero_gnn import LitHRRRHeteroGNN
 from prep.paths import MVP_ROOT
+
+
+class DayGroupedSampler(torch.utils.data.Sampler):
+    """Per-epoch random day sampling with day-grouped index order.
+
+    Selects `days_per_epoch` random days each epoch (fresh draw via
+    base_seed + epoch), shuffles day order for SGD diversity, then yields
+    all sample indices from those days with within-day shuffling. Consecutive
+    indices share the same raster file, maximising _RasterCache hit rate.
+
+    Call set_epoch() at the start of each epoch — done automatically by
+    DayResamplingCallback.
+    """
+
+    def __init__(
+        self, samples_df: pd.DataFrame, days_per_epoch: int, base_seed: int = 42
+    ) -> None:
+        self._samples = samples_df
+        self.days_per_epoch = days_per_epoch
+        self.base_seed = base_seed
+        self._epoch = 0
+        self._all_days = samples_df["day"].unique()
+        self._day_to_idx: dict = {
+            day: grp.index.tolist() for day, grp in samples_df.groupby("day")
+        }
+
+    def set_epoch(self, epoch: int) -> None:
+        self._epoch = epoch
+
+    def __iter__(self):
+        rng = np.random.default_rng(self.base_seed + self._epoch)
+        n = min(self.days_per_epoch, len(self._all_days))
+        selected = rng.choice(self._all_days, n, replace=False)
+        rng.shuffle(selected)
+        indices: list[int] = []
+        for day in selected:
+            idxs = list(self._day_to_idx[day])
+            rng.shuffle(idxs)
+            indices.extend(idxs)
+        return iter(indices)
+
+    def __len__(self) -> int:
+        avg_per_day = len(self._samples) / max(len(self._all_days), 1)
+        return int(min(self.days_per_epoch, len(self._all_days)) * avg_per_day)
+
+
+class DayResamplingCallback(L.Callback):
+    """Calls sampler.set_epoch(trainer.current_epoch) at train epoch start."""
+
+    def __init__(self, sampler: DayGroupedSampler) -> None:
+        self.sampler = sampler
+
+    def on_train_epoch_start(
+        self, trainer: L.Trainer, pl_module: L.LightningModule
+    ) -> None:
+        self.sampler.set_epoch(trainer.current_epoch)
 
 
 @dataclass
@@ -66,8 +122,10 @@ class HRRRHeteroConfig:
     table_path: str = f"{MVP_ROOT}/station_day_hrrr_pnw.parquet"
     background_dir: str = f"{MVP_ROOT}/hrrr_1km_pnw"
     background_pattern: str = "HRRR_1km_{date}.tif"
-    terrain_tif: str = f"{MVP_ROOT}/terrain_pnw_1km.tif"
-    out_dir: str = f"{MVP_ROOT}/hrrr_hetero_da_v1"
+    static_tifs: list[str] = field(
+        default_factory=lambda: [f"{MVP_ROOT}/terrain_pnw_1km.tif"]
+    )
+    out_dir: str = f"{MVP_ROOT}/hrrr_hetero_da_v2"
     train_years: list[int] = field(
         default_factory=lambda: [2018, 2019, 2020, 2021, 2022, 2023]
     )
@@ -88,7 +146,14 @@ class HRRRHeteroConfig:
     @classmethod
     def from_toml(cls, path: str) -> "HRRRHeteroConfig":
         with open(path, "rb") as f:
-            return cls(**tomllib.load(f))
+            data = tomllib.load(f)
+        # Migrate legacy terrain_tif key → static_tifs.
+        if "terrain_tif" in data:
+            if "static_tifs" not in data:
+                data["static_tifs"] = [data.pop("terrain_tif")]
+            else:
+                data.pop("terrain_tif")
+        return cls(**data)
 
 
 def _parse_args() -> argparse.Namespace:
@@ -97,7 +162,7 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--table-path", default=None)
     p.add_argument("--background-dir", default=None)
     p.add_argument("--background-pattern", default=None)
-    p.add_argument("--terrain-tif", default=None)
+    p.add_argument("--static-tifs", nargs="+", default=None)
     p.add_argument("--out-dir", default=None)
     p.add_argument("--hidden-dim", type=int, default=None)
     p.add_argument("--n-hops", type=int, default=None)
@@ -115,7 +180,6 @@ def _build_config(args: argparse.Namespace) -> HRRRHeteroConfig:
         "table_path": "table_path",
         "background_dir": "background_dir",
         "background_pattern": "background_pattern",
-        "terrain_tif": "terrain_tif",
         "out_dir": "out_dir",
         "hidden_dim": "hidden_dim",
         "n_hops": "n_hops",
@@ -129,6 +193,8 @@ def _build_config(args: argparse.Namespace) -> HRRRHeteroConfig:
         val = getattr(args, cli_name, None)
         if val is not None:
             setattr(cfg, cfg_name, val)
+    if args.static_tifs is not None:
+        cfg.static_tifs = args.static_tifs
     return cfg
 
 
@@ -162,7 +228,7 @@ def main() -> None:
         table_path=cfg.table_path,
         background_dir=cfg.background_dir,
         background_pattern=cfg.background_pattern,
-        terrain_tif=cfg.terrain_tif,
+        static_tifs=cfg.static_tifs,
         target_names=cfg.target_names,
         train_days=train_days,
         target_exclude_fids=holdout_fids,
@@ -193,7 +259,7 @@ def main() -> None:
         table_path=cfg.table_path,
         background_dir=cfg.background_dir,
         background_pattern=cfg.background_pattern,
-        terrain_tif=cfg.terrain_tif,
+        static_tifs=cfg.static_tifs,
         target_names=cfg.target_names,
         train_days=val_days,
         target_include_fids=holdout_fids if holdout_fids else None,
@@ -208,33 +274,20 @@ def main() -> None:
     if len(val_ds) == 0:
         raise ValueError("Validation hetero dataset is empty.")
 
+    day_sampler: DayGroupedSampler | None = None
     if cfg.days_per_epoch is not None:
-        # Day-grouped subsetting: select random days, keep all their samples in
-        # day-sorted order.  Consecutive indices stay within the same day, so each
-        # DataLoader worker only opens O(days_per_epoch / num_workers) rasters per
-        # epoch instead of opening a new raster for every sample.
-        rng = np.random.default_rng(cfg.seed)
-        all_days = train_ds.samples["day"].unique()
-        n_days = min(cfg.days_per_epoch, len(all_days))
-        selected = set(rng.choice(all_days, n_days, replace=False))
-        day_to_idx: dict = {}
-        for day, grp in train_ds.samples.groupby("day"):
-            if day in selected:
-                day_to_idx[day] = grp.index.tolist()
-        day_order = list(selected)
-        rng.shuffle(day_order)
-        sorted_indices: list[int] = []
-        for day in day_order:
-            idxs = day_to_idx[day]
-            rng.shuffle(idxs)
-            sorted_indices.extend(idxs)
-        if cfg.max_samples_per_epoch is not None:
-            sorted_indices = sorted_indices[: cfg.max_samples_per_epoch]
-        train_effective: torch.utils.data.Dataset = Subset(train_ds, sorted_indices)
+        # DayGroupedSampler reseeds each epoch (via DayResamplingCallback) so
+        # the model sees a fresh random subset every epoch — fixing the fixed-
+        # subset overfitting that plagued the Subset-based approach.
+        day_sampler = DayGroupedSampler(
+            train_ds.samples,
+            days_per_epoch=cfg.days_per_epoch,
+            base_seed=cfg.seed,
+        )
         train_loader = DataLoader(
-            train_effective,
+            train_ds,
             batch_size=cfg.batch_size,
-            shuffle=False,
+            sampler=day_sampler,
             num_workers=cfg.num_workers,
             persistent_workers=(cfg.num_workers > 0),
         )
@@ -287,22 +340,26 @@ def main() -> None:
         accelerator = "auto"
         devices = 1
 
+    callbacks = [
+        ModelCheckpoint(
+            dirpath=cfg.out_dir,
+            monitor="val_loss",
+            save_top_k=3,
+            mode="min",
+            filename="ckpt-{epoch:03d}-{val_loss:.4f}",
+        ),
+        EarlyStopping(monitor="val_loss", patience=20, mode="min"),
+        LearningRateMonitor(logging_interval="epoch"),
+    ]
+    if day_sampler is not None:
+        callbacks.append(DayResamplingCallback(day_sampler))
+
     trainer = L.Trainer(
         max_epochs=cfg.epochs,
         accelerator=accelerator,
         devices=devices,
         precision="16-mixed" if accelerator == "gpu" else 32,
-        callbacks=[
-            ModelCheckpoint(
-                dirpath=cfg.out_dir,
-                monitor="val_loss",
-                save_top_k=3,
-                mode="min",
-                filename="ckpt-{epoch:03d}-{val_loss:.4f}",
-            ),
-            EarlyStopping(monitor="val_loss", patience=20, mode="min"),
-            LearningRateMonitor(logging_interval="epoch"),
-        ],
+        callbacks=callbacks,
         default_root_dir=cfg.out_dir,
         log_every_n_steps=10,
     )

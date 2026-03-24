@@ -1,18 +1,16 @@
-name = "hrrr_hetero_da_v2"
-description = "Grid/station hetero DA GNN — HRRR + terrain + Landsat + Sx station features"
+name = "hrrr_hetero_smoke"
+description = "Underfitted smoke test on June 2024 only — for inference benchmarking"
 
-hidden_dim = 128
+hidden_dim = 32
 n_hops = 1
-dropout = 0.1
+dropout = 0.0
 lr = 0.001
 weight_decay = 1e-05
 huber_delta = 1.0
 batch_size = 32
-epochs = 30
-num_workers = 4
-grid_radius_cells = 1
-days_per_epoch = 250
+epochs = 5
 seed = 42
+grid_radius_cells = 2
 station_radius_km = 150.0
 max_neighbor_stations = 16
 
@@ -32,8 +30,8 @@ static_tifs = [
   "/nas/dads/mvp/terrain_pnw_1km.tif",
   "/nas/dads/mvp/landsat_pnw_rtma.tif",
 ]
-out_dir = "/nas/dads/mvp/hrrr_hetero_da_v2"
+out_dir = "/nas/dads/mvp/hrrr_hetero_smoke"
 
-train_years = [2018, 2019, 2020, 2021, 2022, 2023]
+train_years = [2024]
 val_years = [2024]
 holdout_fids_json = "artifacts/canonical_holdout_fids.json"
