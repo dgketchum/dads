@@ -15,6 +15,8 @@ import os
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 
+import numpy as np
+import torch
 import lightning as L
 import pandas as pd
 import tomllib
@@ -24,7 +26,7 @@ from lightning.pytorch.callbacks import (
     LearningRateMonitor,
     ModelCheckpoint,
 )
-from torch.utils.data import RandomSampler
+from torch.utils.data import RandomSampler, Subset
 from torch_geometric.loader import DataLoader
 
 from models.hrrr_da.hetero_dataset import HRRRHeteroTileDataset
@@ -75,6 +77,7 @@ class HRRRHeteroConfig:
     device: str | None = None
     num_workers: int = 0
     max_samples_per_epoch: int | None = None
+    days_per_epoch: int | None = None
 
     def save_toml(self, path: str) -> None:
         d = asdict(self)
@@ -205,7 +208,37 @@ def main() -> None:
     if len(val_ds) == 0:
         raise ValueError("Validation hetero dataset is empty.")
 
-    if cfg.max_samples_per_epoch is not None:
+    if cfg.days_per_epoch is not None:
+        # Day-grouped subsetting: select random days, keep all their samples in
+        # day-sorted order.  Consecutive indices stay within the same day, so each
+        # DataLoader worker only opens O(days_per_epoch / num_workers) rasters per
+        # epoch instead of opening a new raster for every sample.
+        rng = np.random.default_rng(cfg.seed)
+        all_days = train_ds.samples["day"].unique()
+        n_days = min(cfg.days_per_epoch, len(all_days))
+        selected = set(rng.choice(all_days, n_days, replace=False))
+        day_to_idx: dict = {}
+        for day, grp in train_ds.samples.groupby("day"):
+            if day in selected:
+                day_to_idx[day] = grp.index.tolist()
+        day_order = list(selected)
+        rng.shuffle(day_order)
+        sorted_indices: list[int] = []
+        for day in day_order:
+            idxs = day_to_idx[day]
+            rng.shuffle(idxs)
+            sorted_indices.extend(idxs)
+        if cfg.max_samples_per_epoch is not None:
+            sorted_indices = sorted_indices[: cfg.max_samples_per_epoch]
+        train_effective: torch.utils.data.Dataset = Subset(train_ds, sorted_indices)
+        train_loader = DataLoader(
+            train_effective,
+            batch_size=cfg.batch_size,
+            shuffle=False,
+            num_workers=cfg.num_workers,
+            persistent_workers=(cfg.num_workers > 0),
+        )
+    elif cfg.max_samples_per_epoch is not None:
         train_sampler = RandomSampler(
             train_ds,
             num_samples=min(cfg.max_samples_per_epoch, len(train_ds)),
