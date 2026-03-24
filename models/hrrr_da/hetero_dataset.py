@@ -232,7 +232,7 @@ class HRRRHeteroTileDataset(Dataset):
         if neighbor_exclude_fids is not None:
             neighbor_df = neighbor_df[~neighbor_df["fid"].isin(neighbor_exclude_fids)]
 
-        self.samples = df.reset_index(drop=True)
+        self.samples = df.sort_values("day").reset_index(drop=True)
         self._neighbor_day_groups = {
             pd.Timestamp(day).normalize(): grp.reset_index(drop=True)
             for day, grp in neighbor_df.groupby("day")
