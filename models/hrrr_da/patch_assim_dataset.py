@@ -81,6 +81,62 @@ def _compute_raster_norm_stats(
     return stats
 
 
+def _compute_rsun_norm_stats(rsun_path: str) -> dict[str, float]:
+    """Sample 4 quarterly bands from the 365-band rsun TIF to get mean/std."""
+    sample_doys = [1, 91, 182, 274]
+    vals = []
+    with rasterio.open(rsun_path) as src:
+        for doy in sample_doys:
+            band_idx = max(1, min(doy, src.count))
+            data = src.read(band_idx).astype("float32").ravel()
+            valid = data[np.isfinite(data) & (data > 0)]
+            if len(valid):
+                vals.append(valid)
+    if not vals:
+        return {"mean": 0.0, "std": 1.0}
+    all_vals = np.concatenate(vals)
+    return {"mean": float(all_vals.mean()), "std": float(max(all_vals.std(), 1e-8))}
+
+
+def _compute_cdr_norm_stats(
+    cdr_dir: str,
+    cdr_pattern: str,
+    samples: pd.DataFrame,
+    band_names: list[str],
+    n_sample: int = 20,
+) -> dict[str, dict[str, float]]:
+    """Sample a few daily CDR TIFs to compute per-band mean/std."""
+    unique_days = samples["day"].drop_duplicates().sort_values()
+    step = max(1, len(unique_days) // n_sample)
+    sampled_days = unique_days.iloc[::step].head(n_sample)
+
+    accum = {name: [] for name in band_names}
+    for day in sampled_days:
+        path = os.path.join(
+            cdr_dir, cdr_pattern.format(date=pd.Timestamp(day).strftime("%Y%m%d"))
+        )
+        if not os.path.exists(path):
+            continue
+        with rasterio.open(path) as src:
+            data = src.read().astype("float32")
+        for i, name in enumerate(band_names):
+            if i < data.shape[0]:
+                valid = data[i].ravel()
+                valid = valid[np.isfinite(valid)]
+                if len(valid):
+                    accum[name].append(valid)
+
+    stats: dict[str, dict[str, float]] = {}
+    for name, arrays in accum.items():
+        if arrays:
+            cat = np.concatenate(arrays)
+            stats[name] = {
+                "mean": float(cat.mean()),
+                "std": float(max(cat.std(), 1e-8)),
+            }
+    return stats
+
+
 class HRRRPatchDataset(Dataset):
     """
     Dataset for raster-patch HRRR bias learning.
@@ -105,6 +161,9 @@ class HRRRPatchDataset(Dataset):
         target_include_fids: set[str] | None = None,
         target_exclude_fids: set[str] | None = None,
         supervision_exclude_fids: set[str] | None = None,
+        rsun_tif: str | None = None,
+        cdr_dir: str | None = None,
+        cdr_pattern: str = "CDR_005deg_{date}.tif",
         patch_size: int = 64,
         cache_size: int = 8,
     ):
@@ -113,11 +172,18 @@ class HRRRPatchDataset(Dataset):
         self.background_pattern = background_pattern
         self.static_tifs = list(static_tifs) if static_tifs else []
         self.landsat_tif = landsat_tif
+        self.rsun_tif = rsun_tif
+        self.cdr_dir = cdr_dir
+        self.cdr_pattern = cdr_pattern
         self.target_names = target_names or list(DEFAULT_TARGET_NAMES)
         self.patch_size = patch_size
 
         actual_cache = max(
-            cache_size, len(self.static_tifs) + 2 + (1 if landsat_tif else 0)
+            cache_size,
+            len(self.static_tifs)
+            + 2
+            + (1 if landsat_tif else 0)
+            + (1 if cdr_dir else 0),
         )
         self.raster_cache = _RasterCache(max_items=actual_cache)
 
@@ -194,11 +260,32 @@ class HRRRPatchDataset(Dataset):
         # P0 names as the representative slot; all periods have the same length (7)
         _rep_landsat = self._landsat_period_names[0] if self.landsat_tif else []
 
-        # Full channel list: HRRR + static + 7 Landsat (period-selected) + pos/time
+        # --- rsun (1 band, DOY-selected from 365-band TIF) ---
+        self._rsun_meta: dict | None = None
+        if self.rsun_tif:
+            with rasterio.open(self.rsun_tif) as src:
+                self._rsun_meta = {
+                    "transform": src.transform,
+                    "crs": str(src.crs),
+                    "count": src.count,
+                    "height": src.height,
+                    "width": src.width,
+                }
+
+        # --- CDR (daily 5-band TIFs at native 0.05-deg) ---
+        self._cdr_band_names: list[str] = []
+        if self.cdr_dir:
+            example_cdr = self._cdr_path(self.samples.iloc[0]["day"])
+            if os.path.exists(example_cdr):
+                self._cdr_band_names = _discover_band_names(example_cdr, "cdr")
+
+        # Full channel list
         self.feature_names: list[str] = (
             list(self.background_feature_names)
             + list(self.static_feature_names)
             + list(_rep_landsat)
+            + (["rsun"] if self.rsun_tif else [])
+            + list(self._cdr_band_names)
             + ["doy_sin", "doy_cos", "latitude", "longitude"]
         )
         self.in_channels = len(self.feature_names)
@@ -229,6 +316,17 @@ class HRRRPatchDataset(Dataset):
             )
             self.norm_stats.update(ls_stats)
 
+        # rsun: sample 4 quarterly bands to get a single mean/std
+        if self.rsun_tif:
+            self.norm_stats["rsun"] = _compute_rsun_norm_stats(self.rsun_tif)
+
+        # CDR: sample a few daily TIFs for per-band stats
+        if self.cdr_dir and self._cdr_band_names:
+            cdr_stats = _compute_cdr_norm_stats(
+                self.cdr_dir, self.cdr_pattern, self.samples, self._cdr_band_names
+            )
+            self.norm_stats.update(cdr_stats)
+
     def __len__(self) -> int:
         return len(self.samples)
 
@@ -236,6 +334,12 @@ class HRRRPatchDataset(Dataset):
         return os.path.join(
             self.background_dir,
             self.background_pattern.format(date=pd.Timestamp(day).strftime("%Y%m%d")),
+        )
+
+    def _cdr_path(self, day: pd.Timestamp) -> str:
+        return os.path.join(
+            self.cdr_dir,
+            self.cdr_pattern.format(date=pd.Timestamp(day).strftime("%Y%m%d")),
         )
 
     def __getitem__(self, idx: int):
@@ -335,6 +439,63 @@ class HRRRPatchDataset(Dataset):
                 ls_data[b0:b1, ls_rows, ls_cols].astype("float32"), nan=0.0
             ).reshape(_LANDSAT_BANDS, H, W)
 
+        # --- rsun patch (1 band, DOY-selected) ---
+        rsun_patch: np.ndarray | None = None
+        if self.rsun_tif and self._rsun_meta is not None:
+            # Cache the band within a day group (DayGroupedSampler reuses DOY)
+            cached_doy = getattr(self, "_rsun_cache_doy", -1)
+            if cached_doy != doy:
+                with rasterio.open(self.rsun_tif) as rsun_src:
+                    band_idx = max(1, min(doy, rsun_src.count))
+                    self._rsun_cache_band = rsun_src.read(band_idx).astype("float32")
+                    self._rsun_cache_doy = doy
+            rsun_band = self._rsun_cache_band  # (H_dom, W_dom)
+            rsun_crs = self._rsun_meta["crs"]
+            rsun_tf = self._rsun_meta["transform"]
+            if rsun_crs == str(bg_crs):
+                rs_rows = np.clip(rr_flat, 0, rsun_band.shape[0] - 1).astype(int)
+                rs_cols = np.clip(cc_flat, 0, rsun_band.shape[1] - 1).astype(int)
+            else:
+                to_rsun = Transformer.from_crs(bg_crs, rsun_crs, always_xy=True)
+                rx, ry = to_rsun.transform(x_proj, y_proj)
+                rs_rows_raw, rs_cols_raw = rowcol(rsun_tf, rx, ry)
+                rs_rows = np.clip(
+                    np.asarray(rs_rows_raw, dtype=int), 0, rsun_band.shape[0] - 1
+                )
+                rs_cols = np.clip(
+                    np.asarray(rs_cols_raw, dtype=int), 0, rsun_band.shape[1] - 1
+                )
+            rsun_patch = np.nan_to_num(rsun_band[rs_rows, rs_cols], nan=0.0).reshape(
+                1, H, W
+            )
+
+        # --- CDR patch (5 bands, daily, native 0.05-deg) ---
+        cdr_patch: np.ndarray | None = None
+        if self.cdr_dir and self._cdr_band_names:
+            cdr_path = self._cdr_path(day)
+            n_cdr = len(self._cdr_band_names)
+            if os.path.exists(cdr_path):
+                cdr = self.raster_cache.get(cdr_path)
+                cdr_data = cdr["data"]  # (5, cdr_H, cdr_W)
+                cdr_tf = cdr["transform"]
+                # CDR is EPSG:4326 — use already-computed pixel lat/lon
+                cdr_rows_raw, cdr_cols_raw = rowcol(
+                    cdr_tf,
+                    pixel_lon.ravel().astype("float64"),
+                    pixel_lat.ravel().astype("float64"),
+                )
+                cdr_rows = np.clip(
+                    np.asarray(cdr_rows_raw, dtype=int), 0, cdr_data.shape[1] - 1
+                )
+                cdr_cols = np.clip(
+                    np.asarray(cdr_cols_raw, dtype=int), 0, cdr_data.shape[2] - 1
+                )
+                cdr_patch = np.nan_to_num(
+                    cdr_data[:, cdr_rows, cdr_cols].astype("float32"), nan=0.0
+                ).reshape(n_cdr, H, W)
+            else:
+                cdr_patch = np.zeros((n_cdr, H, W), dtype="float32")
+
         # --- Position / time channels ---
         doy_sin, doy_cos = _doy_features(day)
         pos_time = np.stack(
@@ -350,6 +511,10 @@ class HRRRPatchDataset(Dataset):
         parts: list[np.ndarray] = [bg_patch] + static_patches
         if landsat_patch is not None:
             parts.append(landsat_patch)
+        if rsun_patch is not None:
+            parts.append(rsun_patch)
+        if cdr_patch is not None:
+            parts.append(cdr_patch)
         parts.append(pos_time)
         x_patch = np.concatenate(parts, axis=0)  # (C, H, W)
 
@@ -357,6 +522,8 @@ class HRRRPatchDataset(Dataset):
             list(self.background_feature_names)
             + list(self.static_feature_names)
             + active_landsat_names
+            + (["rsun"] if self.rsun_tif else [])
+            + list(self._cdr_band_names)
             + ["doy_sin", "doy_cos", "latitude", "longitude"]
         )
         for i, name in enumerate(channel_names):

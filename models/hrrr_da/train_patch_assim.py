@@ -64,6 +64,9 @@ class PatchAssimConfig:
         default_factory=lambda: [f"{MVP_ROOT}/terrain_pnw_1km.tif"]
     )
     landsat_tif: str = f"{MVP_ROOT}/landsat_pnw_1km.tif"
+    rsun_tif: str | None = None
+    cdr_dir: str | None = None
+    cdr_pattern: str = "CDR_005deg_{date}.tif"
     out_dir: str = f"{MVP_ROOT}/patch_assim_e0"
     train_years: list[int] = field(
         default_factory=lambda: [2018, 2019, 2020, 2021, 2022, 2023]
@@ -150,6 +153,9 @@ def main() -> None:
         train_days=train_days,
         target_exclude_fids=holdout_fids or None,
         supervision_exclude_fids=holdout_fids or None,
+        rsun_tif=cfg.rsun_tif,
+        cdr_dir=cfg.cdr_dir,
+        cdr_pattern=cfg.cdr_pattern,
         patch_size=cfg.patch_size,
     )
     print(f"Train samples: {len(train_ds)}, in_channels: {train_ds.in_channels}")
@@ -177,6 +183,9 @@ def main() -> None:
         target_names=cfg.target_names,
         train_days=val_days,
         target_include_fids=holdout_fids or None,
+        rsun_tif=cfg.rsun_tif,
+        cdr_dir=cfg.cdr_dir,
+        cdr_pattern=cfg.cdr_pattern,
         patch_size=cfg.patch_size,
     )
     print(f"Val samples: {len(val_ds)}")
