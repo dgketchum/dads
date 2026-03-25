@@ -561,6 +561,16 @@ def main() -> None:
         if c in df.columns:
             df[c] = df[c].fillna(0.0)
 
+    # Clip heavy-tailed Sx / terrain features to 99th percentile
+    clip_cols = sx_cols + flow_terrain_cols
+    if clip_cols:
+        for c in clip_cols:
+            if c in df.columns:
+                lo = df[c].quantile(0.01)
+                hi = df[c].quantile(0.99)
+                df[c] = df[c].clip(lo, hi)
+        print(f"Clipped {len(clip_cols)} Sx/terrain cols to [p1, p99]")
+
     # ------------------------------------------------------------------
     # Build all feature column names
     # ------------------------------------------------------------------
