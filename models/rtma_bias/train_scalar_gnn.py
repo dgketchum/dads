@@ -26,6 +26,7 @@ from torch_geometric.loader import DataLoader
 
 from models.rtma_bias.lit_scalar_gnn import LitScalarGNN
 from models.rtma_bias.scalar_gnn_dataset import PrecomputedGraphDataset
+from prep.paths import DADS_ROOT, MVP_ROOT
 
 
 # ---------------------------------------------------------------------------
@@ -53,13 +54,14 @@ class ScalarGNNConfig:
     seed: int = 42
 
     # Data
-    graph_dir: str = "/nas/dads/mvp/tmax_graphs_pnw_2024"
+    graph_dir: str = f"{MVP_ROOT}/tmax_graphs_pnw_2024"
     val_graph_dir: str | None = None
-    out_dir: str = "/nas/dads/mvp/e2_tmax_gnn"
+    out_dir: str = f"{MVP_ROOT}/e2_tmax_gnn"
 
-    # Spatial holdout (MGRS tile-based)
+    # Spatial holdout (MGRS tile-based or FID list)
     val_mgrs_tiles: list[str] = field(default_factory=list)
-    stations_csv: str = "/nas/dads/met/stations/madis_02JULY2025_mgrs.csv"
+    holdout_fids_json: str | None = None
+    stations_csv: str = f"{DADS_ROOT}/met/stations/madis_02JULY2025_mgrs.csv"
 
     # Runtime
     device: str | None = None
@@ -144,9 +146,13 @@ def main() -> None:
     os.makedirs(cfg.out_dir, exist_ok=True)
     cfg.save_toml(os.path.join(cfg.out_dir, "experiment.toml"))
 
-    # ---- MGRS-based spatial holdout ----
+    # ---- Spatial holdout (FID list or MGRS tiles) ----
     holdout_fids: set[str] = set()
-    if cfg.val_mgrs_tiles:
+    if cfg.holdout_fids_json and os.path.exists(cfg.holdout_fids_json):
+        with open(cfg.holdout_fids_json) as f:
+            holdout_fids = set(str(fid) for fid in json.load(f))
+        print(f"FID-based spatial holdout: {len(holdout_fids)} stations")
+    elif cfg.val_mgrs_tiles:
         stations = pd.read_csv(cfg.stations_csv)
         id_col = "station_id" if "station_id" in stations.columns else "fid"
         stations[id_col] = stations[id_col].astype(str)

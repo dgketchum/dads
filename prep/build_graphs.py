@@ -46,6 +46,7 @@ except ImportError:
     Data = None
 
 from models.rtma_bias.patch_dataset import _date_to_period
+from prep.paths import DADS_ROOT, MVP_ROOT
 from prep.graph_utils import (
     build_edges_for_day,
     build_knn_map,
@@ -296,16 +297,16 @@ def _parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Precompute GNN graphs.")
     p.add_argument(
         "--table-path",
-        default="/nas/dads/mvp/station_day_e1_tmax_dailyall.parquet",
+        default=f"{MVP_ROOT}/station_day_e1_tmax_dailyall.parquet",
     )
     p.add_argument(
         "--stations-csv",
-        default="/nas/dads/met/stations/madis_02JULY2025_mgrs.csv",
+        default=f"{DADS_ROOT}/met/stations/madis_02JULY2025_mgrs.csv",
     )
-    p.add_argument("--out-dir", default="/nas/dads/mvp/tmax_graphs_pnw_2024")
-    p.add_argument("--terrain-tif", default="/nas/dads/mvp/terrain_pnw_1km.tif")
-    p.add_argument("--rsun-tif", default="/nas/dads/mvp/rsun_pnw_1km.tif")
-    p.add_argument("--landsat-tif", default="/nas/dads/mvp/landsat_pnw_1km.tif")
+    p.add_argument("--out-dir", default=f"{MVP_ROOT}/tmax_graphs_pnw_2024")
+    p.add_argument("--terrain-tif", default=f"{MVP_ROOT}/terrain_pnw_1km.tif")
+    p.add_argument("--rsun-tif", default=f"{MVP_ROOT}/rsun_pnw_1km.tif")
+    p.add_argument("--landsat-tif", default=f"{MVP_ROOT}/landsat_pnw_1km.tif")
     p.add_argument("--k", type=int, default=16)
     p.add_argument("--max-radius-km", type=float, default=150.0)
     p.add_argument(
@@ -359,6 +360,22 @@ def _parse_args() -> argparse.Namespace:
         default=None,
         help="Drop rows where |target| exceeds this value (outlier filter)",
     )
+    p.add_argument(
+        "--include-sx",
+        action="store_true",
+        help="Include sx_*_2k/10k + terrain_openness/directionality from parquet",
+    )
+    p.add_argument(
+        "--include-flow-terrain",
+        action="store_true",
+        help="Include flow_upslope, flow_cross, wind_aligned_sx from parquet",
+    )
+    p.add_argument(
+        "--extra-feature-cols",
+        nargs="*",
+        default=None,
+        help="Explicit extra column names to include from parquet (e.g. tmp_dpt_diff)",
+    )
     return p.parse_args()
 
 
@@ -391,6 +408,38 @@ def main() -> None:
         ep_cols = _discover_weather_cols(df, ep)
         print(f"Extra cols ({ep}): {ep_cols}")
         extra_cols.extend(ep_cols)
+
+    # --- Discover Sx / flow-terrain / extra feature columns ---
+    sx_cols: list[str] = []
+    if args.include_sx:
+        sx_cols = sorted(c for c in df.columns if c.startswith("sx_"))
+        for c in ["terrain_openness", "terrain_directionality"]:
+            if c in df.columns and c not in sx_cols:
+                sx_cols.append(c)
+        print(f"Sx cols ({len(sx_cols)}): {sx_cols[:4]} ... {sx_cols[-2:]}")
+
+    flow_terrain_cols: list[str] = []
+    if args.include_flow_terrain:
+        for c in ["flow_upslope", "flow_cross", "wind_aligned_sx"]:
+            if c in df.columns:
+                flow_terrain_cols.append(c)
+        print(f"Flow-terrain cols: {flow_terrain_cols}")
+
+    explicit_extra_cols: list[str] = []
+    if args.extra_feature_cols:
+        for c in args.extra_feature_cols:
+            if c in df.columns:
+                explicit_extra_cols.append(c)
+            else:
+                print(f"WARNING: --extra-feature-cols '{c}' not found in table")
+        print(f"Extra feature cols: {explicit_extra_cols}")
+
+    # These get inserted at different positions in the feature vector:
+    # explicit_extra goes after extra_prefix, before terrain
+    # sx + flow_terrain go after terrain, before rsun
+    parquet_pre_terrain = explicit_extra_cols
+    parquet_post_terrain = sx_cols + flow_terrain_cols
+    parquet_feature_cols = parquet_pre_terrain + parquet_post_terrain
 
     # --- Optional log-space target ---
     if args.log_target:
@@ -508,6 +557,9 @@ def main() -> None:
     for c in extra_cols:
         if c in df.columns:
             df[c] = df[c].fillna(0.0)
+    for c in parquet_feature_cols:
+        if c in df.columns:
+            df[c] = df[c].fillna(0.0)
 
     # ------------------------------------------------------------------
     # Build all feature column names
@@ -515,7 +567,10 @@ def main() -> None:
     all_feature_cols = (
         weather_cols
         + extra_cols
+        + explicit_extra_cols
         + TERRAIN_COLS
+        + sx_cols
+        + flow_terrain_cols
         + [RSUN_COL]
         + LANDSAT_COLS
         + TEMPORAL_COLS
@@ -566,6 +621,31 @@ def main() -> None:
         else:
             extra_arr = np.zeros((n_stations, 0), dtype="float32")
 
+        # Extra parquet columns (split into pre-terrain and post-terrain)
+        def _extract_parquet_cols(
+            cols: list[str], ddf: pd.DataFrame, n: int
+        ) -> np.ndarray:
+            if not cols:
+                return np.zeros((n, 0), dtype="float32")
+            present = [c for c in cols if c in ddf.columns]
+            arr = (
+                ddf[present].values.astype("float32")
+                if present
+                else np.zeros((n, 0), dtype="float32")
+            )
+            if len(present) < len(cols):
+                full = np.zeros((n, len(cols)), dtype="float32")
+                for j, c in enumerate(cols):
+                    if c in present:
+                        full[:, j] = arr[:, present.index(c)]
+                arr = full
+            return arr
+
+        pre_terrain_arr = _extract_parquet_cols(parquet_pre_terrain, day_df, n_stations)
+        post_terrain_arr = _extract_parquet_cols(
+            parquet_post_terrain, day_df, n_stations
+        )
+
         # Terrain (6 per station, static)
         terrain_arr = np.stack(
             [fid_terrain.get(f, np.zeros(6, dtype="float32")) for f in fid_list]
@@ -605,11 +685,16 @@ def main() -> None:
             ]
         )
 
-        # Concatenate all features
+        # Concatenate all features (order must match all_feature_cols)
         parts = [wx_arr]
         if extra_arr.shape[1] > 0:
             parts.append(extra_arr)
-        parts.extend([terrain_arr, rsun_arr, landsat_arr, temporal_arr, loc_arr])
+        if pre_terrain_arr.shape[1] > 0:
+            parts.append(pre_terrain_arr)
+        parts.append(terrain_arr)
+        if post_terrain_arr.shape[1] > 0:
+            parts.append(post_terrain_arr)
+        parts.extend([rsun_arr, landsat_arr, temporal_arr, loc_arr])
         x = np.concatenate(parts, axis=1)
         x = np.nan_to_num(x, nan=0.0, posinf=0.0, neginf=0.0)
 
