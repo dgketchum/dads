@@ -111,9 +111,11 @@ def load_station_daily(
 
         df = pd.read_parquet(pq_path)
 
-        # QC filter
+        # QC filter: keep pass + suspect, drop fail only.
+        # "suspect" rows are typically flagged for missing ancillary variables
+        # (e.g. dd_missing) but have valid target obs.
         if "qc_state" in df.columns:
-            df = df.loc[df["qc_state"] == "pass"]
+            df = df.loc[df["qc_state"].isin(("pass", "suspect"))]
         if df.empty:
             continue
 
