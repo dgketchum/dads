@@ -1,0 +1,39 @@
+name = "h12_hrrr_multitask_inn"
+description = "H12: multitask GNN + neighbor innovations, holdout-excluded"
+
+hidden_dim = 128
+n_hops = 1
+use_graph = true
+use_sx = true
+use_flow_terrain = true
+
+lr = 0.001
+weight_decay = 1e-5
+huber_delta = 2.0
+calm_threshold = 2.0
+calm_min_weight = 0.1
+correction_penalty = 0.0
+batch_size = 16
+epochs = 100
+seed = 42
+k_neighbors = 16
+
+task = "multitask"
+target_names = [
+  "delta_tmax",
+  "delta_tmin",
+  "delta_ea",
+  "delta_rsds",
+  "delta_w_par",
+  "delta_w_perp",
+]
+wind_target_indices = [4, 5]
+
+table_path = "/nas/dads/mvp/station_day_hrrr_daily_inn_pnw.parquet"
+stations_csv = "artifacts/madis_pnw.csv"
+out_dir = "/nas/dads/mvp/h12_hrrr_multitask_inn"
+train_years = [2018, 2019, 2020, 2021, 2022, 2023]
+val_years = [2024]
+holdout_fids_json = "artifacts/canonical_holdout_fids.json"
+device = "cuda:0"
+num_workers = 0
