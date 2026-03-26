@@ -376,6 +376,11 @@ def _parse_args() -> argparse.Namespace:
         default=None,
         help="Explicit extra column names to include from parquet (e.g. tmp_dpt_diff)",
     )
+    p.add_argument(
+        "--include-innovations",
+        action="store_true",
+        help="Add neighbor target-value summary stats (mean, std, count) as node features",
+    )
     return p.parse_args()
 
 
@@ -574,6 +579,11 @@ def main() -> None:
     # ------------------------------------------------------------------
     # Build all feature column names
     # ------------------------------------------------------------------
+    innovation_cols: list[str] = []
+    if args.include_innovations:
+        innovation_cols = ["inn_mean", "inn_std", "inn_count"]
+        print(f"Innovation cols: {innovation_cols} (from neighbor {target_col})")
+
     all_feature_cols = (
         weather_cols
         + extra_cols
@@ -583,6 +593,7 @@ def main() -> None:
         + flow_terrain_cols
         + [RSUN_COL]
         + LANDSAT_COLS
+        + innovation_cols
         + TEMPORAL_COLS
         + LOCATION_COLS
     )
@@ -695,6 +706,25 @@ def main() -> None:
             ]
         )
 
+        # Innovation features: neighbor target-value summary stats
+        if innovation_cols:
+            target_vals = day_df[target_col].values.astype("float32")
+            fid_to_idx = {f: si for si, f in enumerate(fid_list)}
+            inn_arr = np.full((n_stations, 3), np.nan, dtype="float32")
+            for si, fid in enumerate(fid_list):
+                nbr_fids = knn_map.get(fid, [])
+                nbr_idx = [fid_to_idx[f] for f in nbr_fids if f in fid_to_idx]
+                if nbr_idx:
+                    nbr_vals = target_vals[nbr_idx]
+                    valid = nbr_vals[np.isfinite(nbr_vals)]
+                    if len(valid) > 0:
+                        inn_arr[si, 0] = np.mean(valid)
+                        inn_arr[si, 1] = np.std(valid) if len(valid) > 1 else 0.0
+                        inn_arr[si, 2] = float(len(valid))
+            inn_arr = np.nan_to_num(inn_arr, nan=0.0)
+        else:
+            inn_arr = np.zeros((n_stations, 0), dtype="float32")
+
         # Concatenate all features (order must match all_feature_cols)
         parts = [wx_arr]
         if extra_arr.shape[1] > 0:
@@ -704,7 +734,10 @@ def main() -> None:
         parts.append(terrain_arr)
         if post_terrain_arr.shape[1] > 0:
             parts.append(post_terrain_arr)
-        parts.extend([rsun_arr, landsat_arr, temporal_arr, loc_arr])
+        parts.extend([rsun_arr, landsat_arr])
+        if inn_arr.shape[1] > 0:
+            parts.append(inn_arr)
+        parts.extend([temporal_arr, loc_arr])
         x = np.concatenate(parts, axis=1)
         x = np.nan_to_num(x, nan=0.0, posinf=0.0, neginf=0.0)
 
