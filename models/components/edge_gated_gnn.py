@@ -116,11 +116,20 @@ class EdgeGatedGNN(nn.Module):
         x: Tensor,
         edge_index: Tensor | None = None,
         edge_attr: Tensor | None = None,
+        innovation_indices: list[int] | None = None,
     ) -> Tensor:
         h = self.node_encoder(x)
 
         if self.use_graph and edge_index is not None:
-            h_local = h
+            # For DA: encode a masked version of x for the skip connection
+            # so each node cannot see its own innovation features in h_local.
+            # Neighbors still see them through message passing via h.
+            if innovation_indices:
+                x_self = x.clone()
+                x_self[:, innovation_indices] = 0.0
+                h_local = self.node_encoder(x_self)
+            else:
+                h_local = h
             for att, merge in zip(self.attention_layers, self.merge_layers):
                 ctx = att(h, edge_index, edge_attr)
                 h = merge(torch.cat([h, ctx], dim=-1))

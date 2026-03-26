@@ -253,19 +253,18 @@ class HRRRGraphDataset(Dataset):
         features = day_df[self.feature_cols].values
         features = apply_norm(features, self.feature_cols, self.norm_stats)
 
-        # Mask holdout stations' innovation features to 0 (pre-normalization value)
+        # Mask holdout stations' innovation features so neighbors can't see them.
+        # Non-holdout deltas remain — neighbors see them through message passing.
+        # Self-view leakage is handled in the GNN via innovation_indices.
         if self.use_innovations and self._holdout_fids:
             inn_indices = [
                 i for i, c in enumerate(self.feature_cols) if c in TARGET_COLS
             ]
             holdout_mask = np.array([f in self._holdout_fids for f in fids], dtype=bool)
             for ci in inn_indices:
-                # Set to the normalized value of 0 = (0 - mean) / std
                 stats = self.norm_stats.get(self.feature_cols[ci])
-                if stats:
-                    features[holdout_mask, ci] = -stats["mean"] / stats["std"]
-                else:
-                    features[holdout_mask, ci] = 0.0
+                fill = -stats["mean"] / stats["std"] if stats else 0.0
+                features[holdout_mask, ci] = fill
 
         x = torch.from_numpy(features)
 
@@ -309,6 +308,11 @@ class HRRRGraphDataset(Dataset):
         else:
             loss_mask = torch.ones(n_nodes, dtype=torch.bool)
 
+        # Innovation feature indices for GNN self-masking
+        inn_idx = None
+        if self.use_innovations:
+            inn_idx = [i for i, c in enumerate(self.feature_cols) if c in TARGET_COLS]
+
         data = Data(
             x=x,
             y=y,
@@ -317,6 +321,7 @@ class HRRRGraphDataset(Dataset):
             fids=fids,
             valid_mask=valid_mask,
             loss_mask=loss_mask,
+            innovation_indices=inn_idx,
         )
         if hrrr_wind is not None:
             data.baseline_wind = torch.from_numpy(hrrr_wind.astype("float32"))

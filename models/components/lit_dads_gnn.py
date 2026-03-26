@@ -97,6 +97,7 @@ class LitDadsGNN(L.LightningModule):
             data.x,
             edge_index=getattr(data, "edge_index", None),
             edge_attr=getattr(data, "edge_attr", None),
+            innovation_indices=getattr(data, "innovation_indices", None),
         )
 
     # ---- Loss ----
