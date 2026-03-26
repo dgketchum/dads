@@ -176,6 +176,7 @@ class HRRRGraphDataset(Dataset):
         use_sx: bool = True,
         use_flow_terrain: bool = True,
         use_innovations: bool = False,
+        transductive: bool = False,
         is_val: bool = False,
         norm_stats: dict | None = None,
         train_days: set | None = None,
@@ -188,10 +189,12 @@ class HRRRGraphDataset(Dataset):
         self.use_innovations = use_innovations
         self._is_val = is_val
         self.k = k
-        # When using innovations, keep holdout stations in graph (transductive)
-        # but mask their innovation features. Store holdout set for masking.
+        # Transductive: holdout stations stay in graph, loss_mask gates supervision.
+        # Required for innovation mode; optional for non-innovation (benchmark protocol).
+        # Inductive: holdout stations removed entirely (easier evaluation).
+        use_transductive = transductive or use_innovations
         self._holdout_fids: set[str] = set()
-        if use_innovations and exclude_fids:
+        if use_transductive and exclude_fids:
             self._holdout_fids = set(exclude_fids)
 
         df = pd.read_parquet(table_path)
@@ -202,8 +205,8 @@ class HRRRGraphDataset(Dataset):
 
         if train_days is not None:
             df = df[df["day"].isin(train_days)]
-        # Inductive holdout: remove stations entirely (unless using innovations)
-        if exclude_fids is not None and not use_innovations:
+        # Inductive holdout: remove holdout stations
+        if exclude_fids is not None and not use_transductive:
             df = df[~df["fid"].isin(exclude_fids)]
 
         # Warn if fewer than 4 of 6 canonical targets are present (likely old table)
@@ -238,9 +241,23 @@ class HRRRGraphDataset(Dataset):
         self.edge_norm = compute_edge_norm(self.static_edges)
         self.edge_dim = 7
 
-        # Group by day
-        self._days = sorted(df["day"].unique())
-        self._day_groups = {d: g for d, g in df.groupby("day")}
+        # Group by day, filtering out days with zero supervised nodes
+        day_groups = {d: g for d, g in df.groupby("day")}
+        if self._holdout_fids:
+            # Transductive: filter to days that have at least one node matching
+            # the current split (holdout for val, non-holdout for train)
+            filtered = {}
+            for d, g in day_groups.items():
+                fids_in_day = set(g["fid"].values)
+                if is_val:
+                    has_supervised = bool(fids_in_day & self._holdout_fids)
+                else:
+                    has_supervised = bool(fids_in_day - self._holdout_fids)
+                if has_supervised:
+                    filtered[d] = g
+            day_groups = filtered
+        self._days = sorted(day_groups.keys())
+        self._day_groups = day_groups
 
     def __len__(self) -> int:
         return len(self._days)
@@ -252,18 +269,20 @@ class HRRRGraphDataset(Dataset):
         fids = day_df["fid"].tolist()
         features = day_df[self.feature_cols].values
         features = apply_norm(features, self.feature_cols, self.norm_stats)
+        inn_idx = None
+        inn_fill_values = None
 
         # Innovation feature masking:
         # 1. Fill NaN (missing obs) with normalized-zero for all stations
         # 2. Mask holdout stations' deltas so neighbors can't see them
         # Self-view leakage is handled in the GNN via innovation_indices.
         if self.use_innovations:
-            inn_indices = [
-                i for i, c in enumerate(self.feature_cols) if c in TARGET_COLS
-            ]
-            for ci in inn_indices:
+            inn_idx = [i for i, c in enumerate(self.feature_cols) if c in TARGET_COLS]
+            inn_fill_values = []
+            for ci in inn_idx:
                 stats = self.norm_stats.get(self.feature_cols[ci])
                 fill = -stats["mean"] / stats["std"] if stats else 0.0
+                inn_fill_values.append(float(fill))
                 # Fill NaN (station has no obs for this variable today)
                 nan_mask = np.isnan(features[:, ci])
                 features[nan_mask, ci] = fill
@@ -304,10 +323,10 @@ class HRRRGraphDataset(Dataset):
             day_df["wind_hrrr"].values if "wind_hrrr" in day_df.columns else None
         )
 
-        # Transductive loss_mask for innovation mode:
-        #   train: loss on non-holdout only (holdout features masked, no supervision)
-        #   val:   loss on holdout only (test generalization to masked stations)
-        if self.use_innovations and self._holdout_fids:
+        # Transductive loss mask:
+        #   train: non-holdout stations
+        #   val:   holdout stations
+        if self._holdout_fids:
             is_holdout = [f in self._holdout_fids for f in fids]
             if self._is_val:
                 loss_mask = torch.tensor(is_holdout, dtype=torch.bool)
@@ -315,11 +334,6 @@ class HRRRGraphDataset(Dataset):
                 loss_mask = torch.tensor([not h for h in is_holdout], dtype=torch.bool)
         else:
             loss_mask = torch.ones(n_nodes, dtype=torch.bool)
-
-        # Innovation feature indices for GNN self-masking
-        inn_idx = None
-        if self.use_innovations:
-            inn_idx = [i for i, c in enumerate(self.feature_cols) if c in TARGET_COLS]
 
         data = Data(
             x=x,
@@ -330,6 +344,7 @@ class HRRRGraphDataset(Dataset):
             valid_mask=valid_mask,
             loss_mask=loss_mask,
             innovation_indices=inn_idx,
+            innovation_fill_values=inn_fill_values,
         )
         if hrrr_wind is not None:
             data.baseline_wind = torch.from_numpy(hrrr_wind.astype("float32"))
@@ -367,7 +382,8 @@ class PrecomputedHRRRDataset(Dataset):
         use_graph: bool = True,
         norm_stats: dict | None = None,
         train_days: set | None = None,
-        exclude_fids: set | None = None,
+        holdout_fids: set | None = None,
+        is_val: bool = False,
     ):
         super().__init__()
         graph_dir = Path(graph_dir)
@@ -384,13 +400,31 @@ class PrecomputedHRRRDataset(Dataset):
         self.node_dim = sample.x.shape[1]
         self.edge_dim = sample.edge_attr.shape[1] if sample.edge_attr is not None else 0
         self.norm_stats = norm_stats or {}
-        self.loss_fids: set[str] | None = exclude_fids
+        self.holdout_fids: set[str] = set(holdout_fids or [])
+        self.is_val = is_val
 
     def __len__(self) -> int:
         return len(self._graphs)
 
     def __getitem__(self, idx: int) -> Data:
-        return self._graphs[idx]
+        g = self._graphs[idx]
+
+        if self.holdout_fids:
+            if not hasattr(g, "fids"):
+                raise ValueError(
+                    "holdout_fids provided but graph has no fids attribute. "
+                    "Rebuild graphs with a version of build_graphs.py that stores fids."
+                )
+            is_holdout = torch.tensor(
+                [f in self.holdout_fids for f in g.fids], dtype=torch.bool
+            )
+            loss_mask = is_holdout if self.is_val else ~is_holdout
+        else:
+            loss_mask = torch.ones(g.x.shape[0], dtype=torch.bool)
+
+        g_out = g.clone()
+        g_out.loss_mask = loss_mask
+        return g_out
 
     def save_norm_stats(self, path: str) -> None:
         with open(path, "w") as f:

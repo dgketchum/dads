@@ -46,6 +46,8 @@ class HRRRGNNConfig:
     use_sx: bool = True
     use_flow_terrain: bool = True
     use_innovations: bool = False
+    transductive: bool = False
+    dropout: float = 0.0
 
     # Training
     lr: float = 1e-3
@@ -121,6 +123,7 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--n-hops", type=int, default=None)
     p.add_argument("--use-graph", type=int, default=None, help="0=MLP only, 1=GNN")
     p.add_argument("--lr", type=float, default=None)
+    p.add_argument("--dropout", type=float, default=None)
     p.add_argument("--batch-size", type=int, default=None)
     p.add_argument("--epochs", type=int, default=None)
     p.add_argument("--k-neighbors", type=int, default=None)
@@ -145,6 +148,7 @@ def _build_config(args: argparse.Namespace) -> HRRRGNNConfig:
         "hidden_dim": "hidden_dim",
         "n_hops": "n_hops",
         "lr": "lr",
+        "dropout": "dropout",
         "batch_size": "batch_size",
         "epochs": "epochs",
         "k_neighbors": "k_neighbors",
@@ -222,7 +226,8 @@ def main() -> None:
             use_flow_terrain=cfg.use_flow_terrain,
             use_graph=cfg.use_graph,
             train_days=train_days,
-            exclude_fids=holdout_fids,
+            holdout_fids=holdout_fids,
+            is_val=False,
         )
         train_ds.save_norm_stats(os.path.join(cfg.out_dir, "norm_stats.json"))
         val_ds = PrecomputedHRRRDataset(
@@ -232,6 +237,8 @@ def main() -> None:
             use_graph=cfg.use_graph,
             norm_stats=train_ds.norm_stats,
             train_days=val_days,
+            holdout_fids=holdout_fids,
+            is_val=True,
         )
     else:
         print("Building training dataset...")
@@ -243,6 +250,7 @@ def main() -> None:
             use_sx=cfg.use_sx,
             use_flow_terrain=cfg.use_flow_terrain,
             use_innovations=cfg.use_innovations,
+            transductive=cfg.transductive,
             train_days=train_days,
             exclude_fids=holdout_fids,
         )
@@ -255,6 +263,7 @@ def main() -> None:
             use_sx=cfg.use_sx,
             use_flow_terrain=cfg.use_flow_terrain,
             use_innovations=cfg.use_innovations,
+            transductive=cfg.transductive,
             is_val=True,
             norm_stats=train_ds.norm_stats,
             train_days=val_days,
@@ -277,6 +286,7 @@ def main() -> None:
         hidden_dim=cfg.hidden_dim,
         n_hops=cfg.n_hops,
         use_graph=cfg.use_graph,
+        dropout=cfg.dropout,
         lr=cfg.lr,
         weight_decay=cfg.weight_decay,
         huber_delta=cfg.huber_delta,
