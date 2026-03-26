@@ -39,6 +39,7 @@ class LitDadsGNN(L.LightningModule):
         # Multitask-specific
         target_names: list[str] | None = None,
         wind_target_indices: list[int] | None = None,
+        target_scales: list[float] | None = None,
     ):
         super().__init__()
         self.save_hyperparameters()
@@ -98,6 +99,7 @@ class LitDadsGNN(L.LightningModule):
             edge_index=getattr(data, "edge_index", None),
             edge_attr=getattr(data, "edge_attr", None),
             innovation_indices=getattr(data, "innovation_indices", None),
+            innovation_fill_values=getattr(data, "innovation_fill_values", None),
         )
 
     # ---- Loss ----
@@ -259,13 +261,18 @@ class LitDadsGNN(L.LightningModule):
     # ---- Multitask ----
 
     def _multitask_loss(self, pred: torch.Tensor, batch) -> tuple[torch.Tensor, int]:
-        """Masked per-head Huber loss with calm-weighting for wind heads.
+        """Masked per-head Huber loss, normalized by per-target scale.
+
+        When target_scales is provided, each head's error is divided by its
+        scale before applying Huber loss with delta=1.0. This equalizes
+        gradient contribution across targets with different natural magnitudes.
 
         pred          : (N, n_targets)
         batch.y       : (N, n_targets) — NaN filled with 0.0
         batch.valid_mask : (N, n_targets) bool — True where obs is available
         """
         wind_idx = set(self.hparams.wind_target_indices or [])
+        scales = self.hparams.target_scales
         head_losses = []
         for i, _name in enumerate(self.hparams.target_names):
             mask = batch.valid_mask[:, i]
@@ -274,7 +281,11 @@ class LitDadsGNN(L.LightningModule):
             if not mask.any():
                 continue
             pred_i, tgt_i = pred[mask, i], batch.y[mask, i]
-            elems = self.huber(pred_i, tgt_i)  # (M,) elementwise
+            if scales:
+                err_i = (pred_i - tgt_i) / scales[i]
+                elems = self.huber(err_i, torch.zeros_like(err_i))
+            else:
+                elems = self.huber(pred_i, tgt_i)  # (M,) elementwise
             if i in wind_idx and hasattr(batch, "baseline_wind"):
                 w = torch.clamp(
                     batch.baseline_wind[mask] / self.hparams.calm_threshold,

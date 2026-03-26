@@ -280,6 +280,32 @@ def main() -> None:
         val_ds, batch_size=cfg.batch_size, shuffle=False, num_workers=cfg.num_workers
     )
 
+    # Compute robust per-target scales from training data (MAD-based)
+    target_scales = None
+    if cfg.task == "multitask":
+        train_df = pd.read_parquet(cfg.table_path)
+        if isinstance(train_df.index, pd.MultiIndex):
+            train_df = train_df.reset_index()
+        train_df["fid"] = train_df["fid"].astype(str)
+        train_df["day"] = pd.to_datetime(train_df["day"])
+        if train_days:
+            train_df = train_df[train_df["day"].isin(train_days)]
+        if holdout_fids:
+            train_df = train_df[~train_df["fid"].isin(holdout_fids)]
+        target_scales = []
+        for col in cfg.target_names:
+            if col in train_df.columns:
+                vals = train_df[col].dropna()
+                mad = (vals - vals.median()).abs().median()
+                scale = float(max(mad * 1.4826, 1e-6))  # MAD -> std-equivalent
+            else:
+                scale = 1.0
+            target_scales.append(scale)
+        print(
+            f"Target scales (MAD-based): {dict(zip(cfg.target_names, target_scales))}"
+        )
+        del train_df
+
     model = LitDadsGNN(
         node_dim=train_ds.node_dim,
         edge_dim=train_ds.edge_dim,
@@ -289,7 +315,7 @@ def main() -> None:
         dropout=cfg.dropout,
         lr=cfg.lr,
         weight_decay=cfg.weight_decay,
-        huber_delta=cfg.huber_delta,
+        huber_delta=1.0,  # normalized space; scale handles magnitude
         task=cfg.task,
         calm_threshold=cfg.calm_threshold,
         calm_min_weight=cfg.calm_min_weight,
@@ -298,6 +324,7 @@ def main() -> None:
         wind_target_indices=cfg.wind_target_indices
         if cfg.task == "multitask"
         else None,
+        target_scales=target_scales,
     )
 
     if cfg.device and cfg.device.startswith("cuda"):
