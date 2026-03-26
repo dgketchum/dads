@@ -381,6 +381,11 @@ def _parse_args() -> argparse.Namespace:
         action="store_true",
         help="Add neighbor target-value summary stats (mean, std, count) as node features",
     )
+    p.add_argument(
+        "--innovation-exclude-fids",
+        default=None,
+        help="JSON file of fids to exclude from innovation computation (prevents leakage)",
+    )
     return p.parse_args()
 
 
@@ -391,6 +396,15 @@ def main() -> None:
     target_col = args.target_col
     prefix = args.model_prefix
     required_col = args.required_col or f"tmp_{prefix}"
+
+    # Load innovation exclusion fids (holdout stations excluded from innovations)
+    innovation_exclude: set[str] = set()
+    if args.innovation_exclude_fids:
+        import json as _json
+
+        with open(args.innovation_exclude_fids) as _f:
+            innovation_exclude = {str(x) for x in _json.load(_f)}
+        print(f"Innovation exclude fids: {len(innovation_exclude)}")
 
     # ------------------------------------------------------------------
     # Load station-day table
@@ -707,13 +721,18 @@ def main() -> None:
         )
 
         # Innovation features: neighbor target-value summary stats
+        # Exclude holdout fids from innovation computation to prevent leakage
         if innovation_cols:
             target_vals = day_df[target_col].values.astype("float32")
             fid_to_idx = {f: si for si, f in enumerate(fid_list)}
             inn_arr = np.full((n_stations, 3), np.nan, dtype="float32")
             for si, fid in enumerate(fid_list):
                 nbr_fids = knn_map.get(fid, [])
-                nbr_idx = [fid_to_idx[f] for f in nbr_fids if f in fid_to_idx]
+                nbr_idx = [
+                    fid_to_idx[f]
+                    for f in nbr_fids
+                    if f in fid_to_idx and f not in innovation_exclude
+                ]
                 if nbr_idx:
                     nbr_vals = target_vals[nbr_idx]
                     valid = nbr_vals[np.isfinite(nbr_vals)]
