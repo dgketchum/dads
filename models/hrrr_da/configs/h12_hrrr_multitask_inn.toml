@@ -1,11 +1,12 @@
 name = "h12_hrrr_multitask_inn"
-description = "H12: multitask GNN + neighbor innovations, holdout-excluded"
+description = "H12: multitask GNN with raw delta innovations (transductive DA)"
 
 hidden_dim = 128
 n_hops = 1
 use_graph = true
 use_sx = true
 use_flow_terrain = true
+use_innovations = true
 
 lr = 0.001
 weight_decay = 1e-5
@@ -29,7 +30,7 @@ target_names = [
 ]
 wind_target_indices = [4, 5]
 
-table_path = "/nas/dads/mvp/station_day_hrrr_daily_inn_pnw.parquet"
+table_path = "/nas/dads/mvp/station_day_hrrr_daily_pnw.parquet"
 stations_csv = "artifacts/madis_pnw.csv"
 out_dir = "/nas/dads/mvp/h12_hrrr_multitask_inn"
 train_years = [2018, 2019, 2020, 2021, 2022, 2023]

@@ -81,6 +81,7 @@ def _get_feature_cols(
     df: pd.DataFrame,
     use_sx: bool = True,
     use_flow_terrain: bool = True,
+    use_innovations: bool = False,
 ) -> list[str]:
     """Build ordered list of node feature columns."""
     cols = []
@@ -97,6 +98,10 @@ def _get_feature_cols(
                 cols.append(c)
     if use_flow_terrain:
         for c in FLOW_TERRAIN_COLS:
+            if c in df.columns:
+                cols.append(c)
+    if use_innovations:
+        for c in TARGET_COLS:
             if c in df.columns:
                 cols.append(c)
     for c in TEMPORAL_COLS:
@@ -170,6 +175,8 @@ class HRRRGraphDataset(Dataset):
         use_graph: bool = True,
         use_sx: bool = True,
         use_flow_terrain: bool = True,
+        use_innovations: bool = False,
+        is_val: bool = False,
         norm_stats: dict | None = None,
         train_days: set | None = None,
         exclude_fids: set | None = None,
@@ -178,7 +185,14 @@ class HRRRGraphDataset(Dataset):
         self.use_graph = use_graph
         self.use_sx = use_sx
         self.use_flow_terrain = use_flow_terrain
+        self.use_innovations = use_innovations
+        self._is_val = is_val
         self.k = k
+        # When using innovations, keep holdout stations in graph (transductive)
+        # but mask their innovation features. Store holdout set for masking.
+        self._holdout_fids: set[str] = set()
+        if use_innovations and exclude_fids:
+            self._holdout_fids = set(exclude_fids)
 
         df = pd.read_parquet(table_path)
         if isinstance(df.index, pd.MultiIndex):
@@ -188,7 +202,8 @@ class HRRRGraphDataset(Dataset):
 
         if train_days is not None:
             df = df[df["day"].isin(train_days)]
-        if exclude_fids is not None:
+        # Inductive holdout: remove stations entirely (unless using innovations)
+        if exclude_fids is not None and not use_innovations:
             df = df[~df["fid"].isin(exclude_fids)]
 
         # Warn if fewer than 4 of 6 canonical targets are present (likely old table)
@@ -204,7 +219,10 @@ class HRRRGraphDataset(Dataset):
             )
 
         self.feature_cols = _get_feature_cols(
-            df, use_sx=use_sx, use_flow_terrain=use_flow_terrain
+            df,
+            use_sx=use_sx,
+            use_flow_terrain=use_flow_terrain,
+            use_innovations=use_innovations,
         )
         self.node_dim = len(self.feature_cols)
 
@@ -234,6 +252,20 @@ class HRRRGraphDataset(Dataset):
         fids = day_df["fid"].tolist()
         features = day_df[self.feature_cols].values
         features = apply_norm(features, self.feature_cols, self.norm_stats)
+
+        # Mask holdout stations' innovation features to 0 (pre-normalization value)
+        if self.use_innovations and self._holdout_fids:
+            inn_indices = [
+                i for i, c in enumerate(self.feature_cols) if c in TARGET_COLS
+            ]
+            holdout_mask = np.array([f in self._holdout_fids for f in fids], dtype=bool)
+            for ci in inn_indices:
+                # Set to the normalized value of 0 = (0 - mean) / std
+                stats = self.norm_stats.get(self.feature_cols[ci])
+                if stats:
+                    features[holdout_mask, ci] = -stats["mean"] / stats["std"]
+                else:
+                    features[holdout_mask, ci] = 0.0
 
         x = torch.from_numpy(features)
 
@@ -265,6 +297,18 @@ class HRRRGraphDataset(Dataset):
             day_df["wind_hrrr"].values if "wind_hrrr" in day_df.columns else None
         )
 
+        # Transductive loss_mask for innovation mode:
+        #   train: loss on non-holdout only (holdout features masked, no supervision)
+        #   val:   loss on holdout only (test generalization to masked stations)
+        if self.use_innovations and self._holdout_fids:
+            is_holdout = [f in self._holdout_fids for f in fids]
+            if self._is_val:
+                loss_mask = torch.tensor(is_holdout, dtype=torch.bool)
+            else:
+                loss_mask = torch.tensor([not h for h in is_holdout], dtype=torch.bool)
+        else:
+            loss_mask = torch.ones(n_nodes, dtype=torch.bool)
+
         data = Data(
             x=x,
             y=y,
@@ -272,6 +316,7 @@ class HRRRGraphDataset(Dataset):
             edge_attr=edge_attr,
             fids=fids,
             valid_mask=valid_mask,
+            loss_mask=loss_mask,
         )
         if hrrr_wind is not None:
             data.baseline_wind = torch.from_numpy(hrrr_wind.astype("float32"))

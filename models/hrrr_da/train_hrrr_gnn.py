@@ -45,6 +45,7 @@ class HRRRGNNConfig:
     use_graph: bool = True
     use_sx: bool = True
     use_flow_terrain: bool = True
+    use_innovations: bool = False
 
     # Training
     lr: float = 1e-3
@@ -241,6 +242,7 @@ def main() -> None:
             use_graph=cfg.use_graph,
             use_sx=cfg.use_sx,
             use_flow_terrain=cfg.use_flow_terrain,
+            use_innovations=cfg.use_innovations,
             train_days=train_days,
             exclude_fids=holdout_fids,
         )
@@ -252,8 +254,11 @@ def main() -> None:
             use_graph=cfg.use_graph,
             use_sx=cfg.use_sx,
             use_flow_terrain=cfg.use_flow_terrain,
+            use_innovations=cfg.use_innovations,
+            is_val=True,
             norm_stats=train_ds.norm_stats,
             train_days=val_days,
+            exclude_fids=holdout_fids,
         )
 
     print(f"Train: {len(train_ds)} days, Val: {len(val_ds)} days")
