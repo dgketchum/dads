@@ -253,18 +253,26 @@ class HRRRGraphDataset(Dataset):
         features = day_df[self.feature_cols].values
         features = apply_norm(features, self.feature_cols, self.norm_stats)
 
-        # Mask holdout stations' innovation features so neighbors can't see them.
-        # Non-holdout deltas remain — neighbors see them through message passing.
+        # Innovation feature masking:
+        # 1. Fill NaN (missing obs) with normalized-zero for all stations
+        # 2. Mask holdout stations' deltas so neighbors can't see them
         # Self-view leakage is handled in the GNN via innovation_indices.
-        if self.use_innovations and self._holdout_fids:
+        if self.use_innovations:
             inn_indices = [
                 i for i, c in enumerate(self.feature_cols) if c in TARGET_COLS
             ]
-            holdout_mask = np.array([f in self._holdout_fids for f in fids], dtype=bool)
             for ci in inn_indices:
                 stats = self.norm_stats.get(self.feature_cols[ci])
                 fill = -stats["mean"] / stats["std"] if stats else 0.0
-                features[holdout_mask, ci] = fill
+                # Fill NaN (station has no obs for this variable today)
+                nan_mask = np.isnan(features[:, ci])
+                features[nan_mask, ci] = fill
+                # Mask holdout stations
+                if self._holdout_fids:
+                    holdout_mask = np.array(
+                        [f in self._holdout_fids for f in fids], dtype=bool
+                    )
+                    features[holdout_mask, ci] = fill
 
         x = torch.from_numpy(features)
 
