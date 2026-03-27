@@ -1,6 +1,6 @@
-"""Lightning module for DA benchmark GNN (da-graph-v0).
+"""Lightning module for DA benchmark GNN.
 
-Uses HeteroEdgeGatedGNN with source/query node separation.
+Supports both da-graph-v0 (HeteroEdgeGatedGNN) and da-graph-v1 (GatedDAGNN).
 Predictions on query nodes only. Loss gated by loss_mask + valid_mask.
 """
 
@@ -11,6 +11,7 @@ import torch
 from torch import nn
 from torchmetrics import MeanAbsoluteError
 
+from models.components.gated_da_gnn import GatedDAGNN
 from models.components.hetero_edge_gated_gnn import HeteroEdgeGatedGNN
 
 
@@ -18,7 +19,8 @@ class LitDAGNN(L.LightningModule):
     def __init__(
         self,
         query_node_dim: int,
-        source_node_dim: int,
+        source_context_dim: int,
+        source_payload_dim: int = 0,
         edge_dim: int = 7,
         hidden_dim: int = 64,
         n_hops: int = 1,
@@ -29,20 +31,40 @@ class LitDAGNN(L.LightningModule):
         task: str = "scalar",
         target_names: list[str] | None = None,
         target_scales: list[float] | None = None,
+        disable_payload: bool = False,
+        da_gate_init_bias: float = -2.0,
+        source_edge_dropout: float = 0.0,
+        da_version: str = "v1",
     ):
         super().__init__()
         self.save_hyperparameters()
 
         out_dim = 1 if task == "scalar" else len(target_names or [])
-        self.model = HeteroEdgeGatedGNN(
-            grid_node_dim=query_node_dim,
-            station_node_dim=source_node_dim,
-            edge_dim=edge_dim,
-            hidden_dim=hidden_dim,
-            n_hops=n_hops,
-            out_dim=out_dim,
-            dropout=dropout,
-        )
+
+        if da_version == "v1":
+            self.model = GatedDAGNN(
+                query_node_dim=query_node_dim,
+                source_context_dim=source_context_dim,
+                source_payload_dim=source_payload_dim,
+                edge_dim=edge_dim,
+                hidden_dim=hidden_dim,
+                n_hops=n_hops,
+                out_dim=out_dim,
+                dropout=dropout,
+                da_gate_init_bias=da_gate_init_bias,
+            )
+        else:
+            # v0 fallback
+            self.model = HeteroEdgeGatedGNN(
+                grid_node_dim=query_node_dim,
+                station_node_dim=source_context_dim,
+                edge_dim=edge_dim,
+                hidden_dim=hidden_dim,
+                n_hops=n_hops,
+                out_dim=out_dim,
+                dropout=dropout,
+            )
+
         self.huber = nn.HuberLoss(delta=huber_delta, reduction="none")
 
         if task == "scalar":
@@ -55,13 +77,25 @@ class LitDAGNN(L.LightningModule):
             )
 
     def forward(self, data):
-        # Map query/source to grid/station for the existing HeteroEdgeGatedGNN
-        mapped = data.clone()
-        mapped["grid"] = data["query"]
-        mapped["station"] = data["source"]
-        mapped["station", "influences", "grid"] = data["source", "influences", "query"]
-        mapped["grid", "neighbors", "grid"] = data["query", "neighbors", "query"]
-        return self.model(mapped)
+        if self.hparams.da_version == "v1":
+            pred, da_gate_mean = self.model(
+                data,
+                disable_payload=self.hparams.disable_payload,
+                source_edge_dropout=self.hparams.source_edge_dropout
+                if self.training
+                else 0.0,
+            )
+            return pred, da_gate_mean
+        else:
+            # v0 mapping
+            mapped = data.clone()
+            mapped["grid"] = data["query"]
+            mapped["station"] = data["source"]
+            mapped["station", "influences", "grid"] = data[
+                "source", "influences", "query"
+            ]
+            mapped["grid", "neighbors", "grid"] = data["query", "neighbors", "query"]
+            return self.model(mapped), torch.tensor(0.0)
 
     # ---- Scalar loss ----
 
@@ -123,16 +157,18 @@ class LitDAGNN(L.LightningModule):
     # ---- Training / validation steps ----
 
     def training_step(self, batch, batch_idx):
-        pred = self(batch)
+        pred, da_gate_mean = self(batch)
         if self.hparams.task == "scalar":
             loss, n = self._scalar_loss(pred, batch)
         else:
             loss, n = self._multitask_loss(pred, batch)
         self.log("train_loss", loss, prog_bar=True, batch_size=max(n, 1))
+        self.log("train/da_gate_mean", da_gate_mean, batch_size=max(n, 1))
         return loss
 
     def validation_step(self, batch, batch_idx):
-        pred = self(batch)
+        pred, da_gate_mean = self(batch)
+        self.log("val/da_gate_mean", da_gate_mean, batch_size=1)
         if self.hparams.task == "scalar":
             return self._scalar_val_step(pred, batch)
         else:
@@ -151,9 +187,8 @@ class LitDAGNN(L.LightningModule):
                 self.log(f"val/mae_{name}", metric, prog_bar=False)
 
     def configure_optimizers(self):
-        opt = torch.optim.AdamW(
+        return torch.optim.AdamW(
             self.parameters(),
             lr=self.hparams.lr,
             weight_decay=self.hparams.weight_decay,
         )
-        return opt

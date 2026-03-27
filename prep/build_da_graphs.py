@@ -171,14 +171,15 @@ def main():
         + LOCATION_COLS
     )
 
-    # Source feature list: full core-graph-v0 background/static + observation payload
-    source_feature_cols = (
-        list(query_feature_cols)
-        + list(target_cols)
-        + [f"valid_{tc}" for tc in target_cols]
-    )
+    # Source context: same core-graph-v0 features at source location
+    source_context_feature_cols = list(query_feature_cols)
+    # Source payload: observation deltas + valid flags
+    source_payload_feature_cols = list(target_cols) + [
+        f"valid_{tc}" for tc in target_cols
+    ]
     print(f"Query features: {len(query_feature_cols)}")
-    print(f"Source features: {len(source_feature_cols)}")
+    print(f"Source context features: {len(source_context_feature_cols)}")
+    print(f"Source payload features: {len(source_payload_feature_cols)}")
 
     # Load station inventory and project
     from pyproj import Transformer
@@ -426,9 +427,9 @@ def main():
             if obs_payload
             else np.zeros((n_source, 0), dtype="float32")
         )
-        source_x = np.concatenate(
-            [source_background, obs_arr], axis=1
-        )  # (n_source, 41)
+        # da-graph-v1: keep context and payload as separate tensors
+        source_context_x = source_background  # (n_source, 37)
+        source_payload_x = obs_arr  # (n_source, 4)
 
         # === QUERY -> QUERY EDGES ===
         ugrd = day_df["ugrd_hrrr"].values if "ugrd_hrrr" in day_df.columns else None
@@ -488,7 +489,8 @@ def main():
         data["query"].valid_mask = torch.from_numpy(valid_mask)
         data["query"].fids = fid_list
 
-        data["source"].x = torch.from_numpy(source_x)
+        data["source"].context_x = torch.from_numpy(source_context_x)
+        data["source"].payload_x = torch.from_numpy(source_payload_x)
         data["source"].fids = source_fids
 
         data["source", "influences", "query"].edge_index = sq_edge_index
@@ -536,9 +538,10 @@ def main():
 
     # Save metadata
     meta = {
-        "family": "da-graph-v0",
+        "family": "da-graph-v1",
         "query_feature_cols": query_feature_cols,
-        "source_feature_cols": source_feature_cols,
+        "source_context_feature_cols": source_context_feature_cols,
+        "source_payload_feature_cols": source_payload_feature_cols,
         "target_cols": target_cols,
         "query_edge_dim": 7,
         "source_query_edge_dim": 7,
@@ -555,7 +558,8 @@ def main():
         ],
         "n_days": len(days),
         "n_query_features": len(query_feature_cols),
-        "n_source_features": len(source_feature_cols),
+        "n_source_context_features": len(source_context_feature_cols),
+        "n_source_payload_features": len(source_payload_feature_cols),
         "k": args.k,
         "source_k": args.source_k,
         "max_radius_km": args.max_radius_km,
@@ -571,7 +575,9 @@ def main():
 
     print(f"Done. {len(days)} DA graphs saved to {args.out_dir}")
     print(
-        f"Query features: {len(query_feature_cols)}, Source features: {len(source_feature_cols)}"
+        f"Query: {len(query_feature_cols)}, "
+        f"Source context: {len(source_context_feature_cols)}, "
+        f"Source payload: {len(source_payload_feature_cols)}"
     )
 
 

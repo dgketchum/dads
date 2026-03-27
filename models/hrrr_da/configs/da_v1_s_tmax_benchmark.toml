@@ -1,0 +1,27 @@
+name = "da_v1_s_tmax_benchmark"
+description = "DA-S-tmax: gated payload DA, single-head tmax"
+
+hidden_dim = 64
+n_hops = 1
+lr = 3e-4
+weight_decay = 1e-3
+huber_delta = 1.0
+dropout = 0.3
+batch_size = 16
+epochs = 100
+seed = 42
+task = "scalar"
+target_index = 0
+da_version = "v1"
+disable_payload = false
+da_gate_init_bias = -2.0
+source_edge_dropout = 0.2
+
+train_years = [2018, 2019, 2020, 2021, 2022, 2023]
+val_years = [2024]
+
+graph_dir = "/nas/dads/runs/da_v1_graphs"
+out_dir = "/nas/dads/runs/da_v1_s_tmax/seed_42"
+holdout_fids_json = "/home/dgketchum/code/dads/artifacts/canonical_holdout_fids.json"
+device = "cuda:0"
+num_workers = 0

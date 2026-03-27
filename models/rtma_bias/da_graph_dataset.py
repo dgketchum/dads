@@ -54,12 +54,28 @@ class DAGraphDataset(Dataset):
         with open(meta_path) as f:
             meta = json.load(f)
 
-        if meta.get("family") != "da-graph-v0":
-            raise ValueError(f"Expected da-graph-v0 family, got {meta.get('family')}")
+        family = meta.get("family", "")
+        if family not in ("da-graph-v0", "da-graph-v1"):
+            raise ValueError(f"Expected da-graph-v0 or v1 family, got {family}")
+        self._family = family
 
         self.query_feature_cols: list[str] = meta["query_feature_cols"]
-        self.source_feature_cols: list[str] = meta["source_feature_cols"]
         self.target_cols: list[str] = meta["target_cols"]
+
+        # v1: separate context/payload; v0: combined source_feature_cols
+        if family == "da-graph-v1":
+            self.source_context_feature_cols: list[str] = meta[
+                "source_context_feature_cols"
+            ]
+            self.source_payload_feature_cols: list[str] = meta[
+                "source_payload_feature_cols"
+            ]
+        else:
+            self.source_context_feature_cols = []
+            self.source_payload_feature_cols = []
+            self._source_feature_cols_v0: list[str] = meta.get(
+                "source_feature_cols", []
+            )
 
         # Load graphs
         pt_files = sorted(Path(graph_dir).glob("*.pt"))
@@ -82,8 +98,12 @@ class DAGraphDataset(Dataset):
         return len(self.query_feature_cols)
 
     @property
-    def source_node_dim(self) -> int:
-        return len(self.source_feature_cols)
+    def source_context_dim(self) -> int:
+        return len(self.source_context_feature_cols)
+
+    @property
+    def source_payload_dim(self) -> int:
+        return len(self.source_payload_feature_cols)
 
     @property
     def edge_dim(self) -> int:
@@ -93,7 +113,8 @@ class DAGraphDataset(Dataset):
         """Compute z-score stats from loss-eligible (non-holdout) query nodes
         and all source nodes (source nodes are already non-holdout by construction)."""
         query_xs = []
-        source_xs = []
+        source_ctx_xs = []
+        source_pay_xs = []
         for g in self._graphs:
             qx = g["query"].x
             if self.loss_fids is not None and hasattr(g["query"], "fids"):
@@ -104,9 +125,13 @@ class DAGraphDataset(Dataset):
                     query_xs.append(qx[mask])
             else:
                 query_xs.append(qx)
-            source_xs.append(g["source"].x)
+            if self._family == "da-graph-v1":
+                source_ctx_xs.append(g["source"].context_x)
+                source_pay_xs.append(g["source"].payload_x)
+            else:
+                source_ctx_xs.append(g["source"].x)
 
-        stats = {"query": {}, "source": {}}
+        stats = {"query": {}, "source_context": {}, "source_payload": {}}
         if query_xs:
             all_qx = torch.cat(query_xs, dim=0)
             for i, c in enumerate(self.query_feature_cols):
@@ -115,14 +140,28 @@ class DAGraphDataset(Dataset):
                     "mean": float(vals.mean()),
                     "std": float(max(vals.std().item(), 1e-8)),
                 }
-        if source_xs:
-            all_sx = torch.cat(source_xs, dim=0)
-            for i, c in enumerate(self.source_feature_cols):
-                vals = all_sx[:, i]
-                stats["source"][c] = {
-                    "mean": float(vals.mean()),
-                    "std": float(max(vals.std().item(), 1e-8)),
-                }
+        if source_ctx_xs:
+            all_ctx = torch.cat(source_ctx_xs, dim=0)
+            cols = self.source_context_feature_cols or self._source_feature_cols_v0
+            for i, c in enumerate(cols):
+                if i < all_ctx.shape[1]:
+                    vals = all_ctx[:, i]
+                    stats["source_context"][c] = {
+                        "mean": float(vals.mean()),
+                        "std": float(max(vals.std().item(), 1e-8)),
+                    }
+        if source_pay_xs:
+            all_pay = torch.cat(source_pay_xs, dim=0)
+            for i, c in enumerate(self.source_payload_feature_cols):
+                if i < all_pay.shape[1]:
+                    # Don't z-score valid flags (binary 0/1)
+                    if c.startswith("valid_"):
+                        continue
+                    vals = all_pay[:, i]
+                    stats["source_payload"][c] = {
+                        "mean": float(vals.mean()),
+                        "std": float(max(vals.std().item(), 1e-8)),
+                    }
         return stats
 
     def __len__(self) -> int:
@@ -135,7 +174,13 @@ class DAGraphDataset(Dataset):
         qx = g["query"].x.clone()
         qy = g["query"].y.clone()
         q_valid = g["query"].valid_mask.clone()
-        sx = g["source"].x.clone()
+
+        if self._family == "da-graph-v1":
+            s_ctx = g["source"].context_x.clone()
+            s_pay = g["source"].payload_x.clone()
+        else:
+            s_ctx = g["source"].x.clone()
+            s_pay = None
 
         # Normalize query features
         for i, c in enumerate(self.query_feature_cols):
@@ -143,11 +188,23 @@ class DAGraphDataset(Dataset):
             if s:
                 qx[:, i] = (qx[:, i] - s["mean"]) / s["std"]
 
-        # Normalize source features
-        for i, c in enumerate(self.source_feature_cols):
-            s = self.norm_stats.get("source", {}).get(c)
-            if s:
-                sx[:, i] = (sx[:, i] - s["mean"]) / s["std"]
+        # Normalize source context
+        ctx_cols = self.source_context_feature_cols or getattr(
+            self, "_source_feature_cols_v0", []
+        )
+        for i, c in enumerate(ctx_cols):
+            ns = self.norm_stats.get("source_context", {}).get(c)
+            if ns and i < s_ctx.shape[1]:
+                s_ctx[:, i] = (s_ctx[:, i] - ns["mean"]) / ns["std"]
+
+        # Normalize source payload (skip valid flags)
+        if s_pay is not None:
+            for i, c in enumerate(self.source_payload_feature_cols):
+                if c.startswith("valid_"):
+                    continue
+                ns = self.norm_stats.get("source_payload", {}).get(c)
+                if ns and i < s_pay.shape[1]:
+                    s_pay[:, i] = (s_pay[:, i] - ns["mean"]) / ns["std"]
 
         # Target index selection for single-head
         if self.target_index is not None and qy.ndim == 2:
@@ -175,7 +232,11 @@ class DAGraphDataset(Dataset):
         if q_valid.ndim == 2:
             out["query"].valid_mask = q_valid
 
-        out["source"].x = sx
+        if self._family == "da-graph-v1":
+            out["source"].context_x = s_ctx
+            out["source"].payload_x = s_pay
+        else:
+            out["source"].x = s_ctx  # v0 compat
 
         out["source", "influences", "query"].edge_index = g[
             "source", "influences", "query"

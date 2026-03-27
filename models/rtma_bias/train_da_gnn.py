@@ -44,6 +44,10 @@ class DAGNNConfig:
     task: str = "scalar"
     target_names: list[str] = field(default_factory=list)
     target_index: int | None = None
+    da_version: str = "v1"
+    disable_payload: bool = False
+    da_gate_init_bias: float = -2.0
+    source_edge_dropout: float = 0.0
 
     train_years: list[int] = field(default_factory=list)
     val_years: list[int] = field(default_factory=list)
@@ -196,7 +200,8 @@ def main():
 
     model = LitDAGNN(
         query_node_dim=train_ds.query_node_dim,
-        source_node_dim=train_ds.source_node_dim,
+        source_context_dim=train_ds.source_context_dim,
+        source_payload_dim=train_ds.source_payload_dim,
         edge_dim=train_ds.edge_dim,
         hidden_dim=cfg.hidden_dim,
         n_hops=cfg.n_hops,
@@ -207,6 +212,10 @@ def main():
         task=cfg.task,
         target_names=cfg.target_names if cfg.task == "multitask" else None,
         target_scales=target_scales,
+        disable_payload=cfg.disable_payload,
+        da_gate_init_bias=cfg.da_gate_init_bias,
+        source_edge_dropout=cfg.source_edge_dropout,
+        da_version=cfg.da_version,
     )
 
     if cfg.device and cfg.device.startswith("cuda"):
