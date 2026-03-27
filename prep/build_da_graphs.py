@@ -264,9 +264,65 @@ def main():
                 nbrs.append(sfid)
         sq_knn_map[str(qfid)] = nbrs
 
-    # Build source->query static edge attrs
-    sq_static_edges = build_static_edge_attrs(source_csv, sq_knn_map)
-    sq_edge_norm = compute_edge_norm(sq_static_edges)
+    # Build source->query static edge attrs directly (not via build_static_edge_attrs,
+    # which assumes both endpoints are in the same CSV). Direction: source -> query.
+    # Bearing and delta_elevation are from the source station's perspective toward
+    # the query station.
+    source_sta_lookup = non_holdout_sta.set_index(id_col)
+    query_sta_lookup = active_sta.set_index(id_col)
+
+    sq_static_edges: dict[str, dict[str, dict[str, float]]] = {}
+    for qfid, nbr_sfids in sq_knn_map.items():
+        sq_static_edges[qfid] = {}
+        if qfid not in query_sta_lookup.index:
+            continue
+        q_row = query_sta_lookup.loc[qfid]
+        q_lat, q_lon = float(q_row["latitude"]), float(q_row["longitude"])
+        q_elev = float(q_row.get("elevation", 0) or 0)
+        for sfid in nbr_sfids:
+            if sfid not in source_sta_lookup.index:
+                continue
+            s_row = source_sta_lookup.loc[sfid]
+            s_lat, s_lon = float(s_row["latitude"]), float(s_row["longitude"])
+            s_elev = float(s_row.get("elevation", 0) or 0)
+
+            # Haversine distance
+            lat1, lat2 = np.radians(s_lat), np.radians(q_lat)
+            dlon = np.radians(q_lon - s_lon)
+            dlat = lat2 - lat1
+            a = (
+                np.sin(dlat / 2) ** 2
+                + np.cos(lat1) * np.cos(lat2) * np.sin(dlon / 2) ** 2
+            )
+            dist_km = 6371.0 * 2 * np.arctan2(np.sqrt(a), np.sqrt(1 - a))
+
+            # Bearing from source to query
+            bearing = np.arctan2(
+                np.sin(dlon) * np.cos(lat2),
+                np.cos(lat1) * np.sin(lat2)
+                - np.sin(lat1) * np.cos(lat2) * np.cos(dlon),
+            )
+
+            sq_static_edges[qfid][sfid] = {
+                "distance_km": dist_km,
+                "bearing_sin": float(np.sin(bearing)),
+                "bearing_cos": float(np.cos(bearing)),
+                "delta_elevation": q_elev - s_elev,  # query minus source
+            }
+
+    # Compute normalization stats for source->query edges
+    all_dists = [
+        e["distance_km"] for qe in sq_static_edges.values() for e in qe.values()
+    ]
+    all_delev = [
+        e["delta_elevation"] for qe in sq_static_edges.values() for e in qe.values()
+    ]
+    sq_edge_norm = {
+        "dist_mean": float(np.mean(all_dists)) if all_dists else 0.0,
+        "dist_std": float(max(np.std(all_dists), 1e-8)) if all_dists else 1.0,
+        "delev_mean": float(np.mean(all_delev)) if all_delev else 0.0,
+        "delev_std": float(max(np.std(all_delev), 1e-8)) if all_delev else 1.0,
+    }
 
     if os.path.exists(active_csv):
         os.remove(active_csv)
@@ -454,6 +510,32 @@ def main():
                 f"  [{i + 1}/{len(days)}] {date_str}  {rate:.1f} days/s  ETA {eta / 60:.1f} min"
             )
 
+    # Compute effective holdout coverage
+    all_query_fids = set()
+    val_query_fids = set()
+    for day_key in days:
+        day_df = day_groups[day_key]
+        day_fids = set(day_df["fid"].values)
+        all_query_fids.update(day_fids)
+        if pd.Timestamp(day_key).year in {2024}:
+            val_query_fids.update(day_fids)
+
+    effective_holdout = holdout_fids & all_query_fids
+    val_holdout = holdout_fids & val_query_fids
+    print(
+        f"Holdout: {len(holdout_fids)} requested, "
+        f"{len(effective_holdout)} in graphs, "
+        f"{len(val_holdout)} on 2024 val days"
+    )
+
+    # Save holdout parity artifacts
+    with open(os.path.join(args.out_dir, "requested_holdout_fids.json"), "w") as f:
+        json.dump(sorted(holdout_fids), f)
+    with open(os.path.join(args.out_dir, "effective_holdout_fids.json"), "w") as f:
+        json.dump(sorted(effective_holdout), f)
+    with open(os.path.join(args.out_dir, "val_holdout_fids.json"), "w") as f:
+        json.dump(sorted(val_holdout), f)
+
     # Save metadata
     meta = {
         "family": "da-graph-v0",
@@ -462,6 +544,17 @@ def main():
         "target_cols": target_cols,
         "query_edge_dim": 7,
         "source_query_edge_dim": 7,
+        "source_query_edge_active_channels": [
+            "distance_norm",
+            "bearing_sin",
+            "bearing_cos",
+            "delta_elevation_norm",
+        ],
+        "source_query_edge_placeholder_channels": [
+            "delta_tpi (zero)",
+            "upwind_cos (zero)",
+            "upwind_sin (zero)",
+        ],
         "n_days": len(days),
         "n_query_features": len(query_feature_cols),
         "n_source_features": len(source_feature_cols),
@@ -469,6 +562,9 @@ def main():
         "source_k": args.source_k,
         "max_radius_km": args.max_radius_km,
         "holdout_fids_json": args.holdout_fids_json,
+        "n_holdout_requested": len(holdout_fids),
+        "n_holdout_effective": len(effective_holdout),
+        "n_holdout_val_days": len(val_holdout),
         "query_edge_norm": query_edge_norm,
         "source_query_edge_norm": sq_edge_norm,
     }
