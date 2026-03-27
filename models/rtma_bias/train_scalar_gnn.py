@@ -52,6 +52,9 @@ class ScalarGNNConfig:
     batch_size: int = 16
     epochs: int = 100
     seed: int = 42
+    task: str = "scalar"
+    target_names: list[str] = field(default_factory=list)
+    target_index: int | None = None
 
     # Data
     graph_dir: str = f"{MVP_ROOT}/tmax_graphs_pnw_2024"
@@ -216,6 +219,7 @@ def main() -> None:
             use_graph=cfg.use_graph,
             train_days=train_days,
             loss_fids=train_loss_fids,
+            target_index=cfg.target_index,
         )
 
         # Check val-day holdout coverage
@@ -259,6 +263,7 @@ def main() -> None:
             graph_dir=cfg.graph_dir,
             use_graph=cfg.use_graph,
             train_days=train_days,
+            target_index=cfg.target_index,
         )
     train_ds.save_norm_stats(os.path.join(cfg.out_dir, "norm_stats.json"))
 
@@ -269,6 +274,7 @@ def main() -> None:
         norm_stats=train_ds.norm_stats,
         train_days=val_days,
         loss_fids=holdout_fids if holdout_fids else None,
+        target_index=cfg.target_index,
     )
 
     print(f"Train: {len(train_ds)} days, Val: {len(val_ds)} days")
@@ -287,6 +293,33 @@ def main() -> None:
         num_workers=cfg.num_workers,
     )
 
+    # Compute target_scales for multitask
+    target_scales = None
+    if cfg.task == "multitask" and cfg.target_names:
+        import torch as _torch
+
+        scale_vals = []
+        for ti, tn in enumerate(cfg.target_names):
+            ys = []
+            for g in train_ds._graphs:
+                y_g = g.y if g.y.ndim == 1 else g.y[:, ti]
+                sup = (
+                    g.supervised
+                    if hasattr(g, "supervised")
+                    else _torch.ones_like(y_g, dtype=_torch.bool)
+                )
+                if sup.ndim == 2:
+                    sup = sup[:, ti]
+                if train_ds.loss_fids and hasattr(g, "fids"):
+                    lm = _torch.tensor([f in train_ds.loss_fids for f in g.fids])
+                    sup = sup & lm
+                ys.append(y_g[sup])
+            all_y = _torch.cat(ys)
+            mad = (all_y - all_y.median()).abs().median().item()
+            scale_vals.append(max(mad * 1.4826, 1e-6))
+        target_scales = scale_vals
+        print(f"Target scales (MAD): {dict(zip(cfg.target_names, target_scales))}")
+
     model = LitScalarGNN(
         node_dim=train_ds.node_dim,
         edge_dim=train_ds.edge_dim,
@@ -295,8 +328,11 @@ def main() -> None:
         use_graph=cfg.use_graph,
         lr=cfg.lr,
         weight_decay=cfg.weight_decay,
-        huber_delta=cfg.huber_delta,
+        huber_delta=1.0 if target_scales else cfg.huber_delta,
         dropout=cfg.dropout,
+        task=cfg.task,
+        target_names=cfg.target_names if cfg.task == "multitask" else None,
+        target_scales=target_scales,
     )
 
     # Accelerator
@@ -310,6 +346,9 @@ def main() -> None:
         accelerator = "auto"
         devices = 1
 
+    # Checkpoint metric: scalar uses val/target_mae, multitask uses val_loss
+    ckpt_metric = "val_loss" if cfg.task == "multitask" else "val/target_mae"
+
     trainer = L.Trainer(
         max_epochs=cfg.epochs,
         accelerator=accelerator,
@@ -319,12 +358,12 @@ def main() -> None:
         callbacks=[
             ModelCheckpoint(
                 dirpath=cfg.out_dir,
-                monitor="val/target_mae",
+                monitor=ckpt_metric,
                 save_top_k=3,
                 mode="min",
-                filename="ckpt-{epoch:03d}-{val/target_mae:.4f}",
+                filename="ckpt-{epoch:03d}-{" + ckpt_metric + ":.4f}",
             ),
-            EarlyStopping(monitor="val/target_mae", patience=20, mode="min"),
+            EarlyStopping(monitor=ckpt_metric, patience=20, mode="min"),
             LearningRateMonitor(logging_interval="epoch"),
         ],
         default_root_dir=cfg.out_dir,

@@ -324,8 +324,9 @@ def _parse_args() -> argparse.Namespace:
     # --- target / variable selection ---
     p.add_argument(
         "--target-col",
-        default="delta_tmax",
-        help="Name of the target column (default: delta_tmax)",
+        nargs="+",
+        default=["delta_tmax"],
+        help="Target column(s). Multiple creates multi-target y tensor.",
     )
     p.add_argument(
         "--model-prefix",
@@ -393,7 +394,7 @@ def main() -> None:
     args = _parse_args()
     os.makedirs(args.out_dir, exist_ok=True)
 
-    target_col = args.target_col
+    target_cols = args.target_col  # list (nargs="+")
     prefix = args.model_prefix
     required_col = args.required_col or f"tmp_{prefix}"
 
@@ -466,7 +467,7 @@ def main() -> None:
         print(f"Computing log-space residual: log(y_obs) - log({base_col})")
         valid = (df["y_obs"] > 1e-4) & (df[base_col] > 1e-4)
         df = df[valid].copy()
-        df[target_col] = np.log(df["y_obs"]) - np.log(df[base_col])
+        df[target_cols[0]] = np.log(df["y_obs"]) - np.log(df[base_col])
         print(f"  {len(df)} rows after filtering y_obs, {base_col} > 1e-4 kPa")
 
     # Keep all rows with required background data (not conditioned on target)
@@ -474,16 +475,14 @@ def main() -> None:
     df = df.dropna(subset=[required_col])
     print(f"Kept {len(df)} of {before} rows with {required_col}")
 
-    # Target availability: track but don't filter
-    has_target = df[target_col].notna()
-    if args.max_abs_target is not None:
-        has_target = has_target & (df[target_col].abs() <= args.max_abs_target)
-    n_supervised = has_target.sum()
-    n_unsupervised = len(df) - n_supervised
-    print(
-        f"Target {target_col}: {n_supervised} supervised, "
-        f"{n_unsupervised} unsupervised (kept as context nodes)"
-    )
+    # Target availability: track per-target but don't filter nodes
+    for tc in target_cols:
+        has = df[tc].notna()
+        if args.max_abs_target is not None:
+            has = has & (df[tc].abs() <= args.max_abs_target)
+        print(
+            f"Target {tc}: {has.sum()} supervised, {len(df) - has.sum()} unsupervised"
+        )
 
     # ------------------------------------------------------------------
     # Load station inventory for lat/lon/elevation
@@ -599,7 +598,7 @@ def main() -> None:
     innovation_cols: list[str] = []
     if args.include_innovations:
         innovation_cols = ["inn_mean", "inn_std", "inn_count"]
-        print(f"Innovation cols: {innovation_cols} (from neighbor {target_col})")
+        print(f"Innovation cols: {innovation_cols} (from neighbor {target_cols[0]})")
 
     all_feature_cols = (
         weather_cols
@@ -726,7 +725,7 @@ def main() -> None:
         # Innovation features: neighbor target-value summary stats
         # Exclude holdout fids from innovation computation to prevent leakage
         if innovation_cols:
-            target_vals = day_df[target_col].values.astype("float32")
+            target_vals = day_df[target_cols[0]].values.astype("float32")
             fid_to_idx = {f: si for si, f in enumerate(fid_list)}
             inn_arr = np.full((n_stations, 3), np.nan, dtype="float32")
             for si, fid in enumerate(fid_list):
@@ -763,12 +762,19 @@ def main() -> None:
         x = np.concatenate(parts, axis=1)
         x = np.nan_to_num(x, nan=0.0, posinf=0.0, neginf=0.0)
 
-        # Target + supervision mask
-        y_raw = day_df[target_col].values.astype("float32")
+        # Target + supervision mask (multi-target: y is (N, T), supervised is (N, T))
+        n_targets = len(target_cols)
+        y_raw = np.column_stack(
+            [day_df[tc].values.astype("float32") for tc in target_cols]
+        )  # (N, T)
         supervised = np.isfinite(y_raw)
         if args.max_abs_target is not None:
             supervised = supervised & (np.abs(y_raw) <= args.max_abs_target)
         y = np.where(supervised, y_raw, 0.0).astype("float32")
+        # Squeeze to 1-D for single-target backward compat
+        if n_targets == 1:
+            y = y.squeeze(1)
+            supervised = supervised.squeeze(1)
 
         # --- Build edges ---
         ugrd_col = f"ugrd_{prefix}"
@@ -813,7 +819,7 @@ def main() -> None:
     # Save metadata
     meta = {
         "all_feature_cols": all_feature_cols,
-        "target_cols": [target_col],
+        "target_cols": target_cols,
         "edge_dim": 7,
         "n_days": len(days),
         "n_features": len(all_feature_cols),

@@ -51,10 +51,12 @@ class PrecomputedGraphDataset(Dataset):
         norm_stats: dict | None = None,
         train_days: set | None = None,
         loss_fids: set | None = None,
+        target_index: int | None = None,
     ):
         super().__init__()
         self.use_graph = use_graph
         self.loss_fids = loss_fids
+        self.target_index = target_index  # None=all targets, int=select one
 
         # Load and verify metadata
         meta_path = os.path.join(graph_dir, "meta.json")
@@ -140,6 +142,17 @@ class PrecomputedGraphDataset(Dataset):
         edge_attr = g.edge_attr.clone() if self.use_graph else None
         fids = g.fids
 
+        # Handle supervised/valid_mask
+        if hasattr(g, "supervised"):
+            valid_mask = g.supervised.clone()
+        else:
+            valid_mask = torch.ones_like(y, dtype=torch.bool)
+
+        # Single-target selection from multi-target graph
+        if self.target_index is not None and y.ndim == 2:
+            y = y[:, self.target_index]
+            valid_mask = valid_mask[:, self.target_index]
+
         # Transductive loss mask: all nodes stay, mask selects loss contributors
         if self.loss_fids is not None:
             loss_mask = torch.tensor(
@@ -147,6 +160,10 @@ class PrecomputedGraphDataset(Dataset):
             )
         else:
             loss_mask = torch.ones(len(fids), dtype=torch.bool)
+
+        # Combine loss_mask with supervision (unsupervised nodes excluded from loss)
+        if valid_mask.ndim == 1:
+            loss_mask = loss_mask & valid_mask
 
         # Apply z-score normalization
         for i, c in enumerate(self.feature_cols):
@@ -156,17 +173,21 @@ class PrecomputedGraphDataset(Dataset):
                 ]
 
         n_nodes = x.shape[0]
-        if not self.use_graph or edge_index is None:
-            return Data(x=x, y=y, loss_mask=loss_mask, num_nodes=n_nodes)
 
-        return Data(
+        data = Data(
             x=x,
             y=y,
-            edge_index=edge_index,
-            edge_attr=edge_attr,
+            edge_index=edge_index
+            if self.use_graph
+            else torch.zeros(2, 0, dtype=torch.long),
+            edge_attr=edge_attr if self.use_graph else torch.zeros(0, 7),
             loss_mask=loss_mask,
             num_nodes=n_nodes,
         )
+        # For multitask: attach valid_mask (N, T) so per-head loss can gate
+        if valid_mask.ndim == 2:
+            data.valid_mask = valid_mask
+        return data
 
     def save_norm_stats(self, path: str) -> None:
         with open(path, "w") as f:

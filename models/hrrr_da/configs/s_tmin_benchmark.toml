@@ -16,8 +16,8 @@ seed = 42
 train_years = [2018, 2019, 2020, 2021, 2022, 2023]
 val_years = [2024]
 
-graph_dir = "/nas/dads/mvp/core_v0_tmin_graphs"
-out_dir = "/nas/dads/mvp/s_tmin_benchmark"
+graph_dir = "/nas/dads/runs/core_v0_tmin_graphs"
+out_dir = "/nas/dads/runs/s_tmin_benchmark/seed_42"
 holdout_fids_json = "/home/dgketchum/code/dads/artifacts/canonical_holdout_fids.json"
 stations_csv = "/home/dgketchum/code/dads/artifacts/madis_pnw.csv"
 device = "cuda:0"
