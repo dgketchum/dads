@@ -1,0 +1,24 @@
+name = "h7b_hrrr_tmax_benchmark"
+description = "H7b: single-head tmax, pre-built graphs, benchmark spatio-temporal split"
+
+hidden_dim = 64
+n_hops = 1
+use_graph = true
+
+lr = 3e-4
+weight_decay = 1e-3
+huber_delta = 1.0
+dropout = 0.3
+batch_size = 16
+epochs = 100
+seed = 42
+
+train_years = [2018, 2019, 2020, 2021, 2022, 2023]
+val_years = [2024]
+
+graph_dir = "/nas/dads/mvp/h7b_benchmark_graphs"
+out_dir = "/nas/dads/mvp/h7b_hrrr_tmax_benchmark"
+holdout_fids_json = "artifacts/canonical_holdout_fids.json"
+stations_csv = "artifacts/madis_pnw.csv"
+device = "cuda:0"
+num_workers = 0

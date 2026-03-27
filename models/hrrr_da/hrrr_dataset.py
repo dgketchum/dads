@@ -9,6 +9,7 @@ prep/graph_utils.py for edge construction.
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import numpy as np
@@ -235,10 +236,21 @@ class HRRRGraphDataset(Dataset):
         else:
             self.norm_stats = norm_stats
 
-        # Station metadata for graph construction
-        self.knn_map = build_knn_map(stations_csv, k=k)
-        self.static_edges = build_static_edge_attrs(stations_csv, self.knn_map)
+        # Station metadata for graph construction — filter to active fids only
+        # so k-NN neighbors are chosen from stations that actually have data.
+        active_fids = set(df["fid"].unique())
+        sta = pd.read_csv(stations_csv)
+        sta_id = "station_id" if "station_id" in sta.columns else "fid"
+        sta = sta[sta[sta_id].astype(str).isin(active_fids)]
+        active_csv = os.path.join(
+            os.path.dirname(stations_csv), f"_active_{os.path.basename(stations_csv)}"
+        )
+        sta.to_csv(active_csv, index=False)
+        self.knn_map = build_knn_map(active_csv, k=k)
+        self.static_edges = build_static_edge_attrs(active_csv, self.knn_map)
         self.edge_norm = compute_edge_norm(self.static_edges)
+        if os.path.exists(active_csv):
+            os.remove(active_csv)
         self.edge_dim = 7
 
         # Group by day, filtering out days with zero supervised nodes
