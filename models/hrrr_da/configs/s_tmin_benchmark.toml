@@ -1,5 +1,5 @@
-name = "h7b_hrrr_tmax_benchmark"
-description = "H7b: single-head tmax, pre-built graphs, benchmark spatio-temporal split"
+name = "s_tmin_benchmark"
+description = "S-tmin: single-head tmin, core-graph-v0 benchmark"
 
 hidden_dim = 64
 n_hops = 1
@@ -16,8 +16,8 @@ seed = 42
 train_years = [2018, 2019, 2020, 2021, 2022, 2023]
 val_years = [2024]
 
-graph_dir = "/nas/dads/mvp/h7b_benchmark_graphs"
-out_dir = "/nas/dads/mvp/h7b_hrrr_tmax_benchmark"
+graph_dir = "/nas/dads/mvp/core_v0_tmin_graphs"
+out_dir = "/nas/dads/mvp/s_tmin_benchmark"
 holdout_fids_json = "/home/dgketchum/code/dads/artifacts/canonical_holdout_fids.json"
 stations_csv = "/home/dgketchum/code/dads/artifacts/madis_pnw.csv"
 device = "cuda:0"

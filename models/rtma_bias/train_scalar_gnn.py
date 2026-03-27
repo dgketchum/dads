@@ -58,6 +58,10 @@ class ScalarGNNConfig:
     val_graph_dir: str | None = None
     out_dir: str = f"{MVP_ROOT}/e2_tmax_gnn"
 
+    # Temporal split (year-based)
+    train_years: list[int] = field(default_factory=list)
+    val_years: list[int] = field(default_factory=list)
+
     # Spatial holdout (MGRS tile-based or FID list)
     val_mgrs_tiles: list[str] = field(default_factory=list)
     holdout_fids_json: str | None = None
@@ -168,6 +172,19 @@ def main() -> None:
     with open(os.path.join(cfg.out_dir, "holdout_fids.json"), "w") as f:
         json.dump(sorted(holdout_fids), f)
 
+    # ---- Year-based temporal split ----
+    train_days: set | None = None
+    val_days: set | None = None
+    if cfg.train_years and cfg.val_years:
+        # Discover available days from graph filenames
+        from pathlib import Path
+
+        all_pt = sorted(Path(cfg.graph_dir).glob("*.pt"))
+        all_dates = [pd.Timestamp(p.stem) for p in all_pt]
+        train_days = {d for d in all_dates if d.year in set(cfg.train_years)}
+        val_days = {d for d in all_dates if d.year in set(cfg.val_years)}
+        print(f"Temporal split: {len(train_days)} train days, {len(val_days)} val days")
+
     # ---- Build datasets (transductive spatial holdout) ----
     # All nodes stay in every graph for message passing; loss_mask selects
     # which nodes contribute to the loss.
@@ -183,6 +200,7 @@ def main() -> None:
         train_ds = PrecomputedGraphDataset(
             graph_dir=cfg.graph_dir,
             use_graph=cfg.use_graph,
+            train_days=train_days,
         )
         all_fids = set()
         for g in train_ds._graphs:
@@ -199,14 +217,16 @@ def main() -> None:
         train_ds = PrecomputedGraphDataset(
             graph_dir=cfg.graph_dir,
             use_graph=cfg.use_graph,
+            train_days=train_days,
         )
     train_ds.save_norm_stats(os.path.join(cfg.out_dir, "norm_stats.json"))
 
-    print("Building validation dataset (transductive, loss on holdout only)...")
+    print("Building validation dataset...")
     val_ds = PrecomputedGraphDataset(
         graph_dir=val_gdir,
         use_graph=cfg.use_graph,
         norm_stats=train_ds.norm_stats,
+        train_days=val_days,
         loss_fids=holdout_fids if holdout_fids else None,
     )
 
@@ -258,12 +278,12 @@ def main() -> None:
         callbacks=[
             ModelCheckpoint(
                 dirpath=cfg.out_dir,
-                monitor="val_loss",
+                monitor="val/target_mae",
                 save_top_k=3,
                 mode="min",
-                filename="ckpt-{epoch:03d}-{val_loss:.4f}",
+                filename="ckpt-{epoch:03d}-{val/target_mae:.4f}",
             ),
-            EarlyStopping(monitor="val_loss", patience=20, mode="min"),
+            EarlyStopping(monitor="val/target_mae", patience=20, mode="min"),
             LearningRateMonitor(logging_interval="epoch"),
         ],
         default_root_dir=cfg.out_dir,
