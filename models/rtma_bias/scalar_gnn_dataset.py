@@ -56,11 +56,28 @@ class PrecomputedGraphDataset(Dataset):
         self.use_graph = use_graph
         self.loss_fids = loss_fids
 
-        # Load metadata
-        with open(os.path.join(graph_dir, "meta.json")) as f:
+        # Load and verify metadata
+        meta_path = os.path.join(graph_dir, "meta.json")
+        if not os.path.exists(meta_path):
+            raise FileNotFoundError(
+                f"No meta.json in {graph_dir}. Graph build may be incomplete."
+            )
+        with open(meta_path) as f:
             meta = json.load(f)
         self.feature_cols: list[str] = meta["all_feature_cols"]
         self.target_cols: list[str] = meta["target_cols"]
+
+        # core-graph-v0 preflight: verify expected feature count and key columns
+        _REQUIRED_FEATURES = {"tmax_hrrr", "tmin_hrrr", "wdir_hrrr"}
+        _REQUIRED_CDR = {"bt15_cdr", "i1_cdr", "i2_cdr"}
+        missing = (_REQUIRED_FEATURES | _REQUIRED_CDR) - set(self.feature_cols)
+        if missing:
+            raise ValueError(
+                f"Graph metadata missing required features: {missing}. "
+                "This graph may not be core-graph-v0 compliant."
+            )
+        if meta.get("k") != 16:
+            print(f"WARNING: graph k={meta.get('k')}, expected 16")
 
         # Glob and filter .pt files
         pt_files = sorted(Path(graph_dir).glob("*.pt"))
@@ -80,8 +97,17 @@ class PrecomputedGraphDataset(Dataset):
             self.norm_stats = norm_stats
 
     def _compute_norm_stats(self) -> dict[str, dict[str, float]]:
-        """Compute z-score stats from the loaded (raw) data."""
-        xs = [g.x for g in self._graphs]
+        """Compute z-score stats from loss-eligible (non-holdout) nodes only."""
+        xs = []
+        for g in self._graphs:
+            if self.loss_fids is not None and hasattr(g, "fids"):
+                mask = torch.tensor(
+                    [f in self.loss_fids for f in g.fids], dtype=torch.bool
+                )
+                if mask.any():
+                    xs.append(g.x[mask])
+            else:
+                xs.append(g.x)
         if not xs:
             return {}
         all_x = torch.cat(xs, dim=0)

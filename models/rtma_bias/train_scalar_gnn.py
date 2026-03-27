@@ -197,21 +197,62 @@ def main() -> None:
     train_loss_fids = None
     if holdout_fids:
         print("Building training dataset (transductive, all nodes in graph)...")
-        train_ds = PrecomputedGraphDataset(
+        # First pass: discover all fids to compute train_loss_fids
+        train_ds_probe = PrecomputedGraphDataset(
             graph_dir=cfg.graph_dir,
             use_graph=cfg.use_graph,
             train_days=train_days,
         )
         all_fids = set()
-        for g in train_ds._graphs:
+        for g in train_ds_probe._graphs:
             all_fids.update(g.fids)
+        effective_holdout = holdout_fids & all_fids
         train_loss_fids = all_fids - holdout_fids
-        train_ds.loss_fids = train_loss_fids
+        del train_ds_probe
+
+        # Second pass: build with loss_fids so norm stats exclude holdout
+        train_ds = PrecomputedGraphDataset(
+            graph_dir=cfg.graph_dir,
+            use_graph=cfg.use_graph,
+            train_days=train_days,
+            loss_fids=train_loss_fids,
+        )
+
+        # Check val-day holdout coverage
+        if val_days:
+            val_ds_check = PrecomputedGraphDataset(
+                graph_dir=val_gdir,
+                use_graph=cfg.use_graph,
+                train_days=val_days,
+            )
+            val_fids = set()
+            for g in val_ds_check._graphs:
+                val_fids.update(g.fids)
+            val_holdout = holdout_fids & val_fids
+            del val_ds_check
+        else:
+            val_holdout = effective_holdout
+
         print(
             f"  {len(train_loss_fids)} train loss fids, "
-            f"{len(holdout_fids)} holdout fids, "
-            f"{len(all_fids)} total"
+            f"{len(all_fids)} total in-graph fids"
         )
+        print(
+            f"  Holdout: {len(holdout_fids)} requested, "
+            f"{len(effective_holdout)} in graphs, "
+            f"{len(val_holdout)} on val days"
+        )
+        if len(val_holdout) < 100:
+            raise ValueError(
+                f"Effective val holdout is only {len(val_holdout)} stations. "
+                "Check holdout fids vs graph coverage."
+            )
+
+        # Save both requested and effective holdout
+        with open(os.path.join(cfg.out_dir, "effective_holdout_fids.json"), "w") as f:
+            json.dump(sorted(effective_holdout), f)
+        with open(os.path.join(cfg.out_dir, "val_holdout_fids.json"), "w") as f:
+            json.dump(sorted(val_holdout), f)
     else:
         print("Building training dataset...")
         train_ds = PrecomputedGraphDataset(

@@ -1,0 +1,24 @@
+name = "s_tmax_benchmark"
+description = "S-tmax: single-head tmax, core-graph-v0 benchmark"
+
+hidden_dim = 64
+n_hops = 1
+use_graph = true
+
+lr = 3e-4
+weight_decay = 1e-3
+huber_delta = 1.0
+dropout = 0.3
+batch_size = 16
+epochs = 100
+seed = 42
+
+train_years = [2018, 2019, 2020, 2021, 2022, 2023]
+val_years = [2024]
+
+graph_dir = "/nas/dads/runs/core_v0_tmax_graphs"
+out_dir = "/nas/dads/runs/s_tmax_benchmark/seed_42"
+holdout_fids_json = "/home/dgketchum/code/dads/artifacts/canonical_holdout_fids.json"
+stations_csv = "/home/dgketchum/code/dads/artifacts/madis_pnw.csv"
+device = "cuda:0"
+num_workers = 0

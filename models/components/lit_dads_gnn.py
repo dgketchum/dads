@@ -107,6 +107,10 @@ class LitDadsGNN(L.LightningModule):
     def _scalar_loss(self, pred, batch):
         pred = pred.squeeze(-1)
         mask = batch.loss_mask
+        if hasattr(batch, "supervised"):
+            mask = mask & batch.supervised
+        if not mask.any():
+            return pred.sum() * 0.0, 0
         return self.huber(pred[mask], batch.y[mask]), mask.sum().item()
 
     def _wind_loss(self, pred, batch):
@@ -148,6 +152,10 @@ class LitDadsGNN(L.LightningModule):
     def _scalar_val_step(self, pred, batch):
         pred = pred.squeeze(-1)
         mask = batch.loss_mask
+        if hasattr(batch, "supervised"):
+            mask = mask & batch.supervised
+        if not mask.any():
+            return torch.tensor(0.0)
         pred_m, target_m = pred[mask], batch.y[mask]
         loss = self.huber(pred_m, target_m)
         self.log(

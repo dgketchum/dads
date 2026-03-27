@@ -469,18 +469,21 @@ def main() -> None:
         df[target_col] = np.log(df["y_obs"]) - np.log(df[base_col])
         print(f"  {len(df)} rows after filtering y_obs, {base_col} > 1e-4 kPa")
 
-    # Drop rows without required weather data or target
+    # Keep all rows with required background data (not conditioned on target)
     before = len(df)
-    df = df.dropna(subset=[required_col, target_col])
-    print(f"Kept {len(df)} of {before} rows with {required_col} + {target_col}")
+    df = df.dropna(subset=[required_col])
+    print(f"Kept {len(df)} of {before} rows with {required_col}")
 
-    # Optional outlier filter on target
+    # Target availability: track but don't filter
+    has_target = df[target_col].notna()
     if args.max_abs_target is not None:
-        before = len(df)
-        df = df[df[target_col].abs() <= args.max_abs_target]
-        print(
-            f"Target filter |{target_col}| <= {args.max_abs_target}: kept {len(df)} of {before} ({before - len(df)} dropped)"
-        )
+        has_target = has_target & (df[target_col].abs() <= args.max_abs_target)
+    n_supervised = has_target.sum()
+    n_unsupervised = len(df) - n_supervised
+    print(
+        f"Target {target_col}: {n_supervised} supervised, "
+        f"{n_unsupervised} unsupervised (kept as context nodes)"
+    )
 
     # ------------------------------------------------------------------
     # Load station inventory for lat/lon/elevation
@@ -760,8 +763,12 @@ def main() -> None:
         x = np.concatenate(parts, axis=1)
         x = np.nan_to_num(x, nan=0.0, posinf=0.0, neginf=0.0)
 
-        # Target
-        y = day_df[target_col].values.astype("float32")
+        # Target + supervision mask
+        y_raw = day_df[target_col].values.astype("float32")
+        supervised = np.isfinite(y_raw)
+        if args.max_abs_target is not None:
+            supervised = supervised & (np.abs(y_raw) <= args.max_abs_target)
+        y = np.where(supervised, y_raw, 0.0).astype("float32")
 
         # --- Build edges ---
         ugrd_col = f"ugrd_{prefix}"
@@ -783,6 +790,7 @@ def main() -> None:
             edge_index=edge_index,
             edge_attr=edge_attr,
             num_nodes=n_stations,
+            supervised=torch.from_numpy(supervised),
         )
         data.fids = fid_list
 
