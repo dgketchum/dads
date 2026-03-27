@@ -136,6 +136,8 @@ def main():
     if len(val_holdout) < 100:
         raise ValueError(f"Effective val holdout is only {len(val_holdout)} stations.")
 
+    with open(os.path.join(cfg.out_dir, "holdout_fids.json"), "w") as f:
+        json.dump(sorted(holdout_fids), f)
     with open(os.path.join(cfg.out_dir, "effective_holdout_fids.json"), "w") as f:
         json.dump(sorted(effective_holdout), f)
     with open(os.path.join(cfg.out_dir, "val_holdout_fids.json"), "w") as f:
@@ -154,15 +156,18 @@ def main():
         val_ds, batch_size=cfg.batch_size, shuffle=False, num_workers=cfg.num_workers
     )
 
-    # Target scales for multitask
+    # Target scales for multitask — fit on train-year non-holdout query nodes only.
+    # Use raw graphs (before __getitem__ normalization) with manual loss_mask.
     target_scales = None
     if cfg.task == "multitask" and cfg.target_names:
         import torch
 
+        # Load raw train graphs for scale computation
+        raw_probe = DAGraphDataset(graph_dir=cfg.graph_dir, train_days=train_days)
         scale_vals = []
         for ti, tn in enumerate(cfg.target_names):
             ys = []
-            for g in train_ds._graphs:
+            for g in raw_probe._graphs:
                 y_g = g["query"].y[:, ti] if g["query"].y.ndim == 2 else g["query"].y
                 vm = (
                     g["query"].valid_mask[:, ti]
@@ -170,10 +175,9 @@ def main():
                     and g["query"].valid_mask.ndim == 2
                     else torch.ones(y_g.shape[0], dtype=torch.bool)
                 )
-                lm = (
-                    g["query"].loss_mask
-                    if hasattr(g["query"], "loss_mask")
-                    else torch.ones_like(vm)
+                # Manual loss_mask: non-holdout fids only
+                lm = torch.tensor(
+                    [f in train_loss_fids for f in g["query"].fids], dtype=torch.bool
                 )
                 mask = vm & lm
                 if mask.any():
@@ -182,8 +186,12 @@ def main():
             mad = (all_y - all_y.median()).abs().median().item()
             scale_vals.append(max(mad * 1.4826, 1e-6))
         target_scales = scale_vals
+        del raw_probe
         print(f"Target scales (MAD): {dict(zip(cfg.target_names, target_scales))}")
 
+    # Scalar: checkpoint on val/target_mae. Multitask: val_loss is already
+    # MAD-normalized when target_scales is set, so it serves as the normalized
+    # 2-head selection metric required by the policy.
     ckpt_metric = "val/target_mae" if cfg.task == "scalar" else "val_loss"
 
     model = LitDAGNN(
