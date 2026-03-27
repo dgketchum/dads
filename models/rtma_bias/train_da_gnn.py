@@ -150,7 +150,8 @@ def main():
     print(f"Train: {len(train_ds)} days, Val: {len(val_ds)} days")
     print(
         f"Query features: {train_ds.query_node_dim}, "
-        f"Source features: {train_ds.source_node_dim}"
+        f"Source context: {train_ds.source_context_dim}, "
+        f"Source payload: {train_ds.source_payload_dim}"
     )
 
     train_loader = DataLoader(

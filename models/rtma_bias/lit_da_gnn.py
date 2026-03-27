@@ -76,6 +76,10 @@ class LitDAGNN(L.LightningModule):
                 {name: MeanAbsoluteError() for name in (target_names or [])}
             )
 
+        # Gate telemetry accumulators
+        self._gate_sum = 0.0
+        self._gate_count = 0
+
     def forward(self, data):
         if self.hparams.da_version == "v1":
             pred, da_gate_mean = self.model(
@@ -169,6 +173,8 @@ class LitDAGNN(L.LightningModule):
     def validation_step(self, batch, batch_idx):
         pred, da_gate_mean = self(batch)
         self.log("val/da_gate_mean", da_gate_mean, batch_size=1)
+        self._gate_sum += da_gate_mean.item()
+        self._gate_count += 1
         if self.hparams.task == "scalar":
             return self._scalar_val_step(pred, batch)
         else:
@@ -185,6 +191,17 @@ class LitDAGNN(L.LightningModule):
         else:
             for name, metric in self.val_mae_per_target.items():
                 self.log(f"val/mae_{name}", metric, prog_bar=False)
+
+        # Gate telemetry summary
+        if self._gate_count > 0:
+            avg_gate = self._gate_sum / self._gate_count
+            epoch = self.current_epoch
+            print(
+                f"  [epoch {epoch}] val gate mean={avg_gate:.3f}",
+                flush=True,
+            )
+            self._gate_sum = 0.0
+            self._gate_count = 0
 
     def configure_optimizers(self):
         return torch.optim.AdamW(
