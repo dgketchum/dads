@@ -171,12 +171,11 @@ def main():
         + LOCATION_COLS
     )
 
-    # Source feature list
+    # Source feature list: full core-graph-v0 background/static + observation payload
     source_feature_cols = (
-        list(target_cols)
+        list(query_feature_cols)
+        + list(target_cols)
         + [f"valid_{tc}" for tc in target_cols]
-        + list(args.source_hrrr_cols or [])
-        + list(args.source_static_cols or [])
     )
     print(f"Query features: {len(query_feature_cols)}")
     print(f"Source features: {len(source_feature_cols)}")
@@ -409,28 +408,27 @@ def main():
         source_fids = [fid_list[si] for si in source_indices]
         n_source = len(source_fids)
 
-        # Build source features
-        source_features = []
+        # Build source features: full query features at source locations + obs payload
+        # The query_x array has all stations in fid_list order; slice source indices
+        source_background = query_x[source_indices]  # (n_source, 37)
+
+        # Observation payload: deltas + valid flags
+        obs_payload = []
         for tc in target_cols:
             vals = day_df[tc].values.astype("float32")[source_indices]
-            source_features.append(np.nan_to_num(vals, nan=0.0))
-        for tc in target_cols:
-            vals = valid_mask[source_indices, target_cols.index(tc)].astype("float32")
-            source_features.append(vals)
-        for sc in args.source_hrrr_cols or []:
-            if sc in day_df.columns:
-                vals = day_df[sc].values.astype("float32")[source_indices]
-                source_features.append(np.nan_to_num(vals, nan=0.0))
-        for sc in args.source_static_cols or []:
-            if sc in day_df.columns:
-                vals = day_df[sc].values.astype("float32")[source_indices]
-                source_features.append(np.nan_to_num(vals, nan=0.0))
+            obs_payload.append(np.nan_to_num(vals, nan=0.0))
+        for ti, tc in enumerate(target_cols):
+            vals = valid_mask[source_indices, ti].astype("float32")
+            obs_payload.append(vals)
 
-        source_x = (
-            np.column_stack(source_features)
-            if source_features
+        obs_arr = (
+            np.column_stack(obs_payload)
+            if obs_payload
             else np.zeros((n_source, 0), dtype="float32")
         )
+        source_x = np.concatenate(
+            [source_background, obs_arr], axis=1
+        )  # (n_source, 41)
 
         # === QUERY -> QUERY EDGES ===
         ugrd = day_df["ugrd_hrrr"].values if "ugrd_hrrr" in day_df.columns else None
