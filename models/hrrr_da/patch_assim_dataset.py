@@ -378,6 +378,9 @@ class HRRRPatchDataset(Dataset):
             assert self._rsun_meta["crs"] == str(bg_crs), (
                 f"rsun CRS mismatch: {self._rsun_meta['crs']} vs {bg_crs}"
             )
+            assert self._rsun_meta["transform"] == bg_tf, (
+                "rsun transform mismatch vs HRRR background"
+            )
             assert (self._rsun_meta["height"], self._rsun_meta["width"]) == (
                 self._domain_H,
                 self._domain_W,

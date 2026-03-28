@@ -222,6 +222,8 @@ def main() -> None:
     with open(os.path.join(cfg.out_dir, "split_pointer.json"), "w") as f:
         json.dump(
             {
+                "family": "grid-core-v0",
+                "protocol": "benchmark" if cfg.benchmark_mode else "explore",
                 "holdout_fids_json": cfg.holdout_fids_json,
                 "train_years": cfg.train_years,
                 "val_years": cfg.val_years,
