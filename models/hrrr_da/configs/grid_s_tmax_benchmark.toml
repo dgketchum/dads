@@ -9,20 +9,20 @@ huber_delta = 1.0
 batch_size = 16
 epochs = 100
 seed = 42
-days_per_epoch = 250
-num_workers = 4
+days_per_epoch = 100
+num_workers = 16
 benchmark_mode = true
 drop_bands = ["n_hours"]
 
 target_names = ["delta_tmax"]
 
 table_path = "/nas/dads/run_archive/station_day_hrrr_daily_cdr_pnw.parquet"
-background_dir = "/nas/dads/run_archive/hrrr_1km_pnw"
+background_dir = "/data/nvme0/dads_rasters/hrrr_1km_pnw"
 background_pattern = "HRRR_1km_{date}.tif"
-static_tifs = ["/nas/dads/run_archive/terrain_pnw_1km.tif"]
-landsat_tif = "/nas/dads/run_archive/landsat_pnw_1km.tif"
-rsun_tif = "/nas/dads/run_archive/rsun_pnw_1km.tif"
-cdr_dir = "/nas/dads/run_archive/cdr_native_pnw"
+static_tifs = ["/data/nvme0/dads_rasters/terrain_pnw_1km.tif"]
+landsat_tif = "/data/nvme0/dads_rasters/landsat_pnw_1km.tif"
+rsun_tif = "/data/nvme0/dads_rasters/rsun_pnw_1km.tif"
+cdr_dir = "/data/nvme0/dads_rasters/cdr_native_pnw"
 cdr_pattern = "CDR_005deg_{date}.tif"
 out_dir = "/nas/dads/runs/grid_s_tmax_benchmark/seed_42"
 
