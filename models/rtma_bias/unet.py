@@ -5,13 +5,16 @@ from torch import nn
 
 
 class _ConvBlock(nn.Module):
-    def __init__(self, in_ch: int, out_ch: int):
+    def __init__(self, in_ch: int, out_ch: int, dropout: float = 0.0):
         super().__init__()
         self.net = nn.Sequential(
             nn.Conv2d(in_ch, out_ch, kernel_size=3, padding=1),
+            nn.BatchNorm2d(out_ch),
             nn.ReLU(inplace=True),
             nn.Conv2d(out_ch, out_ch, kernel_size=3, padding=1),
+            nn.BatchNorm2d(out_ch),
             nn.ReLU(inplace=True),
+            *([] if dropout <= 0 else [nn.Dropout2d(dropout)]),
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -36,21 +39,22 @@ class UNetSmall(nn.Module):
         out_channels: int = 1,
         base: int = 32,
         n_heads: int = 1,
+        dropout: float = 0.1,
     ):
         super().__init__()
         b = int(base)
         self.n_heads = int(n_heads)
-        self.down1 = _ConvBlock(in_channels, b)
+        self.down1 = _ConvBlock(in_channels, b, dropout=dropout)
         self.pool1 = nn.MaxPool2d(2)
-        self.down2 = _ConvBlock(b, 2 * b)
+        self.down2 = _ConvBlock(b, 2 * b, dropout=dropout)
         self.pool2 = nn.MaxPool2d(2)
 
-        self.mid = _ConvBlock(2 * b, 4 * b)
+        self.mid = _ConvBlock(2 * b, 4 * b, dropout=dropout)
 
         self.up2 = nn.ConvTranspose2d(4 * b, 2 * b, kernel_size=2, stride=2)
-        self.dec2 = _ConvBlock(4 * b, 2 * b)
+        self.dec2 = _ConvBlock(4 * b, 2 * b, dropout=dropout)
         self.up1 = nn.ConvTranspose2d(2 * b, b, kernel_size=2, stride=2)
-        self.dec1 = _ConvBlock(2 * b, b)
+        self.dec1 = _ConvBlock(2 * b, b, dropout=dropout)
 
         if self.n_heads > 1:
             self.heads = nn.ModuleList(

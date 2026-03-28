@@ -354,6 +354,62 @@ class HRRRPatchDataset(Dataset):
         self._domain_H = example_bg["data"].shape[1]
         self._domain_W = example_bg["data"].shape[2]
 
+        # Assert pixel-alignment for all co-registered rasters
+        for tif_path in self.static_tifs:
+            s = self.raster_cache.get(tif_path)
+            assert str(s["crs"]) == str(bg_crs), (
+                f"Static TIF CRS mismatch: {tif_path} has {s['crs']}, expected {bg_crs}"
+            )
+            assert s["transform"] == bg_tf, f"Static TIF transform mismatch: {tif_path}"
+            assert s["data"].shape[1:] == (self._domain_H, self._domain_W), (
+                f"Static TIF shape mismatch: {tif_path} has "
+                f"{s['data'].shape[1:]}, expected {(self._domain_H, self._domain_W)}"
+            )
+        if self.landsat_tif:
+            ls = self.raster_cache.get(self.landsat_tif)
+            assert str(ls["crs"]) == str(bg_crs), (
+                f"Landsat CRS mismatch: {ls['crs']} vs {bg_crs}"
+            )
+            assert ls["transform"] == bg_tf, "Landsat transform mismatch"
+            assert ls["data"].shape[1:] == (self._domain_H, self._domain_W), (
+                f"Landsat shape mismatch: {ls['data'].shape[1:]}"
+            )
+        if self.rsun_tif and self._rsun_meta is not None:
+            assert self._rsun_meta["crs"] == str(bg_crs), (
+                f"rsun CRS mismatch: {self._rsun_meta['crs']} vs {bg_crs}"
+            )
+            assert (self._rsun_meta["height"], self._rsun_meta["width"]) == (
+                self._domain_H,
+                self._domain_W,
+            ), (
+                f"rsun shape mismatch: {self._rsun_meta['height']}x{self._rsun_meta['width']}"
+            )
+
+        # CDR alignment: verify geometry consistency across sampled days
+        if self.cdr_dir and self._cdr_band_names:
+            sample_days = self.samples["day"].drop_duplicates().sort_values()
+            step = max(1, len(sample_days) // 10)
+            cdr_ref_crs = cdr_ref_tf = cdr_ref_shape = None
+            for check_day in sample_days.iloc[::step].head(10):
+                cp = self._cdr_path(check_day)
+                if not os.path.exists(cp):
+                    continue
+                with rasterio.open(cp) as src:
+                    if cdr_ref_crs is None:
+                        cdr_ref_crs = str(src.crs)
+                        cdr_ref_tf = src.transform
+                        cdr_ref_shape = (src.height, src.width)
+                    else:
+                        assert str(src.crs) == cdr_ref_crs, (
+                            f"CDR CRS varies across days: {cp}"
+                        )
+                        assert src.transform == cdr_ref_tf, (
+                            f"CDR transform varies across days: {cp}"
+                        )
+                        assert (src.height, src.width) == cdr_ref_shape, (
+                            f"CDR shape varies across days: {cp}"
+                        )
+
         # Domain-wide lat/lon grids (for CDR lookup + position channels)
         to_ll = Transformer.from_crs(bg_crs, "EPSG:4326", always_xy=True)
         rr_all, cc_all = np.meshgrid(

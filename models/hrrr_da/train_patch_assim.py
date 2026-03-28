@@ -194,6 +194,42 @@ def main() -> None:
         )
     print(f"Norm stats saved: {norm_stats_path}")
 
+    # Run-level metadata (replaces chip artifact manifests)
+    with open(os.path.join(cfg.out_dir, "feature_manifest.json"), "w") as f:
+        json.dump(train_ds.feature_names, f, indent=2)
+    with open(os.path.join(cfg.out_dir, "target_manifest.json"), "w") as f:
+        json.dump(cfg.target_names, f, indent=2)
+    with open(os.path.join(cfg.out_dir, "tile_manifest.json"), "w") as f:
+        json.dump(
+            {
+                "tile_size": cfg.patch_size,
+                "stride": "station-centered (one tile per station-day)",
+                "overlap": "variable (tiles centered on different stations may overlap)",
+            },
+            f,
+            indent=2,
+        )
+    with open(os.path.join(cfg.out_dir, "query_sampling_manifest.json"), "w") as f:
+        json.dump(
+            {
+                "method": "all in-patch stations supervised per tile",
+                "scoring": "center-station-only for val/target_mae (deduplicated)",
+                "holdout_gating": "sta_holdout mask per station",
+            },
+            f,
+            indent=2,
+        )
+    with open(os.path.join(cfg.out_dir, "split_pointer.json"), "w") as f:
+        json.dump(
+            {
+                "holdout_fids_json": cfg.holdout_fids_json,
+                "train_years": cfg.train_years,
+                "val_years": cfg.val_years,
+            },
+            f,
+            indent=2,
+        )
+
     val_ds = HRRRPatchDataset(
         table_path=cfg.table_path,
         background_dir=cfg.background_dir,
