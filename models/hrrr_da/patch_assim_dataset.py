@@ -166,12 +166,14 @@ class HRRRPatchDataset(Dataset):
         cdr_pattern: str = "CDR_005deg_{date}.tif",
         holdout_fids: set[str] | None = None,
         drop_bands: list[str] | None = None,
+        norm_stats: dict | None = None,
         patch_size: int = 64,
         cache_size: int = 8,
     ):
         super().__init__()
         self._holdout_fids = holdout_fids or set()
         self._drop_bands = set(drop_bands or [])
+        self._provided_norm_stats = norm_stats
         self.background_dir = background_dir
         self.background_pattern = background_pattern
         self.static_tifs = list(static_tifs) if static_tifs else []
@@ -303,38 +305,41 @@ class HRRRPatchDataset(Dataset):
         )
         self.in_channels = len(self.feature_names)
 
-        # --- Norm stats ---
-        parquet_cols = [
-            c
-            for c in self.background_feature_names
-            + self.static_feature_names
-            + ["latitude", "longitude"]
-            if c in self.samples.columns
-        ]
-        self.norm_stats = _compute_norm_stats(self.samples, parquet_cols)
+        # --- Norm stats (use provided if available, else compute from data) ---
+        if self._provided_norm_stats is not None:
+            self.norm_stats = dict(self._provided_norm_stats)
+        else:
+            parquet_cols = [
+                c
+                for c in self.background_feature_names
+                + self.static_feature_names
+                + ["latitude", "longitude"]
+                if c in self.samples.columns
+            ]
+            self.norm_stats = _compute_norm_stats(self.samples, parquet_cols)
 
-        # Raster-based stats for static TIF bands absent from the parquet
-        for tif_path, tif_names in zip(self.static_tifs, self._static_tif_band_names):
-            uncovered = [n for n in tif_names if n not in self.norm_stats]
-            if uncovered:
-                raster_stats = _compute_raster_norm_stats(tif_path, tif_names)
-                self.norm_stats.update(
-                    {n: raster_stats[n] for n in uncovered if n in raster_stats}
+        # Compute raster/Landsat/rsun/CDR stats only if not provided
+        if self._provided_norm_stats is None:
+            for tif_path, tif_names in zip(
+                self.static_tifs, self._static_tif_band_names
+            ):
+                uncovered = [n for n in tif_names if n not in self.norm_stats]
+                if uncovered:
+                    raster_stats = _compute_raster_norm_stats(tif_path, tif_names)
+                    self.norm_stats.update(
+                        {n: raster_stats[n] for n in uncovered if n in raster_stats}
+                    )
+
+            if self.landsat_tif:
+                ls_stats = _compute_raster_norm_stats(
+                    self.landsat_tif, self._all_landsat_band_names
                 )
+                self.norm_stats.update(ls_stats)
 
-        # All 35 Landsat bands get stats from the raster
-        if self.landsat_tif:
-            ls_stats = _compute_raster_norm_stats(
-                self.landsat_tif, self._all_landsat_band_names
-            )
-            self.norm_stats.update(ls_stats)
+            if self.rsun_tif:
+                self.norm_stats["rsun"] = _compute_rsun_norm_stats(self.rsun_tif)
 
-        # rsun: sample 4 quarterly bands to get a single mean/std
-        if self.rsun_tif:
-            self.norm_stats["rsun"] = _compute_rsun_norm_stats(self.rsun_tif)
-
-        # CDR: sample a few daily TIFs for per-band stats
-        if self.cdr_dir and self._cdr_band_names:
+        if self._provided_norm_stats is None and self.cdr_dir and self._cdr_band_names:
             cdr_stats = _compute_cdr_norm_stats(
                 self.cdr_dir, self.cdr_pattern, self.samples, self._cdr_band_names
             )
@@ -552,6 +557,8 @@ class HRRRPatchDataset(Dataset):
         sta_targets_list: list[list[float]] = []
         sta_valid_list: list[list[bool]] = []
         sta_holdout_list: list[bool] = []
+        sta_is_center_list: list[bool] = []
+        center_fid = str(row["fid"])
 
         day_group = self._neighbor_day_groups.get(day)
         if day_group is not None and not day_group.empty:
@@ -568,6 +575,7 @@ class HRRRPatchDataset(Dataset):
                 sta_cols_list.append(int(sta_c[j] - c0))
                 fid_j = str(day_group.iloc[j]["fid"])
                 sta_holdout_list.append(fid_j in self._holdout_fids)
+                sta_is_center_list.append(fid_j == center_fid)
                 tgt = []
                 vld = []
                 for name in self.target_names:
@@ -584,8 +592,8 @@ class HRRRPatchDataset(Dataset):
             c_in = int(np.clip(int(c_center) - c0, 0, W - 1))
             sta_rows_list.append(r_in)
             sta_cols_list.append(c_in)
-            fid_center = str(row["fid"])
-            sta_holdout_list.append(fid_center in self._holdout_fids)
+            sta_holdout_list.append(center_fid in self._holdout_fids)
+            sta_is_center_list.append(True)
             tgt = []
             vld = []
             for name in self.target_names:
@@ -603,17 +611,31 @@ class HRRRPatchDataset(Dataset):
             torch.tensor(sta_targets_list, dtype=torch.float32),
             torch.tensor(sta_valid_list, dtype=torch.bool),
             torch.tensor(sta_holdout_list, dtype=torch.bool),
+            torch.tensor(sta_is_center_list, dtype=torch.bool),
         )
 
 
 def collate_patch(batch):
     """Collate a list of HRRRPatchDataset samples, padding station arrays to max N_sta."""
-    # Support both 5-tuple (legacy) and 6-tuple (with holdout) formats
-    if len(batch[0]) == 6:
+    # Support 5-tuple (legacy), 6-tuple, or 7-tuple (with holdout + is_center)
+    n_fields = len(batch[0])
+    if n_fields == 7:
+        (
+            x_list,
+            rows_list,
+            cols_list,
+            tgts_list,
+            valid_list,
+            holdout_list,
+            center_list,
+        ) = zip(*batch)
+    elif n_fields == 6:
         x_list, rows_list, cols_list, tgts_list, valid_list, holdout_list = zip(*batch)
+        center_list = None
     else:
         x_list, rows_list, cols_list, tgts_list, valid_list = zip(*batch)
         holdout_list = None
+        center_list = None
 
     x = torch.stack(x_list)  # (B, C, H, W)
     n_targets = tgts_list[0].shape[1]
@@ -626,6 +648,7 @@ def collate_patch(batch):
     sta_valid = torch.zeros(B, max_sta, n_targets, dtype=torch.bool)
 
     sta_holdout = torch.zeros(B, max_sta, dtype=torch.bool)
+    sta_is_center = torch.zeros(B, max_sta, dtype=torch.bool)
 
     for i, (rows, cols, tgts, vld) in enumerate(
         zip(rows_list, cols_list, tgts_list, valid_list)
@@ -637,5 +660,7 @@ def collate_patch(batch):
         sta_valid[i, :n] = vld
         if holdout_list is not None:
             sta_holdout[i, :n] = holdout_list[i]
+        if center_list is not None:
+            sta_is_center[i, :n] = center_list[i]
 
-    return x, sta_rows, sta_cols, sta_targets, sta_valid, sta_holdout
+    return x, sta_rows, sta_cols, sta_targets, sta_valid, sta_holdout, sta_is_center

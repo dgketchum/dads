@@ -140,10 +140,25 @@ def main() -> None:
     holdout_fids: set[str] = set()
     if cfg.holdout_fids_json and os.path.exists(cfg.holdout_fids_json):
         with open(cfg.holdout_fids_json) as f:
-            holdout_fids = set(json.load(f)) & all_fids
-        print(f"Spatial holdout: {len(holdout_fids)} stations")
+            holdout_fids = set(str(x) for x in json.load(f))
+        effective_holdout = holdout_fids & all_fids
+        # Val-day holdout: fids present on val days
+        val_df = df[df["day"].dt.year.isin(cfg.val_years)]
+        val_holdout = effective_holdout & set(val_df["fid"].astype(str).unique())
+        print(
+            f"Holdout: {len(holdout_fids)} requested, "
+            f"{len(effective_holdout)} in data, "
+            f"{len(val_holdout)} on val days"
+        )
+    else:
+        effective_holdout = set()
+        val_holdout = set()
     with open(os.path.join(cfg.out_dir, "holdout_fids.json"), "w") as f:
         json.dump(sorted(holdout_fids), f)
+    with open(os.path.join(cfg.out_dir, "effective_holdout_fids.json"), "w") as f:
+        json.dump(sorted(effective_holdout), f)
+    with open(os.path.join(cfg.out_dir, "val_holdout_fids.json"), "w") as f:
+        json.dump(sorted(val_holdout), f)
 
     train_ds = HRRRPatchDataset(
         table_path=cfg.table_path,
@@ -192,6 +207,7 @@ def main() -> None:
         cdr_pattern=cfg.cdr_pattern,
         holdout_fids=holdout_fids or None,
         drop_bands=cfg.drop_bands or None,
+        norm_stats=train_ds.norm_stats,
         patch_size=cfg.patch_size,
     )
     print(f"Val samples: {len(val_ds)}")

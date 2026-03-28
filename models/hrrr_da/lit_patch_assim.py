@@ -78,7 +78,9 @@ class LitPatchAssim(L.LightningModule):
         return loss_sta + self.tv_weight * tv_loss(pred_field)
 
     def training_step(self, batch, batch_idx):
-        x, sta_rows, sta_cols, sta_targets, sta_valid, sta_holdout = batch
+        x, sta_rows, sta_cols, sta_targets, sta_valid, sta_holdout, sta_is_center = (
+            batch
+        )
         pred = self(x)
         pred_at_sta = self._gather_at_stations(pred, sta_rows, sta_cols)
 
@@ -93,7 +95,9 @@ class LitPatchAssim(L.LightningModule):
         return loss
 
     def validation_step(self, batch, batch_idx):
-        x, sta_rows, sta_cols, sta_targets, sta_valid, sta_holdout = batch
+        x, sta_rows, sta_cols, sta_targets, sta_valid, sta_holdout, sta_is_center = (
+            batch
+        )
         pred = self(x)
         pred_at_sta = self._gather_at_stations(pred, sta_rows, sta_cols)
 
@@ -117,17 +121,18 @@ class LitPatchAssim(L.LightningModule):
                 )
                 self.log(f"val/mae_{name}", mae_i, on_epoch=True, prog_bar=(i == 0))
 
-        # Benchmark: aggregate MAE and baseline for first target
+        # Benchmark: deduplicated MAE using center station only
         if self.benchmark_mode:
-            mask_0 = mask[:, :, 0]
-            if mask_0.any():
+            center_mask = mask[:, :, 0] & sta_is_center
+            if center_mask.any():
                 self.val_mae.update(
-                    pred_at_sta[:, :, 0][mask_0], sta_targets[:, :, 0][mask_0]
+                    pred_at_sta[:, :, 0][center_mask],
+                    sta_targets[:, :, 0][center_mask],
                 )
                 self._val_baseline_ae_sum += (
-                    sta_targets[:, :, 0][mask_0].abs().sum().item()
+                    sta_targets[:, :, 0][center_mask].abs().sum().item()
                 )
-                self._val_baseline_count += mask_0.sum().item()
+                self._val_baseline_count += center_mask.sum().item()
 
         return loss
 
