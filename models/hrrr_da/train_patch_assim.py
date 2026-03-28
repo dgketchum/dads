@@ -234,31 +234,19 @@ def main() -> None:
     if len(val_ds) == 0:
         raise ValueError("Validation dataset is empty.")
 
-    if cfg.chip_dir:
-        # Precomputed: simple shuffle, no day-grouped sampling needed
-        train_loader = DataLoader(
-            train_ds,
-            batch_size=cfg.batch_size,
-            shuffle=True,
-            num_workers=cfg.num_workers,
-            persistent_workers=(cfg.num_workers > 0),
-            collate_fn=collate_patch,
-        )
-        day_sampler = None
-    else:
-        day_sampler = DayGroupedSampler(
-            train_ds.samples,
-            days_per_epoch=cfg.days_per_epoch,
-            base_seed=cfg.seed,
-        )
-        train_loader = DataLoader(
-            train_ds,
-            batch_size=cfg.batch_size,
-            sampler=day_sampler,
-            num_workers=cfg.num_workers,
-            persistent_workers=(cfg.num_workers > 0),
-            collate_fn=collate_patch,
-        )
+    day_sampler = DayGroupedSampler(
+        train_ds.samples,
+        days_per_epoch=cfg.days_per_epoch,
+        base_seed=cfg.seed,
+    )
+    train_loader = DataLoader(
+        train_ds,
+        batch_size=cfg.batch_size,
+        sampler=day_sampler,
+        num_workers=cfg.num_workers,
+        persistent_workers=(cfg.num_workers > 0),
+        collate_fn=collate_patch,
+    )
     val_loader = DataLoader(
         val_ds,
         batch_size=cfg.batch_size,
@@ -299,9 +287,8 @@ def main() -> None:
         ),
         EarlyStopping(monitor=ckpt_metric, patience=20, mode="min"),
         LearningRateMonitor(logging_interval="epoch"),
+        DayResamplingCallback(day_sampler),
     ]
-    if day_sampler is not None:
-        callbacks.append(DayResamplingCallback(day_sampler))
 
     trainer = L.Trainer(
         max_epochs=cfg.epochs,

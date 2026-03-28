@@ -55,10 +55,10 @@ class PrecomputedChipDataset(Dataset):
             day_strs = {pd.Timestamp(d).strftime("%Y-%m-%d") for d in train_days}
             pt_files = [p for p in pt_files if p.stem in day_strs]
 
-        # Build index lazily: probe one file for sample count pattern,
-        # then use the index file if available, else load headers only.
+        # Build index from chip_index.json (fast) or by loading files (slow fallback)
         self._files: list[Path] = list(pt_files)
         self._offsets: list[tuple[int, int]] = []
+        self._sample_days: list[pd.Timestamp] = []
 
         index_path = os.path.join(chip_dir, "chip_index.json")
         if os.path.exists(index_path):
@@ -66,15 +66,21 @@ class PrecomputedChipDataset(Dataset):
                 chip_index = json.load(f)
             for fi, fp in enumerate(self._files):
                 n = chip_index.get(fp.stem, 0)
+                day_ts = pd.Timestamp(fp.stem)
                 for si in range(n):
                     self._offsets.append((fi, si))
+                    self._sample_days.append(day_ts)
         else:
-            # Fallback: load each file to count samples (slow but correct)
             for fi, fp in enumerate(self._files):
                 data = torch.load(fp, weights_only=False)
                 n = data["x"].shape[0]
+                day_ts = pd.Timestamp(fp.stem)
                 for si in range(n):
                     self._offsets.append((fi, si))
+                    self._sample_days.append(day_ts)
+
+        # Expose a samples-like DataFrame for DayGroupedSampler compatibility
+        self.samples = pd.DataFrame({"day": self._sample_days})
 
         # Cache: only one day loaded at a time
         self._cached_fi: int = -1

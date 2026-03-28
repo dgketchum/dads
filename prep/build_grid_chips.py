@@ -178,6 +178,20 @@ def main():
         "holdout_fids_json": args.holdout_fids_json,
         "n_holdout_requested": len(holdout_fids),
         "drop_bands": args.drop_bands,
+        "tile_manifest": {
+            "tile_size": args.patch_size,
+            "stride": "station-centered (one tile per station-day)",
+            "overlap": "variable (tiles centered on different stations may overlap)",
+        },
+        "query_sampling_manifest": {
+            "method": "all in-patch stations supervised per tile",
+            "scoring": "center-station-only for val/target_mae (deduplicated)",
+            "holdout_gating": "sta_holdout mask per station",
+        },
+        "norm_split": {
+            "train_years": [2018, 2019, 2020, 2021, 2022, 2023],
+            "holdout_excluded": True,
+        },
     }
     with open(os.path.join(args.out_dir, "meta.json"), "w") as f:
         json.dump(meta, f, indent=2)
@@ -255,13 +269,13 @@ def main():
         f"Built {total_built} day files in {elapsed / 60:.1f} min ({total_built / max(elapsed, 1):.1f} days/s)"
     )
 
-    # Build chip index for fast dataset loading
+    # Build chip index from actual saved files (not expected counts)
     chip_index = {}
     for d in days:
         pt_path = os.path.join(args.out_dir, f"{d}.pt")
         if os.path.exists(pt_path):
-            chip_index[d] = day_to_indices.get(d, [])
-            chip_index[d] = len(chip_index[d])
+            data = torch.load(pt_path, weights_only=False)
+            chip_index[d] = int(data["x"].shape[0])
     with open(os.path.join(args.out_dir, "chip_index.json"), "w") as f:
         json.dump(chip_index, f)
     print(
