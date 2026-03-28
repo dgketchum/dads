@@ -43,6 +43,7 @@ class PatchAssimConfig:
     epochs: int = 30
     seed: int = 42
     days_per_epoch: int = 250
+    val_days_per_epoch: int | None = None
     num_workers: int = 4
     patch_size: int = 64
 
@@ -270,9 +271,10 @@ def main() -> None:
         collate_fn=collate_patch,
     )
     n_val_days = val_ds.samples["day"].nunique()
+    val_days_per_epoch = cfg.val_days_per_epoch or n_val_days
     val_sampler = DayGroupedSampler(
         val_ds.samples,
-        days_per_epoch=n_val_days,
+        days_per_epoch=val_days_per_epoch,
         base_seed=cfg.seed,
     )
     val_loader = DataLoader(

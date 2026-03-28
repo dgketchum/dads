@@ -10,6 +10,7 @@ batch_size = 64
 epochs = 100
 seed = 42
 days_per_epoch = 30
+val_days_per_epoch = 60
 num_workers = 4
 benchmark_mode = true
 drop_bands = ["n_hours"]
