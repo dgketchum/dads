@@ -269,10 +269,16 @@ def main() -> None:
         persistent_workers=(cfg.num_workers > 0),
         collate_fn=collate_patch,
     )
+    n_val_days = val_ds.samples["day"].nunique()
+    val_sampler = DayGroupedSampler(
+        val_ds.samples,
+        days_per_epoch=n_val_days,
+        base_seed=cfg.seed,
+    )
     val_loader = DataLoader(
         val_ds,
         batch_size=cfg.batch_size,
-        shuffle=False,
+        sampler=val_sampler,
         num_workers=cfg.num_workers,
         persistent_workers=(cfg.num_workers > 0),
         collate_fn=collate_patch,
