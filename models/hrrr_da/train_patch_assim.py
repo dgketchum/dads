@@ -26,6 +26,7 @@ from torch.utils.data import DataLoader
 
 from models.hrrr_da.lit_patch_assim import LitPatchAssim
 from models.hrrr_da.patch_assim_dataset import HRRRPatchDataset, collate_patch
+from models.hrrr_da.precomputed_chip_dataset import PrecomputedChipDataset
 from models.hrrr_da.train_hrrr_hetero import DayGroupedSampler, DayResamplingCallback
 from prep.paths import MVP_ROOT
 
@@ -75,6 +76,7 @@ class PatchAssimConfig:
     holdout_fids_json: str | None = "artifacts/canonical_holdout_fids.json"
     benchmark_mode: bool = False
     drop_bands: list[str] = field(default_factory=list)
+    chip_dir: str | None = None
 
     device: str | None = None
 
@@ -160,56 +162,65 @@ def main() -> None:
     with open(os.path.join(cfg.out_dir, "val_holdout_fids.json"), "w") as f:
         json.dump(sorted(val_holdout), f)
 
-    train_ds = HRRRPatchDataset(
-        table_path=cfg.table_path,
-        background_dir=cfg.background_dir,
-        background_pattern=cfg.background_pattern,
-        static_tifs=cfg.static_tifs,
-        landsat_tif=cfg.landsat_tif,
-        target_names=cfg.target_names,
-        train_days=train_days,
-        target_exclude_fids=holdout_fids or None,
-        supervision_exclude_fids=holdout_fids or None,
-        rsun_tif=cfg.rsun_tif,
-        cdr_dir=cfg.cdr_dir,
-        cdr_pattern=cfg.cdr_pattern,
-        holdout_fids=holdout_fids or None,
-        drop_bands=cfg.drop_bands or None,
-        patch_size=cfg.patch_size,
-    )
-    print(f"Train samples: {len(train_ds)}, in_channels: {train_ds.in_channels}")
-
-    norm_stats_path = os.path.join(cfg.out_dir, "norm_stats.json")
-    with open(norm_stats_path, "w") as f:
-        json.dump(
-            {
-                "norm_stats": train_ds.norm_stats,
-                "feature_names": train_ds.feature_names,
-                "target_names": train_ds.target_names,
-                "in_channels": train_ds.in_channels,
-            },
-            f,
-            indent=2,
+    if cfg.chip_dir:
+        # Precomputed chips: no raster I/O at training time
+        print(f"Using precomputed chips from {cfg.chip_dir}")
+        train_ds = PrecomputedChipDataset(chip_dir=cfg.chip_dir, train_days=train_days)
+        val_ds = PrecomputedChipDataset(chip_dir=cfg.chip_dir, train_days=val_days)
+        in_channels = train_ds.in_channels
+        print(f"Train: {len(train_ds)}, Val: {len(val_ds)}, channels: {in_channels}")
+    else:
+        train_ds = HRRRPatchDataset(
+            table_path=cfg.table_path,
+            background_dir=cfg.background_dir,
+            background_pattern=cfg.background_pattern,
+            static_tifs=cfg.static_tifs,
+            landsat_tif=cfg.landsat_tif,
+            target_names=cfg.target_names,
+            train_days=train_days,
+            target_exclude_fids=holdout_fids or None,
+            supervision_exclude_fids=holdout_fids or None,
+            rsun_tif=cfg.rsun_tif,
+            cdr_dir=cfg.cdr_dir,
+            cdr_pattern=cfg.cdr_pattern,
+            holdout_fids=holdout_fids or None,
+            drop_bands=cfg.drop_bands or None,
+            patch_size=cfg.patch_size,
         )
-    print(f"Norm stats saved: {norm_stats_path}")
+        in_channels = train_ds.in_channels
+        print(f"Train samples: {len(train_ds)}, in_channels: {in_channels}")
 
-    val_ds = HRRRPatchDataset(
-        table_path=cfg.table_path,
-        background_dir=cfg.background_dir,
-        background_pattern=cfg.background_pattern,
-        static_tifs=cfg.static_tifs,
-        landsat_tif=cfg.landsat_tif,
-        target_names=cfg.target_names,
-        train_days=val_days,
-        target_include_fids=holdout_fids or None,
-        rsun_tif=cfg.rsun_tif,
-        cdr_dir=cfg.cdr_dir,
-        cdr_pattern=cfg.cdr_pattern,
-        holdout_fids=holdout_fids or None,
-        drop_bands=cfg.drop_bands or None,
-        norm_stats=train_ds.norm_stats,
-        patch_size=cfg.patch_size,
-    )
+        norm_stats_path = os.path.join(cfg.out_dir, "norm_stats.json")
+        with open(norm_stats_path, "w") as f:
+            json.dump(
+                {
+                    "norm_stats": train_ds.norm_stats,
+                    "feature_names": train_ds.feature_names,
+                    "target_names": train_ds.target_names,
+                    "in_channels": train_ds.in_channels,
+                },
+                f,
+                indent=2,
+            )
+        print(f"Norm stats saved: {norm_stats_path}")
+
+        val_ds = HRRRPatchDataset(
+            table_path=cfg.table_path,
+            background_dir=cfg.background_dir,
+            background_pattern=cfg.background_pattern,
+            static_tifs=cfg.static_tifs,
+            landsat_tif=cfg.landsat_tif,
+            target_names=cfg.target_names,
+            train_days=val_days,
+            target_include_fids=holdout_fids or None,
+            rsun_tif=cfg.rsun_tif,
+            cdr_dir=cfg.cdr_dir,
+            cdr_pattern=cfg.cdr_pattern,
+            holdout_fids=holdout_fids or None,
+            drop_bands=cfg.drop_bands or None,
+            norm_stats=train_ds.norm_stats,
+            patch_size=cfg.patch_size,
+        )
     print(f"Val samples: {len(val_ds)}")
 
     if len(train_ds) == 0:
@@ -217,19 +228,31 @@ def main() -> None:
     if len(val_ds) == 0:
         raise ValueError("Validation dataset is empty.")
 
-    day_sampler = DayGroupedSampler(
-        train_ds.samples,
-        days_per_epoch=cfg.days_per_epoch,
-        base_seed=cfg.seed,
-    )
-    train_loader = DataLoader(
-        train_ds,
-        batch_size=cfg.batch_size,
-        sampler=day_sampler,
-        num_workers=cfg.num_workers,
-        persistent_workers=(cfg.num_workers > 0),
-        collate_fn=collate_patch,
-    )
+    if cfg.chip_dir:
+        # Precomputed: simple shuffle, no day-grouped sampling needed
+        train_loader = DataLoader(
+            train_ds,
+            batch_size=cfg.batch_size,
+            shuffle=True,
+            num_workers=cfg.num_workers,
+            persistent_workers=(cfg.num_workers > 0),
+            collate_fn=collate_patch,
+        )
+        day_sampler = None
+    else:
+        day_sampler = DayGroupedSampler(
+            train_ds.samples,
+            days_per_epoch=cfg.days_per_epoch,
+            base_seed=cfg.seed,
+        )
+        train_loader = DataLoader(
+            train_ds,
+            batch_size=cfg.batch_size,
+            sampler=day_sampler,
+            num_workers=cfg.num_workers,
+            persistent_workers=(cfg.num_workers > 0),
+            collate_fn=collate_patch,
+        )
     val_loader = DataLoader(
         val_ds,
         batch_size=cfg.batch_size,
@@ -240,7 +263,7 @@ def main() -> None:
     )
 
     model = LitPatchAssim(
-        in_channels=train_ds.in_channels,
+        in_channels=in_channels,
         target_names=cfg.target_names,
         hidden_dim=cfg.hidden_dim,
         lr=cfg.lr,
@@ -270,8 +293,9 @@ def main() -> None:
         ),
         EarlyStopping(monitor=ckpt_metric, patience=20, mode="min"),
         LearningRateMonitor(logging_interval="epoch"),
-        DayResamplingCallback(day_sampler),
     ]
+    if day_sampler is not None:
+        callbacks.append(DayResamplingCallback(day_sampler))
 
     trainer = L.Trainer(
         max_epochs=cfg.epochs,

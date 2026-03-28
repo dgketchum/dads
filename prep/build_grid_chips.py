@@ -52,6 +52,7 @@ def _parse_args():
     p.add_argument("--target-names", nargs="+", default=["delta_tmax", "delta_tmin"])
     p.add_argument("--drop-bands", nargs="*", default=["n_hours"])
     p.add_argument("--patch-size", type=int, default=64)
+    p.add_argument("--workers", type=int, default=8)
     return p.parse_args()
 
 
@@ -111,7 +112,7 @@ def main():
     with open(os.path.join(args.out_dir, "meta.json"), "w") as f:
         json.dump(meta, f, indent=2)
 
-    # Now build the full dataset (all years) with the computed norm stats
+    # Build full dataset and group by day
     all_days = set(df["day"].unique())
     print(f"Building full dataset ({len(all_days)} days) with frozen norm stats...")
     full_ds = HRRRPatchDataset(
@@ -132,79 +133,122 @@ def main():
     )
     print(f"Total samples: {len(full_ds)}")
 
-    # Group samples by day for efficient raster caching
     day_to_indices: dict[str, list[int]] = {}
     for idx in range(len(full_ds)):
         day = pd.Timestamp(full_ds.samples.iloc[idx]["day"]).strftime("%Y-%m-%d")
         day_to_indices.setdefault(day, []).append(idx)
 
     days = sorted(day_to_indices.keys())
-    print(f"Days to process: {len(days)}")
+    # Filter out already-built days
+    days_todo = [
+        d for d in days if not os.path.exists(os.path.join(args.out_dir, f"{d}.pt"))
+    ]
+    print(
+        f"Days: {len(days)} total, {len(days) - len(days_todo)} cached, {len(days_todo)} to build"
+    )
+    del full_ds  # free memory before spawning workers
+
+    # Store dataset construction args for workers
+    ds_kwargs = {
+        "table_path": args.table_path,
+        "background_dir": args.background_dir,
+        "background_pattern": args.background_pattern,
+        "static_tifs": args.static_tifs,
+        "landsat_tif": args.landsat_tif,
+        "rsun_tif": args.rsun_tif,
+        "cdr_dir": args.cdr_dir,
+        "cdr_pattern": args.cdr_pattern,
+        "target_names": args.target_names,
+        "holdout_fids": holdout_fids,
+        "drop_bands": args.drop_bands,
+        "norm_stats": norm_stats,
+        "patch_size": args.patch_size,
+    }
+
+    def _process_day_chunk(chunk_days):
+        """Process a chunk of days in one worker with its own dataset."""
+        worker_ds = HRRRPatchDataset(
+            train_days=set(pd.Timestamp(d) for d in chunk_days + list(all_days)[:1]),
+            **ds_kwargs,
+        )
+        # Rebuild day-to-index for this worker's dataset
+        w_day_idx: dict[str, list[int]] = {}
+        for idx in range(len(worker_ds)):
+            d = pd.Timestamp(worker_ds.samples.iloc[idx]["day"]).strftime("%Y-%m-%d")
+            w_day_idx.setdefault(d, []).append(idx)
+
+        built = 0
+        for day_key in chunk_days:
+            indices = w_day_idx.get(day_key, [])
+            if not indices:
+                continue
+            out_path = os.path.join(args.out_dir, f"{day_key}.pt")
+            if os.path.exists(out_path):
+                continue
+
+            patches = [worker_ds[idx] for idx in indices]
+            n_samples = len(patches)
+            max_sta = max(p[1].shape[0] for p in patches)
+            n_targets = patches[0][3].shape[1]
+
+            x = torch.stack([p[0] for p in patches])
+            sta_rows = torch.zeros(n_samples, max_sta, dtype=torch.long)
+            sta_cols = torch.zeros(n_samples, max_sta, dtype=torch.long)
+            sta_targets = torch.zeros(
+                n_samples, max_sta, n_targets, dtype=torch.float32
+            )
+            sta_valid = torch.zeros(n_samples, max_sta, n_targets, dtype=torch.bool)
+            sta_holdout = torch.zeros(n_samples, max_sta, dtype=torch.bool)
+            sta_is_center = torch.zeros(n_samples, max_sta, dtype=torch.bool)
+            n_stations = []
+            fids = []
+
+            for i, p in enumerate(patches):
+                n = p[1].shape[0]
+                n_stations.append(n)
+                sta_rows[i, :n] = p[1]
+                sta_cols[i, :n] = p[2]
+                sta_targets[i, :n] = p[3]
+                sta_valid[i, :n] = p[4]
+                sta_holdout[i, :n] = p[5]
+                sta_is_center[i, :n] = p[6]
+                fids.append(str(worker_ds.samples.iloc[indices[i]]["fid"]))
+
+            torch.save(
+                {
+                    "x": x,
+                    "sta_rows": sta_rows,
+                    "sta_cols": sta_cols,
+                    "sta_targets": sta_targets,
+                    "sta_valid": sta_valid,
+                    "sta_holdout": sta_holdout,
+                    "sta_is_center": sta_is_center,
+                    "n_stations": n_stations,
+                    "fids": fids,
+                },
+                out_path,
+            )
+            built += 1
+        return built
+
+    # Split days into chunks for parallel processing
+    import multiprocessing as mp
+
+    n_workers = args.workers
+    chunk_size = max(1, len(days_todo) // n_workers)
+    chunks = [
+        days_todo[i : i + chunk_size] for i in range(0, len(days_todo), chunk_size)
+    ]
+    print(f"Processing {len(days_todo)} days with {len(chunks)} worker chunks...")
 
     t0 = time.time()
-    for di, day_key in enumerate(days):
-        indices = day_to_indices[day_key]
-        out_path = os.path.join(args.out_dir, f"{day_key}.pt")
-
-        # Skip if already built
-        if os.path.exists(out_path):
-            if (di + 1) % 100 == 0:
-                print(f"  [{di + 1}/{len(days)}] {day_key} (cached)")
-            continue
-
-        patches = []
-        for idx in indices:
-            patches.append(full_ds[idx])
-
-        # Stack into per-day tensors
-        n_samples = len(patches)
-        x_list = [p[0] for p in patches]
-        max_sta = max(p[1].shape[0] for p in patches)
-        n_targets = patches[0][3].shape[1]
-
-        x = torch.stack(x_list)
-        sta_rows = torch.zeros(n_samples, max_sta, dtype=torch.long)
-        sta_cols = torch.zeros(n_samples, max_sta, dtype=torch.long)
-        sta_targets = torch.zeros(n_samples, max_sta, n_targets, dtype=torch.float32)
-        sta_valid = torch.zeros(n_samples, max_sta, n_targets, dtype=torch.bool)
-        sta_holdout = torch.zeros(n_samples, max_sta, dtype=torch.bool)
-        sta_is_center = torch.zeros(n_samples, max_sta, dtype=torch.bool)
-        n_stations = []
-        fids = []
-
-        for i, p in enumerate(patches):
-            n = p[1].shape[0]
-            n_stations.append(n)
-            sta_rows[i, :n] = p[1]
-            sta_cols[i, :n] = p[2]
-            sta_targets[i, :n] = p[3]
-            sta_valid[i, :n] = p[4]
-            sta_holdout[i, :n] = p[5]
-            sta_is_center[i, :n] = p[6]
-            fids.append(str(full_ds.samples.iloc[indices[i]]["fid"]))
-
-        torch.save(
-            {
-                "x": x,
-                "sta_rows": sta_rows,
-                "sta_cols": sta_cols,
-                "sta_targets": sta_targets,
-                "sta_valid": sta_valid,
-                "sta_holdout": sta_holdout,
-                "sta_is_center": sta_is_center,
-                "n_stations": n_stations,
-                "fids": fids,
-            },
-            out_path,
-        )
-
-        if (di + 1) % 50 == 0 or (di + 1) == len(days):
-            elapsed = time.time() - t0
-            rate = (di + 1) / elapsed
-            eta = (len(days) - di - 1) / rate if rate > 0 else 0
-            print(
-                f"  [{di + 1}/{len(days)}] {day_key}  {rate:.1f} days/s  ETA {eta / 60:.1f} min"
-            )
+    with mp.Pool(n_workers) as pool:
+        results = pool.map(_process_day_chunk, chunks)
+    total_built = sum(results)
+    elapsed = time.time() - t0
+    print(
+        f"Built {total_built} day files in {elapsed / 60:.1f} min ({total_built / max(elapsed, 1):.1f} days/s)"
+    )
 
     # Save holdout coverage
     effective_holdout = holdout_fids & set(df["fid"].unique())

@@ -15,6 +15,7 @@ benchmark_mode = true
 drop_bands = ["n_hours"]
 
 target_names = ["delta_tmax"]
+chip_dir = "/data/nvme0/dads_rasters/grid_core_v0_chips"
 
 table_path = "/nas/dads/run_archive/station_day_hrrr_daily_cdr_pnw.parquet"
 background_dir = "/data/nvme0/dads_rasters/hrrr_1km_pnw"
