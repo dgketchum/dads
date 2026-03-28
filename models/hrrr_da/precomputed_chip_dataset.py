@@ -55,15 +55,26 @@ class PrecomputedChipDataset(Dataset):
             day_strs = {pd.Timestamp(d).strftime("%Y-%m-%d") for d in train_days}
             pt_files = [p for p in pt_files if p.stem in day_strs]
 
-        # Build a flat index: (file_idx, sample_idx_within_day)
-        self._files: list[Path] = []
-        self._offsets: list[tuple[int, int]] = []  # (file_idx, local_idx)
-        for fi, fp in enumerate(pt_files):
-            data = torch.load(fp, weights_only=False)
-            n = data["x"].shape[0]
-            self._files.append(fp)
-            for si in range(n):
-                self._offsets.append((fi, si))
+        # Build index lazily: probe one file for sample count pattern,
+        # then use the index file if available, else load headers only.
+        self._files: list[Path] = list(pt_files)
+        self._offsets: list[tuple[int, int]] = []
+
+        index_path = os.path.join(chip_dir, "chip_index.json")
+        if os.path.exists(index_path):
+            with open(index_path) as f:
+                chip_index = json.load(f)
+            for fi, fp in enumerate(self._files):
+                n = chip_index.get(fp.stem, 0)
+                for si in range(n):
+                    self._offsets.append((fi, si))
+        else:
+            # Fallback: load each file to count samples (slow but correct)
+            for fi, fp in enumerate(self._files):
+                data = torch.load(fp, weights_only=False)
+                n = data["x"].shape[0]
+                for si in range(n):
+                    self._offsets.append((fi, si))
 
         # Cache: only one day loaded at a time
         self._cached_fi: int = -1

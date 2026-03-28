@@ -36,6 +36,76 @@ from models.hrrr_da.patch_assim_dataset import HRRRPatchDataset
 
 print = functools.partial(print, flush=True)  # type: ignore[assignment]
 
+# ── multiprocessing globals and worker ────────────────────────────────────────
+
+_W_DS_KWARGS: dict = {}
+_W_OUT_DIR: str = ""
+
+
+def _process_day_chunk(chunk_days: list[str]) -> int:
+    """Process a chunk of days in one worker with its own dataset."""
+    worker_ds = HRRRPatchDataset(
+        train_days=set(pd.Timestamp(d) for d in chunk_days),
+        **_W_DS_KWARGS,
+    )
+    # Build day-to-index for this worker's dataset
+    w_day_idx: dict[str, list[int]] = {}
+    for idx in range(len(worker_ds)):
+        d = pd.Timestamp(worker_ds.samples.iloc[idx]["day"]).strftime("%Y-%m-%d")
+        w_day_idx.setdefault(d, []).append(idx)
+
+    built = 0
+    for day_key in chunk_days:
+        indices = w_day_idx.get(day_key, [])
+        if not indices:
+            continue
+        out_path = os.path.join(_W_OUT_DIR, f"{day_key}.pt")
+        if os.path.exists(out_path):
+            continue
+
+        patches = [worker_ds[idx] for idx in indices]
+        n_samples = len(patches)
+        max_sta = max(p[1].shape[0] for p in patches)
+        n_targets = patches[0][3].shape[1]
+
+        x = torch.stack([p[0] for p in patches])
+        sta_rows = torch.zeros(n_samples, max_sta, dtype=torch.long)
+        sta_cols = torch.zeros(n_samples, max_sta, dtype=torch.long)
+        sta_targets = torch.zeros(n_samples, max_sta, n_targets, dtype=torch.float32)
+        sta_valid = torch.zeros(n_samples, max_sta, n_targets, dtype=torch.bool)
+        sta_holdout = torch.zeros(n_samples, max_sta, dtype=torch.bool)
+        sta_is_center = torch.zeros(n_samples, max_sta, dtype=torch.bool)
+        n_stations = []
+        fids = []
+
+        for i, p in enumerate(patches):
+            n = p[1].shape[0]
+            n_stations.append(n)
+            sta_rows[i, :n] = p[1]
+            sta_cols[i, :n] = p[2]
+            sta_targets[i, :n] = p[3]
+            sta_valid[i, :n] = p[4]
+            sta_holdout[i, :n] = p[5]
+            sta_is_center[i, :n] = p[6]
+            fids.append(str(worker_ds.samples.iloc[indices[i]]["fid"]))
+
+        torch.save(
+            {
+                "x": x,
+                "sta_rows": sta_rows,
+                "sta_cols": sta_cols,
+                "sta_targets": sta_targets,
+                "sta_valid": sta_valid,
+                "sta_holdout": sta_holdout,
+                "sta_is_center": sta_is_center,
+                "n_stations": n_stations,
+                "fids": fids,
+            },
+            out_path,
+        )
+        built += 1
+    return built
+
 
 def _parse_args():
     p = argparse.ArgumentParser(description="Precompute grid-core-v0 chips.")
@@ -148,8 +218,9 @@ def main():
     )
     del full_ds  # free memory before spawning workers
 
-    # Store dataset construction args for workers
-    ds_kwargs = {
+    # Store dataset construction args for workers as module-level global
+    global _W_DS_KWARGS, _W_OUT_DIR
+    _W_DS_KWARGS = {
         "table_path": args.table_path,
         "background_dir": args.background_dir,
         "background_pattern": args.background_pattern,
@@ -164,74 +235,8 @@ def main():
         "norm_stats": norm_stats,
         "patch_size": args.patch_size,
     }
+    _W_OUT_DIR = args.out_dir
 
-    def _process_day_chunk(chunk_days):
-        """Process a chunk of days in one worker with its own dataset."""
-        worker_ds = HRRRPatchDataset(
-            train_days=set(pd.Timestamp(d) for d in chunk_days + list(all_days)[:1]),
-            **ds_kwargs,
-        )
-        # Rebuild day-to-index for this worker's dataset
-        w_day_idx: dict[str, list[int]] = {}
-        for idx in range(len(worker_ds)):
-            d = pd.Timestamp(worker_ds.samples.iloc[idx]["day"]).strftime("%Y-%m-%d")
-            w_day_idx.setdefault(d, []).append(idx)
-
-        built = 0
-        for day_key in chunk_days:
-            indices = w_day_idx.get(day_key, [])
-            if not indices:
-                continue
-            out_path = os.path.join(args.out_dir, f"{day_key}.pt")
-            if os.path.exists(out_path):
-                continue
-
-            patches = [worker_ds[idx] for idx in indices]
-            n_samples = len(patches)
-            max_sta = max(p[1].shape[0] for p in patches)
-            n_targets = patches[0][3].shape[1]
-
-            x = torch.stack([p[0] for p in patches])
-            sta_rows = torch.zeros(n_samples, max_sta, dtype=torch.long)
-            sta_cols = torch.zeros(n_samples, max_sta, dtype=torch.long)
-            sta_targets = torch.zeros(
-                n_samples, max_sta, n_targets, dtype=torch.float32
-            )
-            sta_valid = torch.zeros(n_samples, max_sta, n_targets, dtype=torch.bool)
-            sta_holdout = torch.zeros(n_samples, max_sta, dtype=torch.bool)
-            sta_is_center = torch.zeros(n_samples, max_sta, dtype=torch.bool)
-            n_stations = []
-            fids = []
-
-            for i, p in enumerate(patches):
-                n = p[1].shape[0]
-                n_stations.append(n)
-                sta_rows[i, :n] = p[1]
-                sta_cols[i, :n] = p[2]
-                sta_targets[i, :n] = p[3]
-                sta_valid[i, :n] = p[4]
-                sta_holdout[i, :n] = p[5]
-                sta_is_center[i, :n] = p[6]
-                fids.append(str(worker_ds.samples.iloc[indices[i]]["fid"]))
-
-            torch.save(
-                {
-                    "x": x,
-                    "sta_rows": sta_rows,
-                    "sta_cols": sta_cols,
-                    "sta_targets": sta_targets,
-                    "sta_valid": sta_valid,
-                    "sta_holdout": sta_holdout,
-                    "sta_is_center": sta_is_center,
-                    "n_stations": n_stations,
-                    "fids": fids,
-                },
-                out_path,
-            )
-            built += 1
-        return built
-
-    # Split days into chunks for parallel processing
     import multiprocessing as mp
 
     n_workers = args.workers
@@ -248,6 +253,19 @@ def main():
     elapsed = time.time() - t0
     print(
         f"Built {total_built} day files in {elapsed / 60:.1f} min ({total_built / max(elapsed, 1):.1f} days/s)"
+    )
+
+    # Build chip index for fast dataset loading
+    chip_index = {}
+    for d in days:
+        pt_path = os.path.join(args.out_dir, f"{d}.pt")
+        if os.path.exists(pt_path):
+            chip_index[d] = day_to_indices.get(d, [])
+            chip_index[d] = len(chip_index[d])
+    with open(os.path.join(args.out_dir, "chip_index.json"), "w") as f:
+        json.dump(chip_index, f)
+    print(
+        f"Chip index: {len(chip_index)} days, {sum(chip_index.values())} total samples"
     )
 
     # Save holdout coverage

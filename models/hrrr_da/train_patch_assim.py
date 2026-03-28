@@ -169,6 +169,12 @@ def main() -> None:
         val_ds = PrecomputedChipDataset(chip_dir=cfg.chip_dir, train_days=val_days)
         in_channels = train_ds.in_channels
         print(f"Train: {len(train_ds)}, Val: {len(val_ds)}, channels: {in_channels}")
+        # Copy chip metadata as norm provenance
+        import shutil
+
+        chip_meta = os.path.join(cfg.chip_dir, "meta.json")
+        if os.path.exists(chip_meta):
+            shutil.copy2(chip_meta, os.path.join(cfg.out_dir, "norm_stats.json"))
     else:
         train_ds = HRRRPatchDataset(
             table_path=cfg.table_path,
