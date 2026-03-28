@@ -345,6 +345,87 @@ class HRRRPatchDataset(Dataset):
             )
             self.norm_stats.update(cdr_stats)
 
+        # --- Pre-compute domain geometry (eliminates per-sample CRS work) ---
+        example_bg = self.raster_cache.get(
+            self._background_path(self.samples.iloc[0]["day"])
+        )
+        bg_crs = example_bg["crs"]
+        bg_tf = example_bg["transform"]
+        self._domain_H = example_bg["data"].shape[1]
+        self._domain_W = example_bg["data"].shape[2]
+
+        # Domain-wide lat/lon grids (for CDR lookup + position channels)
+        to_ll = Transformer.from_crs(bg_crs, "EPSG:4326", always_xy=True)
+        rr_all, cc_all = np.meshgrid(
+            np.arange(self._domain_H), np.arange(self._domain_W), indexing="ij"
+        )
+        x_all, y_all = xy(bg_tf, rr_all.ravel(), cc_all.ravel(), offset="center")
+        lon_all, lat_all = to_ll.transform(
+            np.asarray(x_all, dtype="float64"), np.asarray(y_all, dtype="float64")
+        )
+        self._domain_lat = np.asarray(lat_all, dtype="float32").reshape(
+            self._domain_H, self._domain_W
+        )
+        self._domain_lon = np.asarray(lon_all, dtype="float32").reshape(
+            self._domain_H, self._domain_W
+        )
+
+        # CDR index maps (EPSG:5070 pixel → CDR row/col)
+        self._cdr_row_map: np.ndarray | None = None
+        self._cdr_col_map: np.ndarray | None = None
+        if self.cdr_dir and self._cdr_band_names:
+            example_cdr_path = self._cdr_path(self.samples.iloc[0]["day"])
+            if os.path.exists(example_cdr_path):
+                with rasterio.open(example_cdr_path) as cdr_src:
+                    cdr_tf = cdr_src.transform
+                    cdr_h, cdr_w = cdr_src.height, cdr_src.width
+                cdr_r, cdr_c = rowcol(
+                    cdr_tf,
+                    lon_all.astype("float64"),
+                    lat_all.astype("float64"),
+                )
+                self._cdr_row_map = np.clip(
+                    np.asarray(cdr_r, dtype="int32").reshape(
+                        self._domain_H, self._domain_W
+                    ),
+                    0,
+                    cdr_h - 1,
+                )
+                self._cdr_col_map = np.clip(
+                    np.asarray(cdr_c, dtype="int32").reshape(
+                        self._domain_H, self._domain_W
+                    ),
+                    0,
+                    cdr_w - 1,
+                )
+
+        # Pre-project center station coordinates to raster row/col
+        to_bg = Transformer.from_crs("EPSG:4326", bg_crs, always_xy=True)
+        center_lons = self.samples["longitude"].to_numpy(dtype="float64")
+        center_lats = self.samples["latitude"].to_numpy(dtype="float64")
+        cx, cy = to_bg.transform(center_lons, center_lats)
+        cr, cc = rowcol(bg_tf, cx, cy)
+        self._center_rows = np.asarray(cr, dtype="int32")
+        self._center_cols = np.asarray(cc, dtype="int32")
+
+        # Pre-project neighbor stations per day
+        self._neighbor_rc: dict[pd.Timestamp, tuple[np.ndarray, np.ndarray]] = {}
+        for day, grp in self._neighbor_day_groups.items():
+            sta_lons = grp["longitude"].to_numpy(dtype="float64")
+            sta_lats = grp["latitude"].to_numpy(dtype="float64")
+            sx, sy = to_bg.transform(sta_lons, sta_lats)
+            sr, sc = rowcol(bg_tf, sx, sy)
+            self._neighbor_rc[day] = (
+                np.asarray(sr, dtype="int32"),
+                np.asarray(sc, dtype="int32"),
+            )
+
+        # Eager-load static rasters so DataLoader workers share via COW
+        for tif_path in self.static_tifs:
+            self.raster_cache.get(tif_path)
+        if self.landsat_tif:
+            self.raster_cache.get(self.landsat_tif)
+
     def __len__(self) -> int:
         return len(self.samples)
 
@@ -365,158 +446,69 @@ class HRRRPatchDataset(Dataset):
         day = pd.Timestamp(row["day"]).normalize()
         doy = day.dayofyear
         period = _landsat_period(doy)
-
-        # --- HRRR background patch ---
-        bg = self.raster_cache.get(self._background_path(day))
-        bg_data: np.ndarray = bg["data"]  # (C_bg, domain_H, domain_W)
-        bg_tf = bg["transform"]
-        bg_crs = bg["crs"]
-
-        domain_H, domain_W = bg_data.shape[1], bg_data.shape[2]
         H = W = self.patch_size
 
-        to_bg = Transformer.from_crs("EPSG:4326", bg_crs, always_xy=True)
-        x_center, y_center = to_bg.transform(
-            float(row["longitude"]), float(row["latitude"])
-        )
-        r_center, c_center = rowcol(bg_tf, x_center, y_center)
+        # Patch bounds from pre-computed center pixel
+        r_center = int(self._center_rows[idx])
+        c_center = int(self._center_cols[idx])
+        r0 = int(np.clip(r_center - H // 2, 0, self._domain_H - H))
+        c0 = int(np.clip(c_center - W // 2, 0, self._domain_W - W))
+        r1, c1 = r0 + H, c0 + W
 
-        # Clamp so the patch always fits within the domain
-        r0 = int(np.clip(int(r_center) - H // 2, 0, domain_H - H))
-        c0 = int(np.clip(int(c_center) - W // 2, 0, domain_W - W))
-        r1 = r0 + H
-        c1 = c0 + W
+        # --- HRRR background patch (cache hit for same-day samples) ---
+        bg = self.raster_cache.get(self._background_path(day))
+        bg_patch = bg["data"][self._bg_keep_indices, r0:r1, c0:c1].astype("float32")
 
-        bg_patch = bg_data[self._bg_keep_indices, r0:r1, c0:c1].astype(
-            "float32"
-        )  # (C_bg_filtered, H, W)
-
-        # Projected pixel-center coordinates for static/Landsat lookup
-        rows = np.arange(r0, r1)
-        cols = np.arange(c0, c1)
-        rr, cc = np.meshgrid(rows, cols, indexing="ij")
-        rr_flat = rr.ravel()
-        cc_flat = cc.ravel()
-        x_proj, y_proj = xy(bg_tf, rr_flat, cc_flat, offset="center")
-        x_proj = np.asarray(x_proj, dtype="float64")
-        y_proj = np.asarray(y_proj, dtype="float64")
-
-        to_ll = Transformer.from_crs(bg_crs, "EPSG:4326", always_xy=True)
-        pixel_lon, pixel_lat = to_ll.transform(x_proj, y_proj)
-        pixel_lon = np.asarray(pixel_lon, dtype="float32").reshape(H, W)
-        pixel_lat = np.asarray(pixel_lat, dtype="float32").reshape(H, W)
-
-        # --- Static TIF patches ---
+        # --- Static TIF patches (pixel-aligned, just slice) ---
         static_patches: list[np.ndarray] = []
         for tif_path, tif_names in zip(self.static_tifs, self._static_tif_band_names):
-            static = self.raster_cache.get(tif_path)
-            s_data = static["data"]
-            s_tf = static["transform"]
-            s_crs = static["crs"]
-            if str(s_crs) == str(bg_crs):
-                s_rows = np.clip(rr_flat, 0, s_data.shape[1] - 1).astype(int)
-                s_cols = np.clip(cc_flat, 0, s_data.shape[2] - 1).astype(int)
-            else:
-                to_s = Transformer.from_crs(bg_crs, s_crs, always_xy=True)
-                sx, sy = to_s.transform(x_proj, y_proj)
-                s_rows_raw, s_cols_raw = rowcol(s_tf, sx, sy)
-                s_rows = np.clip(
-                    np.asarray(s_rows_raw, dtype=int), 0, s_data.shape[1] - 1
-                )
-                s_cols = np.clip(
-                    np.asarray(s_cols_raw, dtype=int), 0, s_data.shape[2] - 1
-                )
-            patch = np.nan_to_num(
-                s_data[:, s_rows, s_cols].astype("float32"), nan=0.0
-            ).reshape(len(tif_names), H, W)
+            s = self.raster_cache.get(tif_path)
+            patch = np.nan_to_num(s["data"][:, r0:r1, c0:c1].astype("float32"), nan=0.0)
             static_patches.append(patch)
 
-        # --- Landsat period patch (7 bands) ---
+        # --- Landsat period patch (pixel-aligned, just slice) ---
         landsat_patch: np.ndarray | None = None
         active_landsat_names: list[str] = []
         if self.landsat_tif:
             active_landsat_names = self._landsat_period_names[period]
-            landsat = self.raster_cache.get(self.landsat_tif)
-            ls_data = landsat["data"]  # (35, domain_H, domain_W)
-            ls_tf = landsat["transform"]
-            ls_crs = landsat["crs"]
+            ls = self.raster_cache.get(self.landsat_tif)
             b0 = period * _LANDSAT_BANDS
             b1 = b0 + _LANDSAT_BANDS
-            if str(ls_crs) == str(bg_crs):
-                ls_rows = np.clip(rr_flat, 0, ls_data.shape[1] - 1).astype(int)
-                ls_cols = np.clip(cc_flat, 0, ls_data.shape[2] - 1).astype(int)
-            else:
-                to_ls = Transformer.from_crs(bg_crs, ls_crs, always_xy=True)
-                lsx, lsy = to_ls.transform(x_proj, y_proj)
-                ls_rows_raw, ls_cols_raw = rowcol(ls_tf, lsx, lsy)
-                ls_rows = np.clip(
-                    np.asarray(ls_rows_raw, dtype=int), 0, ls_data.shape[1] - 1
-                )
-                ls_cols = np.clip(
-                    np.asarray(ls_cols_raw, dtype=int), 0, ls_data.shape[2] - 1
-                )
             landsat_patch = np.nan_to_num(
-                ls_data[b0:b1, ls_rows, ls_cols].astype("float32"), nan=0.0
-            ).reshape(_LANDSAT_BANDS, H, W)
+                ls["data"][b0:b1, r0:r1, c0:c1].astype("float32"), nan=0.0
+            )
 
-        # --- rsun patch (1 band, DOY-selected) ---
+        # --- rsun patch (pixel-aligned, DOY-cached band read) ---
         rsun_patch: np.ndarray | None = None
         if self.rsun_tif and self._rsun_meta is not None:
-            # Cache the band within a day group (DayGroupedSampler reuses DOY)
             cached_doy = getattr(self, "_rsun_cache_doy", -1)
             if cached_doy != doy:
                 with rasterio.open(self.rsun_tif) as rsun_src:
                     band_idx = max(1, min(doy, rsun_src.count))
                     self._rsun_cache_band = rsun_src.read(band_idx).astype("float32")
                     self._rsun_cache_doy = doy
-            rsun_band = self._rsun_cache_band  # (H_dom, W_dom)
-            rsun_crs = self._rsun_meta["crs"]
-            rsun_tf = self._rsun_meta["transform"]
-            if rsun_crs == str(bg_crs):
-                rs_rows = np.clip(rr_flat, 0, rsun_band.shape[0] - 1).astype(int)
-                rs_cols = np.clip(cc_flat, 0, rsun_band.shape[1] - 1).astype(int)
-            else:
-                to_rsun = Transformer.from_crs(bg_crs, rsun_crs, always_xy=True)
-                rx, ry = to_rsun.transform(x_proj, y_proj)
-                rs_rows_raw, rs_cols_raw = rowcol(rsun_tf, rx, ry)
-                rs_rows = np.clip(
-                    np.asarray(rs_rows_raw, dtype=int), 0, rsun_band.shape[0] - 1
-                )
-                rs_cols = np.clip(
-                    np.asarray(rs_cols_raw, dtype=int), 0, rsun_band.shape[1] - 1
-                )
-            rsun_patch = np.nan_to_num(rsun_band[rs_rows, rs_cols], nan=0.0).reshape(
-                1, H, W
-            )
+            rsun_patch = np.nan_to_num(
+                self._rsun_cache_band[r0:r1, c0:c1], nan=0.0
+            ).reshape(1, H, W)
 
-        # --- CDR patch (5 bands, daily, native 0.05-deg) ---
+        # --- CDR patch (pre-computed index maps) ---
         cdr_patch: np.ndarray | None = None
         if self.cdr_dir and self._cdr_band_names:
             cdr_path = self._cdr_path(day)
             n_cdr = len(self._cdr_band_names)
-            if os.path.exists(cdr_path):
+            if os.path.exists(cdr_path) and self._cdr_row_map is not None:
                 cdr = self.raster_cache.get(cdr_path)
-                cdr_data = cdr["data"]  # (5, cdr_H, cdr_W)
-                cdr_tf = cdr["transform"]
-                # CDR is EPSG:4326 — use already-computed pixel lat/lon
-                cdr_rows_raw, cdr_cols_raw = rowcol(
-                    cdr_tf,
-                    pixel_lon.ravel().astype("float64"),
-                    pixel_lat.ravel().astype("float64"),
-                )
-                cdr_rows = np.clip(
-                    np.asarray(cdr_rows_raw, dtype=int), 0, cdr_data.shape[1] - 1
-                )
-                cdr_cols = np.clip(
-                    np.asarray(cdr_cols_raw, dtype=int), 0, cdr_data.shape[2] - 1
-                )
+                cr = self._cdr_row_map[r0:r1, c0:c1]
+                cc = self._cdr_col_map[r0:r1, c0:c1]
                 cdr_patch = np.nan_to_num(
-                    cdr_data[:, cdr_rows, cdr_cols].astype("float32"), nan=0.0
-                ).reshape(n_cdr, H, W)
+                    cdr["data"][:, cr, cc].astype("float32"), nan=0.0
+                )
             else:
                 cdr_patch = np.zeros((n_cdr, H, W), dtype="float32")
 
-        # --- Position / time channels ---
+        # --- Position / time channels (slice pre-computed grids) ---
+        pixel_lat = self._domain_lat[r0:r1, c0:c1]
+        pixel_lon = self._domain_lon[r0:r1, c0:c1]
         doy_sin, doy_cos = _doy_features(day)
         pos_time = np.stack(
             [
@@ -525,7 +517,7 @@ class HRRRPatchDataset(Dataset):
                 pixel_lat,
                 pixel_lon,
             ]
-        )  # (4, H, W)
+        )
 
         # --- Stack and normalize ---
         parts: list[np.ndarray] = [bg_patch] + static_patches
@@ -536,7 +528,7 @@ class HRRRPatchDataset(Dataset):
         if cdr_patch is not None:
             parts.append(cdr_patch)
         parts.append(pos_time)
-        x_patch = np.concatenate(parts, axis=0)  # (C, H, W)
+        x_patch = np.concatenate(parts, axis=0)
 
         channel_names = (
             list(self.background_feature_names)
@@ -551,7 +543,7 @@ class HRRRPatchDataset(Dataset):
                 s = self.norm_stats[name]
                 x_patch[i] = (x_patch[i] - s["mean"]) / s["std"]
 
-        # --- In-patch station supervision targets ---
+        # --- In-patch station supervision (pre-computed row/col) ---
         sta_rows_list: list[int] = []
         sta_cols_list: list[int] = []
         sta_targets_list: list[list[float]] = []
@@ -561,14 +553,9 @@ class HRRRPatchDataset(Dataset):
         center_fid = str(row["fid"])
 
         day_group = self._neighbor_day_groups.get(day)
-        if day_group is not None and not day_group.empty:
-            sta_lons = day_group["longitude"].to_numpy(dtype="float64")
-            sta_lats = day_group["latitude"].to_numpy(dtype="float64")
-            sta_x, sta_y = to_bg.transform(sta_lons, sta_lats)
-            sta_r_raw, sta_c_raw = rowcol(bg_tf, sta_x, sta_y)
-            sta_r = np.asarray(sta_r_raw, dtype=int)
-            sta_c = np.asarray(sta_c_raw, dtype=int)
-
+        day_rc = self._neighbor_rc.get(day)
+        if day_group is not None and day_rc is not None and not day_group.empty:
+            sta_r, sta_c = day_rc
             in_patch = (sta_r >= r0) & (sta_r < r1) & (sta_c >= c0) & (sta_c < c1)
             for j in np.where(in_patch)[0]:
                 sta_rows_list.append(int(sta_r[j] - r0))
@@ -588,8 +575,8 @@ class HRRRPatchDataset(Dataset):
 
         # Fallback: use the patch-center station if no in-patch stations were found
         if not sta_rows_list:
-            r_in = int(np.clip(int(r_center) - r0, 0, H - 1))
-            c_in = int(np.clip(int(c_center) - c0, 0, W - 1))
+            r_in = int(np.clip(r_center - r0, 0, H - 1))
+            c_in = int(np.clip(c_center - c0, 0, W - 1))
             sta_rows_list.append(r_in)
             sta_cols_list.append(c_in)
             sta_holdout_list.append(center_fid in self._holdout_fids)

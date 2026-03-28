@@ -6,16 +6,15 @@ hidden_dim = 32
 lr = 3e-4
 tv_weight = 1e-3
 huber_delta = 1.0
-batch_size = 16
+batch_size = 64
 epochs = 100
 seed = 42
-days_per_epoch = 100
-num_workers = 16
+days_per_epoch = 30
+num_workers = 4
 benchmark_mode = true
 drop_bands = ["n_hours"]
 
 target_names = ["delta_tmax"]
-chip_dir = "/data/nvme0/dads_rasters/grid_core_v0_chips"
 
 table_path = "/nas/dads/run_archive/station_day_hrrr_daily_cdr_pnw.parquet"
 background_dir = "/data/nvme0/dads_rasters/hrrr_1km_pnw"

@@ -26,7 +26,6 @@ from torch.utils.data import DataLoader
 
 from models.hrrr_da.lit_patch_assim import LitPatchAssim
 from models.hrrr_da.patch_assim_dataset import HRRRPatchDataset, collate_patch
-from models.hrrr_da.precomputed_chip_dataset import PrecomputedChipDataset
 from models.hrrr_da.train_hrrr_hetero import DayGroupedSampler, DayResamplingCallback
 from prep.paths import MVP_ROOT
 
@@ -76,7 +75,6 @@ class PatchAssimConfig:
     holdout_fids_json: str | None = "artifacts/canonical_holdout_fids.json"
     benchmark_mode: bool = False
     drop_bands: list[str] = field(default_factory=list)
-    chip_dir: str | None = None
 
     device: str | None = None
 
@@ -162,71 +160,57 @@ def main() -> None:
     with open(os.path.join(cfg.out_dir, "val_holdout_fids.json"), "w") as f:
         json.dump(sorted(val_holdout), f)
 
-    if cfg.chip_dir:
-        # Precomputed chips: no raster I/O at training time
-        print(f"Using precomputed chips from {cfg.chip_dir}")
-        train_ds = PrecomputedChipDataset(chip_dir=cfg.chip_dir, train_days=train_days)
-        val_ds = PrecomputedChipDataset(chip_dir=cfg.chip_dir, train_days=val_days)
-        in_channels = train_ds.in_channels
-        print(f"Train: {len(train_ds)}, Val: {len(val_ds)}, channels: {in_channels}")
-        # Copy chip metadata as norm provenance
-        import shutil
+    train_ds = HRRRPatchDataset(
+        table_path=cfg.table_path,
+        background_dir=cfg.background_dir,
+        background_pattern=cfg.background_pattern,
+        static_tifs=cfg.static_tifs,
+        landsat_tif=cfg.landsat_tif,
+        target_names=cfg.target_names,
+        train_days=train_days,
+        target_exclude_fids=holdout_fids or None,
+        supervision_exclude_fids=holdout_fids or None,
+        rsun_tif=cfg.rsun_tif,
+        cdr_dir=cfg.cdr_dir,
+        cdr_pattern=cfg.cdr_pattern,
+        holdout_fids=holdout_fids or None,
+        drop_bands=cfg.drop_bands or None,
+        patch_size=cfg.patch_size,
+    )
+    in_channels = train_ds.in_channels
+    print(f"Train samples: {len(train_ds)}, in_channels: {in_channels}")
 
-        chip_meta = os.path.join(cfg.chip_dir, "meta.json")
-        if os.path.exists(chip_meta):
-            shutil.copy2(chip_meta, os.path.join(cfg.out_dir, "norm_stats.json"))
-    else:
-        train_ds = HRRRPatchDataset(
-            table_path=cfg.table_path,
-            background_dir=cfg.background_dir,
-            background_pattern=cfg.background_pattern,
-            static_tifs=cfg.static_tifs,
-            landsat_tif=cfg.landsat_tif,
-            target_names=cfg.target_names,
-            train_days=train_days,
-            target_exclude_fids=holdout_fids or None,
-            supervision_exclude_fids=holdout_fids or None,
-            rsun_tif=cfg.rsun_tif,
-            cdr_dir=cfg.cdr_dir,
-            cdr_pattern=cfg.cdr_pattern,
-            holdout_fids=holdout_fids or None,
-            drop_bands=cfg.drop_bands or None,
-            patch_size=cfg.patch_size,
+    norm_stats_path = os.path.join(cfg.out_dir, "norm_stats.json")
+    with open(norm_stats_path, "w") as f:
+        json.dump(
+            {
+                "norm_stats": train_ds.norm_stats,
+                "feature_names": train_ds.feature_names,
+                "target_names": train_ds.target_names,
+                "in_channels": train_ds.in_channels,
+            },
+            f,
+            indent=2,
         )
-        in_channels = train_ds.in_channels
-        print(f"Train samples: {len(train_ds)}, in_channels: {in_channels}")
+    print(f"Norm stats saved: {norm_stats_path}")
 
-        norm_stats_path = os.path.join(cfg.out_dir, "norm_stats.json")
-        with open(norm_stats_path, "w") as f:
-            json.dump(
-                {
-                    "norm_stats": train_ds.norm_stats,
-                    "feature_names": train_ds.feature_names,
-                    "target_names": train_ds.target_names,
-                    "in_channels": train_ds.in_channels,
-                },
-                f,
-                indent=2,
-            )
-        print(f"Norm stats saved: {norm_stats_path}")
-
-        val_ds = HRRRPatchDataset(
-            table_path=cfg.table_path,
-            background_dir=cfg.background_dir,
-            background_pattern=cfg.background_pattern,
-            static_tifs=cfg.static_tifs,
-            landsat_tif=cfg.landsat_tif,
-            target_names=cfg.target_names,
-            train_days=val_days,
-            target_include_fids=holdout_fids or None,
-            rsun_tif=cfg.rsun_tif,
-            cdr_dir=cfg.cdr_dir,
-            cdr_pattern=cfg.cdr_pattern,
-            holdout_fids=holdout_fids or None,
-            drop_bands=cfg.drop_bands or None,
-            norm_stats=train_ds.norm_stats,
-            patch_size=cfg.patch_size,
-        )
+    val_ds = HRRRPatchDataset(
+        table_path=cfg.table_path,
+        background_dir=cfg.background_dir,
+        background_pattern=cfg.background_pattern,
+        static_tifs=cfg.static_tifs,
+        landsat_tif=cfg.landsat_tif,
+        target_names=cfg.target_names,
+        train_days=val_days,
+        target_include_fids=holdout_fids or None,
+        rsun_tif=cfg.rsun_tif,
+        cdr_dir=cfg.cdr_dir,
+        cdr_pattern=cfg.cdr_pattern,
+        holdout_fids=holdout_fids or None,
+        drop_bands=cfg.drop_bands or None,
+        norm_stats=train_ds.norm_stats,
+        patch_size=cfg.patch_size,
+    )
     print(f"Val samples: {len(val_ds)}")
 
     if len(train_ds) == 0:
