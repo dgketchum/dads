@@ -73,6 +73,8 @@ class PatchAssimConfig:
     )
     val_years: list[int] = field(default_factory=lambda: [2024])
     holdout_fids_json: str | None = "artifacts/canonical_holdout_fids.json"
+    benchmark_mode: bool = False
+    drop_bands: list[str] = field(default_factory=list)
 
     device: str | None = None
 
@@ -156,6 +158,8 @@ def main() -> None:
         rsun_tif=cfg.rsun_tif,
         cdr_dir=cfg.cdr_dir,
         cdr_pattern=cfg.cdr_pattern,
+        holdout_fids=holdout_fids or None,
+        drop_bands=cfg.drop_bands or None,
         patch_size=cfg.patch_size,
     )
     print(f"Train samples: {len(train_ds)}, in_channels: {train_ds.in_channels}")
@@ -186,6 +190,8 @@ def main() -> None:
         rsun_tif=cfg.rsun_tif,
         cdr_dir=cfg.cdr_dir,
         cdr_pattern=cfg.cdr_pattern,
+        holdout_fids=holdout_fids or None,
+        drop_bands=cfg.drop_bands or None,
         patch_size=cfg.patch_size,
     )
     print(f"Val samples: {len(val_ds)}")
@@ -224,6 +230,7 @@ def main() -> None:
         lr=cfg.lr,
         tv_weight=cfg.tv_weight,
         huber_delta=cfg.huber_delta,
+        benchmark_mode=cfg.benchmark_mode,
     )
 
     if cfg.device and cfg.device.startswith("cuda"):
@@ -236,15 +243,16 @@ def main() -> None:
         accelerator = "auto"
         devices = 1
 
+    ckpt_metric = "val/target_mae" if cfg.benchmark_mode else "val_loss"
     callbacks = [
         ModelCheckpoint(
             dirpath=cfg.out_dir,
-            monitor="val_loss",
+            monitor=ckpt_metric,
             save_top_k=3,
             mode="min",
-            filename="ckpt-{epoch:03d}-{val_loss:.4f}",
+            filename="ckpt-{epoch:03d}-{" + ckpt_metric + ":.4f}",
         ),
-        EarlyStopping(monitor="val_loss", patience=20, mode="min"),
+        EarlyStopping(monitor=ckpt_metric, patience=20, mode="min"),
         LearningRateMonitor(logging_interval="epoch"),
         DayResamplingCallback(day_sampler),
     ]

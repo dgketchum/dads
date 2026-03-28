@@ -164,10 +164,14 @@ class HRRRPatchDataset(Dataset):
         rsun_tif: str | None = None,
         cdr_dir: str | None = None,
         cdr_pattern: str = "CDR_005deg_{date}.tif",
+        holdout_fids: set[str] | None = None,
+        drop_bands: list[str] | None = None,
         patch_size: int = 64,
         cache_size: int = 8,
     ):
         super().__init__()
+        self._holdout_fids = holdout_fids or set()
+        self._drop_bands = set(drop_bands or [])
         self.background_dir = background_dir
         self.background_pattern = background_pattern
         self.static_tifs = list(static_tifs) if static_tifs else []
@@ -233,9 +237,18 @@ class HRRRPatchDataset(Dataset):
 
         # --- Band names ---
         example_bg = self._background_path(self.samples.iloc[0]["day"])
-        self.background_feature_names: list[str] = _discover_band_names(
-            example_bg, "bg"
-        )
+        all_bg_names = _discover_band_names(example_bg, "bg")
+        # Filter out drop_bands
+        if self._drop_bands:
+            self._bg_keep_indices = [
+                i for i, n in enumerate(all_bg_names) if n not in self._drop_bands
+            ]
+            self.background_feature_names: list[str] = [
+                all_bg_names[i] for i in self._bg_keep_indices
+            ]
+        else:
+            self._bg_keep_indices = list(range(len(all_bg_names)))
+            self.background_feature_names: list[str] = all_bg_names
 
         self._static_tif_band_names: list[list[str]] = []
         self.static_feature_names: list[str] = []
@@ -369,7 +382,9 @@ class HRRRPatchDataset(Dataset):
         r1 = r0 + H
         c1 = c0 + W
 
-        bg_patch = bg_data[:, r0:r1, c0:c1].astype("float32")  # (C_bg, H, W)
+        bg_patch = bg_data[self._bg_keep_indices, r0:r1, c0:c1].astype(
+            "float32"
+        )  # (C_bg_filtered, H, W)
 
         # Projected pixel-center coordinates for static/Landsat lookup
         rows = np.arange(r0, r1)
@@ -536,6 +551,7 @@ class HRRRPatchDataset(Dataset):
         sta_cols_list: list[int] = []
         sta_targets_list: list[list[float]] = []
         sta_valid_list: list[list[bool]] = []
+        sta_holdout_list: list[bool] = []
 
         day_group = self._neighbor_day_groups.get(day)
         if day_group is not None and not day_group.empty:
@@ -550,6 +566,8 @@ class HRRRPatchDataset(Dataset):
             for j in np.where(in_patch)[0]:
                 sta_rows_list.append(int(sta_r[j] - r0))
                 sta_cols_list.append(int(sta_c[j] - c0))
+                fid_j = str(day_group.iloc[j]["fid"])
+                sta_holdout_list.append(fid_j in self._holdout_fids)
                 tgt = []
                 vld = []
                 for name in self.target_names:
@@ -566,6 +584,8 @@ class HRRRPatchDataset(Dataset):
             c_in = int(np.clip(int(c_center) - c0, 0, W - 1))
             sta_rows_list.append(r_in)
             sta_cols_list.append(c_in)
+            fid_center = str(row["fid"])
+            sta_holdout_list.append(fid_center in self._holdout_fids)
             tgt = []
             vld = []
             for name in self.target_names:
@@ -582,12 +602,18 @@ class HRRRPatchDataset(Dataset):
             torch.tensor(sta_cols_list, dtype=torch.long),
             torch.tensor(sta_targets_list, dtype=torch.float32),
             torch.tensor(sta_valid_list, dtype=torch.bool),
+            torch.tensor(sta_holdout_list, dtype=torch.bool),
         )
 
 
 def collate_patch(batch):
     """Collate a list of HRRRPatchDataset samples, padding station arrays to max N_sta."""
-    x_list, rows_list, cols_list, tgts_list, valid_list = zip(*batch)
+    # Support both 5-tuple (legacy) and 6-tuple (with holdout) formats
+    if len(batch[0]) == 6:
+        x_list, rows_list, cols_list, tgts_list, valid_list, holdout_list = zip(*batch)
+    else:
+        x_list, rows_list, cols_list, tgts_list, valid_list = zip(*batch)
+        holdout_list = None
 
     x = torch.stack(x_list)  # (B, C, H, W)
     n_targets = tgts_list[0].shape[1]
@@ -599,6 +625,8 @@ def collate_patch(batch):
     sta_targets = torch.zeros(B, max_sta, n_targets, dtype=torch.float32)
     sta_valid = torch.zeros(B, max_sta, n_targets, dtype=torch.bool)
 
+    sta_holdout = torch.zeros(B, max_sta, dtype=torch.bool)
+
     for i, (rows, cols, tgts, vld) in enumerate(
         zip(rows_list, cols_list, tgts_list, valid_list)
     ):
@@ -607,5 +635,7 @@ def collate_patch(batch):
         sta_cols[i, :n] = cols
         sta_targets[i, :n] = tgts
         sta_valid[i, :n] = vld
+        if holdout_list is not None:
+            sta_holdout[i, :n] = holdout_list[i]
 
-    return x, sta_rows, sta_cols, sta_targets, sta_valid
+    return x, sta_rows, sta_cols, sta_targets, sta_valid, sta_holdout
