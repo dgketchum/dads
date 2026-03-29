@@ -142,6 +142,10 @@ class LitPatchAssim(L.LightningModule):
             if self._val_baseline_count > 0:
                 bl = self._val_baseline_ae_sum / self._val_baseline_count
                 self.log("val/baseline_mae", bl)
+                self.log(
+                    "val/center_station_count",
+                    float(self._val_baseline_count),
+                )
             self._val_baseline_ae_sum = 0.0
             self._val_baseline_count = 0
 

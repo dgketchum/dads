@@ -13,6 +13,8 @@ import os
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 
+import numpy as np
+
 import lightning as L
 import pandas as pd
 import tomli_w
@@ -233,6 +235,19 @@ def main() -> None:
             indent=2,
         )
 
+    # Subsample val days deterministically for consistent scoring each epoch
+    all_val_days = sorted(val_days)
+    if cfg.val_days_per_epoch and cfg.val_days_per_epoch < len(all_val_days):
+        rng = np.random.default_rng(cfg.seed)
+        chosen = rng.choice(len(all_val_days), cfg.val_days_per_epoch, replace=False)
+        fixed_val_days = {all_val_days[i] for i in sorted(chosen)}
+        print(
+            f"Val day subsample: {len(fixed_val_days)} of {len(all_val_days)} "
+            f"(deterministic, seed={cfg.seed})"
+        )
+    else:
+        fixed_val_days = val_days
+
     val_ds = HRRRPatchDataset(
         table_path=cfg.table_path,
         background_dir=cfg.background_dir,
@@ -240,7 +255,7 @@ def main() -> None:
         static_tifs=cfg.static_tifs,
         landsat_tif=cfg.landsat_tif,
         target_names=cfg.target_names,
-        train_days=val_days,
+        train_days=fixed_val_days,
         target_include_fids=holdout_fids or None,
         rsun_tif=cfg.rsun_tif,
         cdr_dir=cfg.cdr_dir,
@@ -271,10 +286,9 @@ def main() -> None:
         collate_fn=collate_patch,
     )
     n_val_days = val_ds.samples["day"].nunique()
-    val_days_per_epoch = cfg.val_days_per_epoch or n_val_days
     val_sampler = DayGroupedSampler(
         val_ds.samples,
-        days_per_epoch=val_days_per_epoch,
+        days_per_epoch=n_val_days,
         base_seed=cfg.seed,
     )
     val_loader = DataLoader(
