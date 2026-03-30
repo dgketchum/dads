@@ -63,7 +63,9 @@ class UNetSmall(nn.Module):
         else:
             self.out = nn.Conv2d(b, out_channels, kernel_size=1)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor | list[torch.Tensor]:
+    def forward(
+        self, x: torch.Tensor, return_features: bool = False
+    ) -> torch.Tensor | list[torch.Tensor]:
         x1 = self.down1(x)
         x2 = self.down2(self.pool1(x1))
         xm = self.mid(self.pool2(x2))
@@ -75,6 +77,9 @@ class UNetSmall(nn.Module):
         x = self.up1(x)
         x = torch.cat([x, x1], dim=1)
         x = self.dec1(x)
+
+        if return_features:
+            return x  # (B, base, H, W) latent before output head
 
         if self.n_heads > 1:
             return [head(x) for head in self.heads]

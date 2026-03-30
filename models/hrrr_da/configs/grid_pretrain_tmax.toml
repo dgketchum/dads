@@ -22,7 +22,7 @@ tmax_c = "tmax_hrrr"
 
 background_dir = "/data/nvme0/dads_rasters/hrrr_1km_pnw"
 background_pattern = "HRRR_1km_{date}.tif"
-teacher_dir = "/nas/dads/mvp/urma_1km_pnw"
+teacher_dir = "/data/nvme0/dads_rasters/urma_1km_pnw"
 teacher_pattern = "URMA_1km_{date}.tif"
 static_tifs = ["/data/nvme0/dads_rasters/terrain_pnw_1km.tif"]
 landsat_tif = "/data/nvme0/dads_rasters/landsat_pnw_1km.tif"

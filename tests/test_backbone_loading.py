@@ -105,3 +105,63 @@ def test_multitarget_transfer():
     x = torch.randn(1, in_ch, 64, 64)
     out = stage_b(x)
     assert out.shape == (1, 1, 64, 64)
+
+
+def test_stage_b_to_c_da_off_parity():
+    """LitGridDA with DA-off and Stage B weights matches LitPatchAssim output."""
+    from models.hrrr_da.lit_grid_da import LitGridDA
+
+    in_ch = 10
+    stage_b = LitPatchAssim(
+        in_channels=in_ch,
+        target_names=["delta_tmax"],
+        hidden_dim=16,
+        benchmark_mode=False,
+    )
+
+    # Create LitGridDA with DA-off
+    stage_c = LitGridDA(
+        in_channels=in_ch,
+        target_names=["delta_tmax"],
+        source_ctx_dim=in_ch,
+        source_pay_dim=4,
+        hidden_dim=16,
+        da_enabled=False,
+        benchmark_mode=False,
+    )
+
+    # Transfer weights: Stage B model.* -> Stage C backbone.* + bg_head.*
+    sd = stage_b.state_dict()
+    c_sd = {}
+    for k, v in sd.items():
+        if k.startswith("model."):
+            inner = k[len("model.") :]
+            if inner.startswith("out."):
+                c_sd[f"bg_head.{inner[len('out.') :]}"] = v
+            elif inner.startswith("heads."):
+                continue  # skip multi-head keys
+            else:
+                c_sd[f"backbone.{inner}"] = v
+    stage_c.load_state_dict(c_sd, strict=False)
+
+    # Forward pass comparison
+    x = torch.randn(2, in_ch, 32, 32)
+    stage_b.eval()
+    stage_c.eval()
+    with torch.no_grad():
+        out_b = stage_b(x)
+        batch = {
+            "x_patch": x,
+            "src_rows": torch.zeros(2, 1, dtype=torch.long),
+            "src_cols": torch.zeros(2, 1, dtype=torch.long),
+            "src_ctx": torch.zeros(2, 1, in_ch),
+            "src_pay": torch.zeros(2, 1, 4),
+            "src_valid": torch.zeros(2, 1, dtype=torch.bool),
+            "raw_elev_patch": torch.zeros(2, 1, 32, 32),
+            "src_elev": torch.zeros(2, 1),
+        }
+        out_c = stage_c(batch)
+
+    assert torch.allclose(out_b, out_c, atol=1e-6), (
+        f"DA-off should match Stage B. Max diff: {(out_b - out_c).abs().max()}"
+    )

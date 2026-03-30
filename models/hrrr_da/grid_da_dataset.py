@@ -1,0 +1,335 @@
+"""
+DA-aware patch dataset for grid backbone Stage C.
+
+Extends ``HRRRPatchDataset`` to also return source station tensors
+(context, payload, raw elevation) needed by ``GridDAFusion``.
+
+Held-out stations are excluded from the source set but remain as
+supervision query targets via the existing ``sta_holdout`` mask.
+"""
+
+from __future__ import annotations
+
+import numpy as np
+import pandas as pd
+import torch
+from torch.utils.data import Dataset
+
+from models.hrrr_da.patch_assim_dataset import HRRRPatchDataset
+
+# Default DA payload columns (aligned with DA v0 policy).
+DEFAULT_PAYLOAD_COLS = ["delta_tmax", "delta_tmin"]
+
+
+class GridDAPatchDataset(Dataset):
+    """Wraps ``HRRRPatchDataset`` and augments each sample with source DA tensors.
+
+    Parameters
+    ----------
+    base_kwargs : dict
+        All keyword arguments forwarded to ``HRRRPatchDataset.__init__``.
+    payload_cols : list[str]
+        Observation-derived columns to include in the source payload.
+        A ``valid_<col>`` binary flag is appended for each.
+    teacher_dir, teacher_pattern : str | None
+        Optional URMA teacher directory for dense stabiliser loss in Stage C.
+        If provided, returns ``y_dense`` and ``y_valid`` like ``DenseIncrementDataset``.
+    increment_map : dict[str, str] | None
+        ``{urma_band: hrrr_band}`` for dense teacher targets.
+    """
+
+    def __init__(
+        self,
+        payload_cols: list[str] | None = None,
+        teacher_dir: str | None = None,
+        teacher_pattern: str = "URMA_1km_{date}.tif",
+        increment_map: dict[str, str] | None = None,
+        **base_kwargs,
+    ):
+        self._base = HRRRPatchDataset(**base_kwargs)
+        self.payload_cols = list(payload_cols or DEFAULT_PAYLOAD_COLS)
+        self.source_pay_dim = len(self.payload_cols) * 2  # value + valid flag each
+
+        self.teacher_dir = teacher_dir
+        self.teacher_pattern = teacher_pattern
+        self.increment_map = dict(increment_map or {})
+
+        # URMA / HRRR band indices for dense teacher (optional)
+        if self.teacher_dir and self.increment_map:
+            from models.hrrr_da.hetero_dataset import _discover_band_names
+            import os
+
+            example_day = self._base.samples.iloc[0]["day"]
+            urma_path = os.path.join(
+                self.teacher_dir,
+                self.teacher_pattern.format(
+                    date=pd.Timestamp(example_day).strftime("%Y%m%d")
+                ),
+            )
+            if os.path.exists(urma_path):
+                urma_names = _discover_band_names(urma_path, "urma")
+                self._urma_band_idx = {n: i for i, n in enumerate(urma_names)}
+            else:
+                self._urma_band_idx = {}
+
+            # Full HRRR band names (pre-drop) for increment lookup
+            example_bg = self._base._background_path(example_day)
+            bg_names = _discover_band_names(example_bg, "bg")
+            self._hrrr_band_idx = {n: i for i, n in enumerate(bg_names)}
+
+        # Pre-load raw elevation band index from static terrain TIF
+        self._elev_band_idx: int | None = None
+        if self._base.static_tifs:
+            for tif_path, names in zip(
+                self._base.static_tifs, self._base._static_tif_band_names
+            ):
+                for i, n in enumerate(names):
+                    if n in ("elevation", "terrain_pnw_1km_0"):
+                        self._elev_tif = tif_path
+                        self._elev_band_idx = i
+                        break
+                if self._elev_band_idx is not None:
+                    break
+
+    # Delegate properties
+    @property
+    def samples(self):
+        return self._base.samples
+
+    @property
+    def in_channels(self):
+        return self._base.in_channels
+
+    @property
+    def feature_names(self):
+        return self._base.feature_names
+
+    @property
+    def target_names(self):
+        return self._base.target_names
+
+    @property
+    def norm_stats(self):
+        return self._base.norm_stats
+
+    def __len__(self):
+        return len(self._base)
+
+    def __getitem__(self, idx: int):
+        # Get base sample
+        (
+            x_patch,
+            sta_rows,
+            sta_cols,
+            sta_targets,
+            sta_valid,
+            sta_holdout,
+            sta_is_center,
+        ) = self._base[idx]
+
+        row = self._base.samples.iloc[idx]
+        day = pd.Timestamp(row["day"]).normalize()
+        H = W = self._base.patch_size
+
+        # Recover patch bounds (same logic as base dataset)
+        r_center = int(self._base._center_rows[idx])
+        c_center = int(self._base._center_cols[idx])
+        r0 = int(np.clip(r_center - H // 2, 0, self._base._domain_H - H))
+        c0 = int(np.clip(c_center - W // 2, 0, self._base._domain_W - W))
+
+        # --- Source stations: non-holdout in-patch stations ---
+        day_group = self._base._neighbor_day_groups.get(day)
+        day_rc = self._base._neighbor_rc.get(day)
+
+        src_rows_list: list[int] = []
+        src_cols_list: list[int] = []
+        src_pay_list: list[list[float]] = []
+
+        if day_group is not None and day_rc is not None and not day_group.empty:
+            sta_r, sta_c = day_rc
+            in_patch = (
+                (sta_r >= r0) & (sta_r < r0 + H) & (sta_c >= c0) & (sta_c < c0 + W)
+            )
+            for j in np.where(in_patch)[0]:
+                fid_j = str(day_group.iloc[j]["fid"])
+                # Holdout stations excluded from source set
+                if fid_j in self._base._holdout_fids:
+                    continue
+                src_rows_list.append(int(sta_r[j] - r0))
+                src_cols_list.append(int(sta_c[j] - c0))
+                pay = []
+                for col in self.payload_cols:
+                    val = day_group.iloc[j].get(col, float("nan"))
+                    is_valid = pd.notna(val)
+                    pay.append(float(val) if is_valid else 0.0)
+                    pay.append(1.0 if is_valid else 0.0)
+                src_pay_list.append(pay)
+
+        n_src = len(src_rows_list)
+
+        # Source context: extract from normalised x_patch at source pixels
+        if n_src > 0:
+            src_r = torch.tensor(src_rows_list, dtype=torch.long)
+            src_c = torch.tensor(src_cols_list, dtype=torch.long)
+            # x_patch is (C, H, W); extract (n_src, C) at source pixels
+            src_ctx = x_patch[:, src_r, src_c].T  # (n_src, C)
+            src_pay = torch.tensor(src_pay_list, dtype=torch.float32)
+        else:
+            src_r = torch.zeros(0, dtype=torch.long)
+            src_c = torch.zeros(0, dtype=torch.long)
+            src_ctx = torch.zeros(0, x_patch.shape[0], dtype=torch.float32)
+            src_pay = torch.zeros(0, self.source_pay_dim, dtype=torch.float32)
+
+        src_valid = torch.ones(n_src, dtype=torch.bool)
+
+        # Raw elevation patch (un-normalised) for geometry computation
+        if self._elev_band_idx is not None:
+            elev_data = self._base.raster_cache.get(self._elev_tif)
+            raw_elev = np.nan_to_num(
+                elev_data["data"][self._elev_band_idx, r0 : r0 + H, c0 : c0 + W].astype(
+                    "float32"
+                ),
+                nan=0.0,
+            )
+            raw_elev_patch = torch.from_numpy(raw_elev).unsqueeze(0)  # (1, H, W)
+        else:
+            raw_elev_patch = torch.zeros(1, H, W)
+
+        # Source elevation
+        if n_src > 0 and self._elev_band_idx is not None:
+            src_elev = raw_elev_patch[0, src_r, src_c]  # (n_src,)
+        else:
+            src_elev = torch.zeros(n_src)
+
+        # --- Optional dense teacher target ---
+        y_dense: torch.Tensor | None = None
+        y_valid_dense: torch.Tensor | None = None
+        if self.teacher_dir and self.increment_map:
+            import os
+
+            urma_path = os.path.join(
+                self.teacher_dir,
+                self.teacher_pattern.format(date=day.strftime("%Y%m%d")),
+            )
+            if os.path.exists(urma_path) and self._urma_band_idx:
+                urma_data = self._base.raster_cache.get(urma_path)
+                bg_data = self._base.raster_cache.get(self._base._background_path(day))
+                n_t = len(self.increment_map)
+                yd = np.empty((n_t, H, W), dtype="float32")
+                yv = np.empty((n_t, H, W), dtype="bool")
+                for t_i, (uname, hname) in enumerate(self.increment_map.items()):
+                    if uname in self._urma_band_idx and hname in self._hrrr_band_idx:
+                        u = urma_data["data"][
+                            self._urma_band_idx[uname], r0 : r0 + H, c0 : c0 + W
+                        ].astype("float32")
+                        h = bg_data["data"][
+                            self._hrrr_band_idx[hname], r0 : r0 + H, c0 : c0 + W
+                        ].astype("float32")
+                        delta = u - h
+                        valid = np.isfinite(delta)
+                        yd[t_i] = np.where(valid, delta, 0.0)
+                        yv[t_i] = valid
+                    else:
+                        yd[t_i] = 0.0
+                        yv[t_i] = False
+                y_dense = torch.from_numpy(yd)
+                y_valid_dense = torch.from_numpy(yv)
+
+        return {
+            "x_patch": x_patch,
+            "sta_rows": sta_rows,
+            "sta_cols": sta_cols,
+            "sta_targets": sta_targets,
+            "sta_valid": sta_valid,
+            "sta_holdout": sta_holdout,
+            "sta_is_center": sta_is_center,
+            "src_rows": src_r,
+            "src_cols": src_c,
+            "src_ctx": src_ctx,
+            "src_pay": src_pay,
+            "src_valid": src_valid,
+            "raw_elev_patch": raw_elev_patch,
+            "src_elev": src_elev,
+            "y_dense": y_dense,
+            "y_valid_dense": y_valid_dense,
+        }
+
+
+def collate_grid_da(batch: list[dict]) -> dict:
+    """Collate GridDAPatchDataset samples, padding both station and source dims."""
+    B = len(batch)
+
+    # --- Grid input (fixed size) ---
+    x = torch.stack([s["x_patch"] for s in batch])
+
+    # --- Station supervision (variable length, pad to max) ---
+    max_sta = max(s["sta_rows"].shape[0] for s in batch)
+    n_targets = (
+        batch[0]["sta_targets"].shape[1] if batch[0]["sta_targets"].ndim > 1 else 1
+    )
+
+    sta_rows = torch.zeros(B, max_sta, dtype=torch.long)
+    sta_cols = torch.zeros(B, max_sta, dtype=torch.long)
+    sta_targets = torch.zeros(B, max_sta, n_targets, dtype=torch.float32)
+    sta_valid = torch.zeros(B, max_sta, n_targets, dtype=torch.bool)
+    sta_holdout = torch.zeros(B, max_sta, dtype=torch.bool)
+    sta_is_center = torch.zeros(B, max_sta, dtype=torch.bool)
+
+    for i, s in enumerate(batch):
+        n = s["sta_rows"].shape[0]
+        sta_rows[i, :n] = s["sta_rows"]
+        sta_cols[i, :n] = s["sta_cols"]
+        sta_targets[i, :n] = s["sta_targets"]
+        sta_valid[i, :n] = s["sta_valid"]
+        sta_holdout[i, :n] = s["sta_holdout"]
+        sta_is_center[i, :n] = s["sta_is_center"]
+
+    # --- Source stations (variable length, pad to max) ---
+    max_src = max(s["src_rows"].shape[0] for s in batch)
+    src_ctx_dim = batch[0]["src_ctx"].shape[1] if batch[0]["src_ctx"].ndim > 1 else 0
+    src_pay_dim = batch[0]["src_pay"].shape[1] if batch[0]["src_pay"].ndim > 1 else 0
+
+    src_rows = torch.zeros(B, max(max_src, 1), dtype=torch.long)
+    src_cols = torch.zeros(B, max(max_src, 1), dtype=torch.long)
+    src_ctx = torch.zeros(B, max(max_src, 1), src_ctx_dim, dtype=torch.float32)
+    src_pay = torch.zeros(B, max(max_src, 1), src_pay_dim, dtype=torch.float32)
+    src_valid = torch.zeros(B, max(max_src, 1), dtype=torch.bool)
+    src_elev = torch.zeros(B, max(max_src, 1), dtype=torch.float32)
+
+    for i, s in enumerate(batch):
+        n = s["src_rows"].shape[0]
+        if n > 0:
+            src_rows[i, :n] = s["src_rows"]
+            src_cols[i, :n] = s["src_cols"]
+            src_ctx[i, :n] = s["src_ctx"]
+            src_pay[i, :n] = s["src_pay"]
+            src_valid[i, :n] = s["src_valid"]
+            src_elev[i, :n] = s["src_elev"]
+
+    raw_elev_patch = torch.stack([s["raw_elev_patch"] for s in batch])
+
+    # --- Optional dense teacher ---
+    has_dense = batch[0]["y_dense"] is not None
+    y_dense = torch.stack([s["y_dense"] for s in batch]) if has_dense else None
+    y_valid_dense = (
+        torch.stack([s["y_valid_dense"] for s in batch]) if has_dense else None
+    )
+
+    return {
+        "x_patch": x,
+        "sta_rows": sta_rows,
+        "sta_cols": sta_cols,
+        "sta_targets": sta_targets,
+        "sta_valid": sta_valid,
+        "sta_holdout": sta_holdout,
+        "sta_is_center": sta_is_center,
+        "src_rows": src_rows,
+        "src_cols": src_cols,
+        "src_ctx": src_ctx,
+        "src_pay": src_pay,
+        "src_valid": src_valid,
+        "raw_elev_patch": raw_elev_patch,
+        "src_elev": src_elev,
+        "y_dense": y_dense,
+        "y_valid_dense": y_valid_dense,
+    }
