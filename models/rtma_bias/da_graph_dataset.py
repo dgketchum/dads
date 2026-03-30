@@ -55,15 +55,15 @@ class DAGraphDataset(Dataset):
             meta = json.load(f)
 
         family = meta.get("family", "")
-        if family not in ("da-graph-v0", "da-graph-v1"):
-            raise ValueError(f"Expected da-graph-v0 or v1 family, got {family}")
+        if family not in ("da-graph-v0", "da-graph-v1", "da-graph-v2"):
+            raise ValueError(f"Expected da-graph-v0/v1/v2 family, got {family}")
         self._family = family
 
         self.query_feature_cols: list[str] = meta["query_feature_cols"]
         self.target_cols: list[str] = meta["target_cols"]
 
         # v1: separate context/payload; v0: combined source_feature_cols
-        if family == "da-graph-v1":
+        if family in ("da-graph-v1", "da-graph-v2"):
             self.source_context_feature_cols: list[str] = meta[
                 "source_context_feature_cols"
             ]
@@ -235,6 +235,7 @@ class DAGraphDataset(Dataset):
         if self._family == "da-graph-v1":
             out["source"].context_x = s_ctx
             out["source"].payload_x = s_pay
+            out["source"].num_nodes = s_ctx.shape[0]
         else:
             out["source"].x = s_ctx  # v0 compat
 

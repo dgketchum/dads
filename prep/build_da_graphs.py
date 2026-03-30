@@ -364,12 +364,16 @@ def main():
         fid_list = list(fids)
         n_query = len(fid_list)
 
-        # === QUERY NODE FEATURES (same as core-graph-v0) ===
+        # === QUERY NODE FEATURES ===
         wx_arr = day_df[weather_cols].values.astype("float32")
         if extra_cols:
             ex_arr = day_df[extra_cols].values.astype("float32")
         else:
             ex_arr = np.zeros((n_query, 0), dtype="float32")
+        if explicit_extra_cols:
+            expl_arr = day_df[explicit_extra_cols].values.astype("float32")
+        else:
+            expl_arr = np.zeros((n_query, 0), dtype="float32")
 
         terrain_arr = np.stack(
             [fid_terrain.get(f, np.zeros(6, dtype="float32")) for f in fid_list]
@@ -408,6 +412,8 @@ def main():
         parts = [wx_arr]
         if ex_arr.shape[1] > 0:
             parts.append(ex_arr)
+        if expl_arr.shape[1] > 0:
+            parts.append(expl_arr)
         parts.extend([terrain_arr, rsun_arr, landsat_arr, temporal_arr, loc_arr])
         query_x = np.concatenate(parts, axis=1)
         query_x = np.nan_to_num(query_x, nan=0.0, posinf=0.0, neginf=0.0)
@@ -559,8 +565,11 @@ def main():
         json.dump(sorted(val_holdout), f)
 
     # Save metadata
+    # Family version: da-graph-v1 if standard 37-feature context,
+    # da-graph-v2 if extra features were added (new family per policy)
+    family = "da-graph-v2" if explicit_extra_cols else "da-graph-v1"
     meta = {
-        "family": "da-graph-v1",
+        "family": family,
         "query_feature_cols": query_feature_cols,
         "source_context_feature_cols": source_context_feature_cols,
         "source_payload_feature_cols": source_payload_feature_cols,
@@ -591,6 +600,8 @@ def main():
         "n_holdout_val_days": len(val_holdout),
         "query_edge_norm": query_edge_norm,
         "source_query_edge_norm": sq_edge_norm,
+        "extra_feature_cols": explicit_extra_cols,
+        "extra_feature_data_class": {c: "background" for c in explicit_extra_cols},
     }
     with open(os.path.join(args.out_dir, "meta.json"), "w") as f:
         json.dump(meta, f, indent=2)

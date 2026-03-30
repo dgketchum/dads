@@ -22,11 +22,22 @@ def main():
     df = pd.read_parquet(args.input)
     print(f"  Shape: {df.shape}")
 
+    # Match only the 3-hourly timestamped columns (00, 03, ..., 21),
+    # not any derived daily aggregates that may already exist in the table.
+    _3h_stamps = {"00", "03", "06", "09", "12", "15", "18", "21"}
     irwin_cols = sorted(
-        [c for c in df.columns if c.startswith("irwin_cdr_") and c.endswith("_geosat")]
+        c
+        for c in df.columns
+        if c.startswith("irwin_cdr_")
+        and c.endswith("_geosat")
+        and c.split("_")[2] in _3h_stamps
     )
     irwvp_cols = sorted(
-        [c for c in df.columns if c.startswith("irwvp_") and c.endswith("_geosat")]
+        c
+        for c in df.columns
+        if c.startswith("irwvp_")
+        and c.endswith("_geosat")
+        and c.split("_")[1] in _3h_stamps
     )
     print(f"  IR window cols: {len(irwin_cols)}")
     print(f"  Water vapor cols: {len(irwvp_cols)}")
