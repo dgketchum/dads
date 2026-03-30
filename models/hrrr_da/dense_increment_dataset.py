@@ -12,6 +12,7 @@ same day while remaining deterministic within an epoch.
 
 from __future__ import annotations
 
+import hashlib
 import os
 
 import numpy as np
@@ -321,17 +322,34 @@ class DenseIncrementDataset(Dataset):
     def _compute_all_norm_stats(
         self, bg_data: dict, all_bg_names: list[str]
     ) -> dict[str, dict[str, float]]:
-        """Compute per-channel norm stats from rasters (domain-wide)."""
+        """Compute per-channel norm stats from rasters (multi-day sample)."""
         stats: dict[str, dict[str, float]] = {}
 
-        # Background bands
-        for i, name in zip(self._bg_keep_indices, self.background_feature_names):
-            band = bg_data["data"][i].ravel()
-            valid = band[np.isfinite(band)]
-            if len(valid) > 0:
+        # Background bands — sample multiple days for representative stats
+        n_bg_sample = min(20, len(self._days))
+        step = max(1, len(self._days) // n_bg_sample)
+        sampled_days = [self._days[i] for i in range(0, len(self._days), step)][
+            :n_bg_sample
+        ]
+        accum: dict[str, list[np.ndarray]] = {
+            name: [] for name in self.background_feature_names
+        }
+        for sday in sampled_days:
+            bg_path = self._background_path(sday)
+            if not os.path.exists(bg_path):
+                continue
+            sdata = self.raster_cache.get(bg_path)
+            for i, name in zip(self._bg_keep_indices, self.background_feature_names):
+                band = sdata["data"][i].ravel()
+                valid = band[np.isfinite(band)]
+                if len(valid) > 0:
+                    accum[name].append(valid)
+        for name, arrays in accum.items():
+            if arrays:
+                cat = np.concatenate(arrays)
                 stats[name] = {
-                    "mean": float(valid.mean()),
-                    "std": float(max(valid.std(), 1e-8)),
+                    "mean": float(cat.mean()),
+                    "std": float(max(cat.std(), 1e-8)),
                 }
 
         # Static TIFs
@@ -396,8 +414,9 @@ class DenseIncrementDataset(Dataset):
         period = _landsat_period(doy)
         H = W = self.patch_size
 
-        # --- Tile origin (epoch-diverse) ---
-        seed = hash((self.base_seed + self._epoch, str(day), tile_idx)) & 0xFFFF_FFFF
+        # --- Tile origin (epoch-diverse, deterministic across processes) ---
+        key = f"{self.base_seed + self._epoch}:{day.strftime('%Y%m%d')}:{tile_idx}"
+        seed = int(hashlib.sha256(key.encode()).hexdigest()[:8], 16)
         rng = np.random.default_rng(seed)
         r0 = int(rng.integers(0, self._domain_H - H + 1))
         c0 = int(rng.integers(0, self._domain_W - W + 1))

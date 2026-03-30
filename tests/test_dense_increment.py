@@ -175,6 +175,35 @@ def test_epoch_diversity(tmp_path):
     assert not torch.allclose(x0, x1)
 
 
+def test_tile_determinism(tmp_path):
+    """Two independent dataset instances with same seed produce same tiles."""
+    bg_dir, urma_dir, terrain_path = _make_test_rasters(tmp_path)
+    train_days = {pd.Timestamp("2020-01-01")}
+
+    kwargs = dict(
+        background_dir=str(bg_dir),
+        background_pattern="HRRR_1km_{date}.tif",
+        teacher_dir=str(urma_dir),
+        teacher_pattern="URMA_1km_{date}.tif",
+        static_tifs=[str(terrain_path)],
+        train_days=train_days,
+        increment_map={"tmax_c": "tmax_hrrr"},
+        patch_size=64,
+        tiles_per_day=1,
+        base_seed=42,
+    )
+    ds1 = DenseIncrementDataset(**kwargs)
+    ds2 = DenseIncrementDataset(**kwargs)
+
+    ds1.set_epoch(3)
+    ds2.set_epoch(3)
+    x1, y1, v1 = ds1[0]
+    x2, y2, v2 = ds2[0]
+    assert torch.allclose(x1, x2)
+    assert torch.allclose(y1, y2)
+    assert torch.equal(v1, v2)
+
+
 def test_collate(tmp_path):
     """Verify collate_dense_increment stacks correctly."""
     bg_dir, urma_dir, terrain_path = _make_test_rasters(tmp_path)

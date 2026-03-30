@@ -321,9 +321,13 @@ def main() -> None:
         benchmark_mode=cfg.benchmark_mode,
     )
 
-    if cfg.pretrained_ckpt and os.path.exists(cfg.pretrained_ckpt):
+    if cfg.pretrained_ckpt:
         import torch
 
+        if not os.path.exists(cfg.pretrained_ckpt):
+            raise FileNotFoundError(
+                f"pretrained_ckpt does not exist: {cfg.pretrained_ckpt}"
+            )
         sd = torch.load(cfg.pretrained_ckpt, map_location="cpu")["state_dict"]
         backbone_sd = {
             k: v for k, v in sd.items() if "out." not in k and "heads." not in k

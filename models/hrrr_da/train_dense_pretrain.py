@@ -313,6 +313,16 @@ def main() -> None:
 
     trainer.fit(model, train_loader, val_loader)
 
+    # Symlink best checkpoint to a stable name for downstream configs
+    ckpt_cb = [c for c in callbacks if isinstance(c, ModelCheckpoint)][0]
+    best = ckpt_cb.best_model_path
+    if best:
+        link = os.path.join(cfg.out_dir, "best.ckpt")
+        if os.path.islink(link) or os.path.exists(link):
+            os.remove(link)
+        os.symlink(os.path.basename(best), link)
+        print(f"Best checkpoint symlinked: {link} -> {os.path.basename(best)}")
+
     metrics = {
         k: v.item() if hasattr(v, "item") else v
         for k, v in trainer.callback_metrics.items()

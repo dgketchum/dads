@@ -28,7 +28,7 @@ cdr_pattern = "CDR_005deg_{date}.tif"
 out_dir = "/nas/dads/runs/grid_pretrain_finetune_tmax/seed_42"
 
 # Stage A artifacts
-pretrained_ckpt = "/nas/dads/runs/grid_pretrain_tmax/seed_42/ckpt-best.ckpt"
+pretrained_ckpt = "/nas/dads/runs/grid_pretrain_tmax/seed_42/best.ckpt"
 norm_stats_json = "/nas/dads/runs/grid_pretrain_tmax/seed_42/norm_stats.json"
 
 train_years = [2018, 2019, 2020, 2021, 2022, 2023]
