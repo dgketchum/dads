@@ -322,35 +322,59 @@ class DenseIncrementDataset(Dataset):
     def _compute_all_norm_stats(
         self, bg_data: dict, all_bg_names: list[str]
     ) -> dict[str, dict[str, float]]:
-        """Compute per-channel norm stats from rasters (multi-day sample)."""
+        """Compute per-channel norm stats from rasters (all training days).
+
+        Uses streaming Welford accumulation so memory stays O(pixels-per-day)
+        regardless of how many days are processed.
+        """
         stats: dict[str, dict[str, float]] = {}
 
-        # Background bands — sample multiple days for representative stats
-        n_bg_sample = min(20, len(self._days))
-        step = max(1, len(self._days) // n_bg_sample)
-        sampled_days = [self._days[i] for i in range(0, len(self._days), step)][
-            :n_bg_sample
-        ]
-        accum: dict[str, list[np.ndarray]] = {
-            name: [] for name in self.background_feature_names
-        }
-        for sday in sampled_days:
+        # Background bands — stream all training days
+        n_bands = len(self.background_feature_names)
+        count = np.zeros(n_bands, dtype="float64")
+        running_mean = np.zeros(n_bands, dtype="float64")
+        running_m2 = np.zeros(n_bands, dtype="float64")
+
+        print(
+            f"Computing background norm stats over {len(self._days)} days...",
+            flush=True,
+        )
+        for d_idx, sday in enumerate(self._days):
             bg_path = self._background_path(sday)
             if not os.path.exists(bg_path):
                 continue
             sdata = self.raster_cache.get(bg_path)
-            for i, name in zip(self._bg_keep_indices, self.background_feature_names):
-                band = sdata["data"][i].ravel()
+            for b, (keep_i, name) in enumerate(
+                zip(self._bg_keep_indices, self.background_feature_names)
+            ):
+                band = sdata["data"][keep_i].ravel().astype("float64")
                 valid = band[np.isfinite(band)]
-                if len(valid) > 0:
-                    accum[name].append(valid)
-        for name, arrays in accum.items():
-            if arrays:
-                cat = np.concatenate(arrays)
+                if len(valid) == 0:
+                    continue
+                # Welford online update
+                for val in [valid]:  # batch update
+                    n_new = len(val)
+                    new_mean = val.mean()
+                    new_m2 = val.var() * n_new
+                    n_old = count[b]
+                    n_total = n_old + n_new
+                    delta = new_mean - running_mean[b]
+                    running_mean[b] = (
+                        n_old * running_mean[b] + n_new * new_mean
+                    ) / n_total
+                    running_m2[b] += new_m2 + delta**2 * n_old * n_new / n_total
+                    count[b] = n_total
+            if (d_idx + 1) % 100 == 0:
+                print(f"  norm stats: {d_idx + 1}/{len(self._days)} days", flush=True)
+
+        for b, name in enumerate(self.background_feature_names):
+            if count[b] > 0:
+                std = float(np.sqrt(running_m2[b] / count[b]))
                 stats[name] = {
-                    "mean": float(cat.mean()),
-                    "std": float(max(cat.std(), 1e-8)),
+                    "mean": float(running_mean[b]),
+                    "std": max(std, 1e-8),
                 }
+        print("Background norm stats computed.", flush=True)
 
         # Static TIFs
         for tif_path, tif_names in zip(self.static_tifs, self._static_tif_band_names):

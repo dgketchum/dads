@@ -168,7 +168,11 @@ def main() -> None:
 
     # Load canonical norm stats from Stage A if provided
     provided_norm_stats: dict | None = None
-    if cfg.norm_stats_json and os.path.exists(cfg.norm_stats_json):
+    if cfg.norm_stats_json:
+        if not os.path.exists(cfg.norm_stats_json):
+            raise FileNotFoundError(
+                f"norm_stats_json does not exist: {cfg.norm_stats_json}"
+            )
         with open(cfg.norm_stats_json) as f:
             provided_norm_stats = json.load(f).get("norm_stats")
         print(f"Loaded norm stats from {cfg.norm_stats_json}")
