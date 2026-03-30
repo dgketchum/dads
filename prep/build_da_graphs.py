@@ -22,6 +22,7 @@ import time
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
+import functools
 import numpy as np
 import pandas as pd
 import rasterio
@@ -35,6 +36,9 @@ from prep.graph_utils import (
     build_static_edge_attrs,
     compute_edge_norm,
 )
+
+# Force flushed output for nohup/log compatibility
+print = functools.partial(print, flush=True)  # type: ignore[assignment]
 
 # Reuse feature definitions from build_graphs.py
 TERRAIN_COLS = ["elevation", "slope", "aspect_sin", "aspect_cos", "tpi_4", "tpi_10"]
@@ -106,6 +110,12 @@ def _parse_args():
     p.add_argument("--source-k", type=int, default=16)
     p.add_argument("--max-radius-km", type=float, default=150.0)
     p.add_argument("--max-abs-target", type=float, default=None)
+    p.add_argument(
+        "--extra-feature-cols",
+        nargs="*",
+        default=None,
+        help="Explicit extra column names to include from parquet",
+    )
     # Source feature columns (beyond deltas)
     p.add_argument(
         "--source-hrrr-cols",
@@ -155,15 +165,27 @@ def main():
     df = df.dropna(subset=[required_col])
     print(f"Kept {len(df)} of {before} rows with {required_col}")
 
-    # Fill NaN in weather/extra
-    for c in weather_cols + extra_cols:
+    # Explicit extra feature columns
+    explicit_extra_cols: list[str] = []
+    if args.extra_feature_cols:
+        for c in args.extra_feature_cols:
+            if c in df.columns:
+                explicit_extra_cols.append(c)
+            else:
+                print(f"WARNING: --extra-feature-cols '{c}' not found in table")
+        if explicit_extra_cols:
+            print(f"Explicit extra cols: {explicit_extra_cols}")
+
+    # Fill NaN in weather/extra/explicit
+    for c in weather_cols + extra_cols + explicit_extra_cols:
         if c in df.columns:
             df[c] = df[c].fillna(0.0)
 
-    # Query feature list (matches core-graph-v0)
+    # Query feature list
     query_feature_cols = (
         weather_cols
         + extra_cols
+        + explicit_extra_cols
         + TERRAIN_COLS
         + [RSUN_COL]
         + LANDSAT_COLS
