@@ -125,7 +125,7 @@ class DAGraphDataset(Dataset):
                     query_xs.append(qx[mask])
             else:
                 query_xs.append(qx)
-            if self._family == "da-graph-v1":
+            if self._family in ("da-graph-v1", "da-graph-v2"):
                 source_ctx_xs.append(g["source"].context_x)
                 source_pay_xs.append(g["source"].payload_x)
             else:
@@ -175,7 +175,7 @@ class DAGraphDataset(Dataset):
         qy = g["query"].y.clone()
         q_valid = g["query"].valid_mask.clone()
 
-        if self._family == "da-graph-v1":
+        if self._family in ("da-graph-v1", "da-graph-v2"):
             s_ctx = g["source"].context_x.clone()
             s_pay = g["source"].payload_x.clone()
         else:
@@ -232,7 +232,7 @@ class DAGraphDataset(Dataset):
         if q_valid.ndim == 2:
             out["query"].valid_mask = q_valid
 
-        if self._family == "da-graph-v1":
+        if self._family in ("da-graph-v1", "da-graph-v2"):
             out["source"].context_x = s_ctx
             out["source"].payload_x = s_pay
             out["source"].num_nodes = s_ctx.shape[0]
