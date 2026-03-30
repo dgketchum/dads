@@ -1,0 +1,35 @@
+name = "grid_pretrain_tmax"
+description = "Dense URMA−HRRR tmax pretraining for grid backbone (Stage A)"
+
+hidden_dim = 32
+lr = 3e-4
+tv_weight = 1e-4
+huber_delta = 2.0
+batch_size = 32
+epochs = 50
+seed = 42
+tiles_per_day = 8
+days_per_epoch = 250
+val_frac = 0.1
+num_workers = 4
+patch_size = 64
+
+target_names = ["delta_tmax"]
+drop_bands = ["n_hours"]
+
+[increment_map]
+tmax_c = "tmax_hrrr"
+
+background_dir = "/data/nvme0/dads_rasters/hrrr_1km_pnw"
+background_pattern = "HRRR_1km_{date}.tif"
+teacher_dir = "/nas/dads/mvp/urma_1km_pnw"
+teacher_pattern = "URMA_1km_{date}.tif"
+static_tifs = ["/data/nvme0/dads_rasters/terrain_pnw_1km.tif"]
+landsat_tif = "/data/nvme0/dads_rasters/landsat_pnw_1km.tif"
+rsun_tif = "/data/nvme0/dads_rasters/rsun_pnw_1km.tif"
+cdr_dir = "/data/nvme0/dads_rasters/cdr_native_pnw"
+cdr_pattern = "CDR_005deg_{date}.tif"
+out_dir = "/nas/dads/runs/grid_pretrain_tmax/seed_42"
+
+train_years = [2018, 2019, 2020, 2021, 2022, 2023]
+device = "cuda:0"

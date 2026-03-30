@@ -79,6 +79,9 @@ class PatchAssimConfig:
     benchmark_mode: bool = False
     drop_bands: list[str] = field(default_factory=list)
 
+    pretrained_ckpt: str | None = None
+    norm_stats_json: str | None = None
+
     device: str | None = None
 
     def save_toml(self, path: str) -> None:
@@ -163,6 +166,13 @@ def main() -> None:
     with open(os.path.join(cfg.out_dir, "val_holdout_fids.json"), "w") as f:
         json.dump(sorted(val_holdout), f)
 
+    # Load canonical norm stats from Stage A if provided
+    provided_norm_stats: dict | None = None
+    if cfg.norm_stats_json and os.path.exists(cfg.norm_stats_json):
+        with open(cfg.norm_stats_json) as f:
+            provided_norm_stats = json.load(f).get("norm_stats")
+        print(f"Loaded norm stats from {cfg.norm_stats_json}")
+
     train_ds = HRRRPatchDataset(
         table_path=cfg.table_path,
         background_dir=cfg.background_dir,
@@ -178,6 +188,7 @@ def main() -> None:
         cdr_pattern=cfg.cdr_pattern,
         holdout_fids=holdout_fids or None,
         drop_bands=cfg.drop_bands or None,
+        norm_stats=provided_norm_stats,
         patch_size=cfg.patch_size,
     )
     in_channels = train_ds.in_channels
@@ -310,6 +321,20 @@ def main() -> None:
         benchmark_mode=cfg.benchmark_mode,
     )
 
+    if cfg.pretrained_ckpt and os.path.exists(cfg.pretrained_ckpt):
+        import torch
+
+        sd = torch.load(cfg.pretrained_ckpt, map_location="cpu")["state_dict"]
+        backbone_sd = {
+            k: v for k, v in sd.items() if "out." not in k and "heads." not in k
+        }
+        missing, unexpected = model.load_state_dict(backbone_sd, strict=False)
+        print(
+            f"Loaded pretrained backbone from {cfg.pretrained_ckpt}\n"
+            f"  missing keys (expected — new heads): {len(missing)}\n"
+            f"  unexpected keys: {len(unexpected)}"
+        )
+
     if cfg.device and cfg.device.startswith("cuda"):
         accelerator = "gpu"
         devices = [int(cfg.device.split(":")[1])] if ":" in cfg.device else [0]
@@ -329,7 +354,7 @@ def main() -> None:
             mode="min",
             filename="ckpt-{epoch:03d}-{" + ckpt_metric + ":.4f}",
         ),
-        EarlyStopping(monitor=ckpt_metric, patience=20, mode="min"),
+        EarlyStopping(monitor=ckpt_metric, patience=20, mode="min", strict=False),
         LearningRateMonitor(logging_interval="epoch"),
         DayResamplingCallback(day_sampler),
     ]
