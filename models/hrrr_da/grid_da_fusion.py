@@ -104,10 +104,15 @@ class GridDAFusion(nn.Module):
         -------
         da_ctx : (B, hidden_dim, H, W)
             Dense DA context map (zero where no source is within radius).
+        coverage_mask : (B, 1, H, W)
+            Binary mask: 1.0 where at least one source contributed, else 0.0.
+            Used by ``LitGridDA`` to hard-zero the DA residual outside the
+            support disk and when no sources are valid.
         """
         B, C, H, W = F_grid.shape
         device = F_grid.device
         da_ctx = F_grid.new_zeros(B, self.hidden_dim, H, W)
+        coverage_mask = F_grid.new_zeros(B, 1, H, W)
         R = self.support_radius_px
 
         for b in range(B):
@@ -198,4 +203,8 @@ class GridDAFusion(nn.Module):
             flat_ctx = da_ctx[b].view(self.hidden_dim, H * W)
             flat_ctx.scatter_add_(1, q_flat_exp.T, messages.T)
 
-        return da_ctx
+            # Mark covered pixels in the coverage mask
+            unique_q = q_flat.unique()
+            coverage_mask[b, 0].view(-1)[unique_q] = 1.0
+
+        return da_ctx, coverage_mask

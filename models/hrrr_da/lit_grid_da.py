@@ -124,7 +124,7 @@ class LitGridDA(L.LightningModule):
         if not self.da_enabled:
             return bg_increment
 
-        da_ctx = self.da_fusion(
+        da_ctx, coverage_mask = self.da_fusion(
             F_grid,
             batch["src_rows"],
             batch["src_cols"],
@@ -137,8 +137,14 @@ class LitGridDA(L.LightningModule):
         fused = torch.cat([F_grid, da_ctx], dim=1)
         da_residual = self.da_head(fused)
         da_gate = torch.sigmoid(self.gate_head(fused))
-        self._last_gate_mean = da_gate.mean()
-        return bg_increment + da_gate * da_residual
+        # Hard-zero DA contribution outside support radius and when no sources
+        da_correction = da_gate * da_residual * coverage_mask
+        self._last_gate_mean = (
+            da_gate[coverage_mask.expand_as(da_gate) > 0].mean()
+            if coverage_mask.any()
+            else da_gate.new_tensor(0.0)
+        )
+        return bg_increment + da_correction
 
     def _gather_at_stations(self, pred, sta_rows, sta_cols):
         """Sample predictions at station pixel locations."""

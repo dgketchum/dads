@@ -55,25 +55,27 @@ class GridDAPatchDataset(Dataset):
         self.increment_map = dict(increment_map or {})
 
         # URMA / HRRR band indices for dense teacher (optional)
+        self._urma_band_idx: dict[str, int] = {}
+        self._hrrr_band_idx: dict[str, int] = {}
         if self.teacher_dir and self.increment_map:
             from models.hrrr_da.hetero_dataset import _discover_band_names
             import os
 
-            example_day = self._base.samples.iloc[0]["day"]
-            urma_path = os.path.join(
-                self.teacher_dir,
-                self.teacher_pattern.format(
-                    date=pd.Timestamp(example_day).strftime("%Y%m%d")
-                ),
-            )
-            if os.path.exists(urma_path):
-                urma_names = _discover_band_names(urma_path, "urma")
-                self._urma_band_idx = {n: i for i, n in enumerate(urma_names)}
-            else:
-                self._urma_band_idx = {}
+            # Search for a valid URMA file (not just the first sample day)
+            for sample_day in self._base.samples["day"].drop_duplicates().sort_values():
+                urma_path = os.path.join(
+                    self.teacher_dir,
+                    self.teacher_pattern.format(
+                        date=pd.Timestamp(sample_day).strftime("%Y%m%d")
+                    ),
+                )
+                if os.path.exists(urma_path):
+                    urma_names = _discover_band_names(urma_path, "urma")
+                    self._urma_band_idx = {n: i for i, n in enumerate(urma_names)}
+                    break
 
             # Full HRRR band names (pre-drop) for increment lookup
-            example_bg = self._base._background_path(example_day)
+            example_bg = self._base._background_path(self._base.samples.iloc[0]["day"])
             bg_names = _discover_band_names(example_bg, "bg")
             self._hrrr_band_idx = {n: i for i, n in enumerate(bg_names)}
 
@@ -308,12 +310,26 @@ def collate_grid_da(batch: list[dict]) -> dict:
 
     raw_elev_patch = torch.stack([s["raw_elev_patch"] for s in batch])
 
-    # --- Optional dense teacher ---
-    has_dense = batch[0]["y_dense"] is not None
-    y_dense = torch.stack([s["y_dense"] for s in batch]) if has_dense else None
-    y_valid_dense = (
-        torch.stack([s["y_valid_dense"] for s in batch]) if has_dense else None
-    )
+    # --- Optional dense teacher (handle mixed availability per sample) ---
+    any_dense = any(s["y_dense"] is not None for s in batch)
+    if any_dense:
+        # Infer shape from the first available sample
+        ref = next(s["y_dense"] for s in batch if s["y_dense"] is not None)
+        n_t, pH, pW = ref.shape
+        y_dense_list = []
+        y_valid_list = []
+        for s in batch:
+            if s["y_dense"] is not None:
+                y_dense_list.append(s["y_dense"])
+                y_valid_list.append(s["y_valid_dense"])
+            else:
+                y_dense_list.append(torch.zeros(n_t, pH, pW))
+                y_valid_list.append(torch.zeros(n_t, pH, pW, dtype=torch.bool))
+        y_dense = torch.stack(y_dense_list)
+        y_valid_dense = torch.stack(y_valid_list)
+    else:
+        y_dense = None
+        y_valid_dense = None
 
     return {
         "x_patch": x,
