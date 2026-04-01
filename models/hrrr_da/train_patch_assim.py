@@ -12,6 +12,7 @@ import json
 import os
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
+import time
 
 import numpy as np
 
@@ -29,7 +30,7 @@ from torch.utils.data import DataLoader
 from models.hrrr_da.lit_patch_assim import LitPatchAssim
 from models.hrrr_da.patch_assim_dataset import HRRRPatchDataset, collate_patch
 from models.hrrr_da.train_hrrr_hetero import DayGroupedSampler, DayResamplingCallback
-from prep.paths import MVP_ROOT
+from prep.paths import MVP_ROOT, stage_to_nvme
 
 
 @dataclass
@@ -47,7 +48,14 @@ class PatchAssimConfig:
     days_per_epoch: int = 250
     val_days_per_epoch: int | None = None
     num_workers: int = 4
+    train_num_workers: int | None = None
+    val_num_workers: int | None = None
+    train_persistent_workers: bool | None = None
+    val_persistent_workers: bool | None = None
     patch_size: int = 64
+    num_sanity_val_steps: int | None = None
+    centers_per_day: int | None = None
+    stage_parquet_to_nvme: bool = False
 
     target_names: list[str] = field(
         default_factory=lambda: [
@@ -106,6 +114,8 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--lr", type=float, default=None)
     p.add_argument("--device", default=None)
     p.add_argument("--num-workers", type=int, default=None)
+    p.add_argument("--train-num-workers", type=int, default=None)
+    p.add_argument("--val-num-workers", type=int, default=None)
     return p.parse_args()
 
 
@@ -118,6 +128,8 @@ def _build_config(args: argparse.Namespace) -> PatchAssimConfig:
         ("lr", "lr"),
         ("device", "device"),
         ("num_workers", "num_workers"),
+        ("train_num_workers", "train_num_workers"),
+        ("val_num_workers", "val_num_workers"),
     ]:
         val = getattr(args, cli, None)
         if val is not None:
@@ -125,18 +137,78 @@ def _build_config(args: argparse.Namespace) -> PatchAssimConfig:
     return cfg
 
 
+def _resolve_loader_settings(
+    cfg: PatchAssimConfig,
+) -> tuple[int, int, bool, bool]:
+    train_num_workers = (
+        cfg.train_num_workers if cfg.train_num_workers is not None else cfg.num_workers
+    )
+    if cfg.val_num_workers is not None:
+        val_num_workers = cfg.val_num_workers
+    elif cfg.benchmark_mode:
+        # Validation batches are grouped by day. With multiple workers, each worker
+        # eagerly cold-loads the same daily raster, multiplying I/O instead of
+        # parallelising useful work. Default benchmark validation to a single worker.
+        val_num_workers = 1 if cfg.num_workers > 0 else 0
+    else:
+        val_num_workers = cfg.num_workers
+
+    if cfg.train_persistent_workers is not None:
+        train_persistent_workers = cfg.train_persistent_workers
+    else:
+        train_persistent_workers = train_num_workers > 0
+
+    if cfg.val_persistent_workers is not None:
+        val_persistent_workers = cfg.val_persistent_workers
+    else:
+        # Validation runs infrequently; prefer a clean worker lifecycle.
+        val_persistent_workers = False
+
+    if train_num_workers == 0:
+        train_persistent_workers = False
+    if val_num_workers == 0:
+        val_persistent_workers = False
+
+    return (
+        train_num_workers,
+        val_num_workers,
+        train_persistent_workers,
+        val_persistent_workers,
+    )
+
+
 def main() -> None:
     args = _parse_args()
     cfg = _build_config(args)
+    (
+        train_num_workers,
+        val_num_workers,
+        train_persistent_workers,
+        val_persistent_workers,
+    ) = _resolve_loader_settings(cfg)
 
     L.seed_everything(cfg.seed, workers=True)
     os.makedirs(cfg.out_dir, exist_ok=True)
     cfg.save_toml(os.path.join(cfg.out_dir, "experiment.toml"))
+    print(
+        "Loader settings: "
+        f"train_workers={train_num_workers} "
+        f"(persistent={train_persistent_workers}), "
+        f"val_workers={val_num_workers} "
+        f"(persistent={val_persistent_workers})"
+    )
 
-    df = pd.read_parquet(cfg.table_path)
+    # Optionally stage parquet to local NVMe for faster reads
+    effective_table_path = cfg.table_path
+    if cfg.stage_parquet_to_nvme:
+        effective_table_path = stage_to_nvme(cfg.table_path)
+
+    parquet_t0 = time.time()
+    df = pd.read_parquet(effective_table_path)
     if isinstance(df.index, pd.MultiIndex):
         df = df.reset_index()
     df["day"] = pd.to_datetime(df["day"])
+    print(f"Parquet loaded: {len(df)} rows, {time.time() - parquet_t0:.1f}s")
 
     train_days = set(df[df["day"].dt.year.isin(cfg.train_years)]["day"].unique())
     val_days = set(df[df["day"].dt.year.isin(cfg.val_years)]["day"].unique())
@@ -196,8 +268,9 @@ def main() -> None:
             provided_norm_stats = json.load(f).get("norm_stats")
         print(f"Loaded norm stats from {cfg.norm_stats_json}")
 
+    train_ds_t0 = time.time()
     train_ds = HRRRPatchDataset(
-        table_path=cfg.table_path,
+        table_path=effective_table_path,
         background_dir=cfg.background_dir,
         background_pattern=cfg.background_pattern,
         static_tifs=cfg.static_tifs,
@@ -213,9 +286,13 @@ def main() -> None:
         drop_bands=cfg.drop_bands or None,
         norm_stats=provided_norm_stats,
         patch_size=cfg.patch_size,
+        centers_per_day=cfg.centers_per_day,
     )
     in_channels = train_ds.in_channels
-    print(f"Train samples: {len(train_ds)}, in_channels: {in_channels}")
+    print(
+        f"Train samples: {len(train_ds)}, in_channels: {in_channels}, "
+        f"build={time.time() - train_ds_t0:.1f}s"
+    )
 
     norm_stats_path = os.path.join(cfg.out_dir, "norm_stats.json")
     with open(norm_stats_path, "w") as f:
@@ -282,8 +359,9 @@ def main() -> None:
     else:
         fixed_val_days = val_days
 
+    val_ds_t0 = time.time()
     val_ds = HRRRPatchDataset(
-        table_path=cfg.table_path,
+        table_path=effective_table_path,
         background_dir=cfg.background_dir,
         background_pattern=cfg.background_pattern,
         static_tifs=cfg.static_tifs,
@@ -299,7 +377,7 @@ def main() -> None:
         norm_stats=train_ds.norm_stats,
         patch_size=cfg.patch_size,
     )
-    print(f"Val samples: {len(val_ds)}")
+    print(f"Val samples: {len(val_ds)}, build={time.time() - val_ds_t0:.1f}s")
 
     if len(train_ds) == 0:
         raise ValueError("Training dataset is empty.")
@@ -315,8 +393,8 @@ def main() -> None:
         train_ds,
         batch_size=cfg.batch_size,
         sampler=day_sampler,
-        num_workers=cfg.num_workers,
-        persistent_workers=(cfg.num_workers > 0),
+        num_workers=train_num_workers,
+        persistent_workers=train_persistent_workers,
         collate_fn=collate_patch,
     )
     n_val_days = val_ds.samples["day"].nunique()
@@ -329,8 +407,8 @@ def main() -> None:
         val_ds,
         batch_size=cfg.batch_size,
         sampler=val_sampler,
-        num_workers=cfg.num_workers,
-        persistent_workers=(cfg.num_workers > 0),
+        num_workers=val_num_workers,
+        persistent_workers=val_persistent_workers,
         collate_fn=collate_patch,
     )
 
@@ -401,7 +479,7 @@ def main() -> None:
         DayResamplingCallback(day_sampler),
     ]
 
-    trainer = L.Trainer(
+    trainer_kwargs: dict = dict(
         max_epochs=cfg.epochs,
         accelerator=accelerator,
         devices=devices,
@@ -410,6 +488,10 @@ def main() -> None:
         default_root_dir=cfg.out_dir,
         log_every_n_steps=10,
     )
+    if cfg.num_sanity_val_steps is not None:
+        trainer_kwargs["num_sanity_val_steps"] = cfg.num_sanity_val_steps
+
+    trainer = L.Trainer(**trainer_kwargs)
 
     trainer.fit(model, train_loader, val_loader)
 

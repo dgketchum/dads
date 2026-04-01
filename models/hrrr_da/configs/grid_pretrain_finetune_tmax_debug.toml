@@ -1,19 +1,22 @@
-name = "grid_pretrain_finetune_tmax"
-description = "Stage B: fine-tune pretrained grid backbone on held-out station tmax benchmark"
+name = "grid_pretrain_finetune_tmax_debug"
+description = "Stage B debug: fast iteration, NOT for benchmark claims"
 
 patch_size = 64
 hidden_dim = 32
 lr = 3e-4
 tv_weight = 1e-3
 huber_delta = 1.0
-batch_size = 64
-epochs = 100
+batch_size = 32
+epochs = 20
 seed = 42
-days_per_epoch = 250
-val_days_per_epoch = 60
+days_per_epoch = 50
+val_days_per_epoch = 4
 num_workers = 4
+val_num_workers = 0
 benchmark_mode = true
 drop_bands = ["n_hours"]
+num_sanity_val_steps = 0
+centers_per_day = 64
 stage_parquet_to_nvme = true
 
 target_names = ["delta_tmax"]
@@ -26,7 +29,7 @@ landsat_tif = "/data/nvme0/dads_rasters/landsat_pnw_1km.tif"
 rsun_tif = "/data/nvme0/dads_rasters/rsun_pnw_1km.tif"
 cdr_dir = "/data/nvme0/dads_rasters/cdr_native_pnw"
 cdr_pattern = "CDR_005deg_{date}.tif"
-out_dir = "/nas/dads/runs/grid_pretrain_finetune_tmax/seed_42"
+out_dir = "/nas/dads/runs/grid_pretrain_finetune_tmax_debug/seed_42"
 
 # Stage A artifacts
 pretrained_ckpt = "/nas/dads/runs/grid_pretrain_tmax/seed_42/best.ckpt"

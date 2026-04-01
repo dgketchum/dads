@@ -169,6 +169,7 @@ class HRRRPatchDataset(Dataset):
         norm_stats: dict | None = None,
         patch_size: int = 64,
         cache_size: int = 8,
+        centers_per_day: int | None = None,
     ):
         super().__init__()
         self._holdout_fids = holdout_fids or set()
@@ -183,6 +184,7 @@ class HRRRPatchDataset(Dataset):
         self.cdr_pattern = cdr_pattern
         self.target_names = target_names or list(DEFAULT_TARGET_NAMES)
         self.patch_size = patch_size
+        self._centers_per_day = centers_per_day
 
         actual_cache = max(
             cache_size,
@@ -217,7 +219,22 @@ class HRRRPatchDataset(Dataset):
         if df.empty:
             raise ValueError("No supervised samples remain after raster/day filtering.")
 
-        self.samples = df.sort_values("day").reset_index(drop=True)
+        df = df.sort_values("day").reset_index(drop=True)
+
+        # Cap center patches per day to reduce sample count for fast iteration
+        if self._centers_per_day is not None and self._centers_per_day > 0:
+            rng = np.random.default_rng(42)
+            keep_idx: list[int] = []
+            for _, grp in df.groupby("day"):
+                idxs = grp.index.tolist()
+                if len(idxs) > self._centers_per_day:
+                    idxs = rng.choice(
+                        idxs, self._centers_per_day, replace=False
+                    ).tolist()
+                keep_idx.extend(idxs)
+            df = df.loc[sorted(keep_idx)].reset_index(drop=True)
+
+        self.samples = df
 
         # --- Neighbor pool for in-patch supervision ---
         neighbor_df = pd.read_parquet(table_path)
