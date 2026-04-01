@@ -144,13 +144,32 @@ def main() -> None:
 
     all_fids = set(df["fid"].astype(str).unique())
     holdout_fids: set[str] = set()
+    if cfg.benchmark_mode:
+        if not cfg.holdout_fids_json:
+            raise ValueError("benchmark_mode=true requires holdout_fids_json to be set")
+        if not os.path.exists(cfg.holdout_fids_json):
+            raise FileNotFoundError(
+                f"benchmark_mode=true but holdout_fids_json not found: "
+                f"{cfg.holdout_fids_json}"
+            )
     if cfg.holdout_fids_json and os.path.exists(cfg.holdout_fids_json):
         with open(cfg.holdout_fids_json) as f:
             holdout_fids = set(str(x) for x in json.load(f))
+        if cfg.benchmark_mode and not holdout_fids:
+            raise ValueError(
+                f"benchmark_mode=true but holdout artifact is empty: "
+                f"{cfg.holdout_fids_json}"
+            )
         effective_holdout = holdout_fids & all_fids
         # Val-day holdout: fids present on val days
         val_df = df[df["day"].dt.year.isin(cfg.val_years)]
         val_holdout = effective_holdout & set(val_df["fid"].astype(str).unique())
+        if cfg.benchmark_mode and not val_holdout:
+            raise ValueError(
+                f"benchmark_mode=true but no holdout fids found on val days "
+                f"({cfg.val_years}). {len(holdout_fids)} requested, "
+                f"{len(effective_holdout)} in data, 0 on val days."
+            )
         print(
             f"Holdout: {len(holdout_fids)} requested, "
             f"{len(effective_holdout)} in data, "
@@ -337,10 +356,25 @@ def main() -> None:
             k: v for k, v in sd.items() if "out." not in k and "heads." not in k
         }
         missing, unexpected = model.load_state_dict(backbone_sd, strict=False)
+
+        # Contract check: missing keys must only be new output heads;
+        # unexpected keys must be empty (no namespace drift).
+        allowed_missing_prefixes = ("model.out.", "model.heads.", "val_mae")
+        bad_missing = [k for k in missing if not k.startswith(allowed_missing_prefixes)]
+        if bad_missing:
+            raise RuntimeError(
+                f"Stage A->B transfer: unexpected missing backbone keys "
+                f"(checkpoint namespace drift?): {bad_missing}"
+            )
+        if unexpected:
+            raise RuntimeError(
+                f"Stage A->B transfer: unexpected keys from checkpoint "
+                f"(namespace drift?): {unexpected}"
+            )
         print(
             f"Loaded pretrained backbone from {cfg.pretrained_ckpt}\n"
-            f"  missing keys (expected — new heads): {len(missing)}\n"
-            f"  unexpected keys: {len(unexpected)}"
+            f"  missing keys (new heads): {missing}\n"
+            f"  unexpected keys: {unexpected}"
         )
 
     if cfg.device and cfg.device.startswith("cuda"):
@@ -378,6 +412,16 @@ def main() -> None:
     )
 
     trainer.fit(model, train_loader, val_loader)
+
+    # Symlink best checkpoint to a stable name for downstream configs
+    ckpt_cb = [c for c in callbacks if isinstance(c, ModelCheckpoint)][0]
+    best = ckpt_cb.best_model_path
+    if best:
+        link = os.path.join(cfg.out_dir, "best.ckpt")
+        if os.path.islink(link) or os.path.exists(link):
+            os.remove(link)
+        os.symlink(os.path.basename(best), link)
+        print(f"Best checkpoint symlinked: {link} -> {os.path.basename(best)}")
 
     metrics = {
         k: v.item() if hasattr(v, "item") else v
