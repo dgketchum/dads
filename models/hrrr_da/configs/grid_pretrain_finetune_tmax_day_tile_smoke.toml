@@ -1,0 +1,45 @@
+name = "grid_pretrain_finetune_tmax_day_tile_smoke"
+description = "Stage B day-centric smoke test: fast startup verification, NOT for benchmark claims"
+
+patch_size = 64
+hidden_dim = 32
+lr = 3e-4
+tv_weight = 1e-3
+huber_delta = 1.0
+batch_size = 1
+epochs = 3
+seed = 42
+days_per_epoch = 10
+val_days_per_epoch = 2
+num_workers = 1
+train_num_workers = 1
+val_num_workers = 0
+benchmark_mode = true
+drop_bands = ["n_hours"]
+num_sanity_val_steps = 0
+train_sample_mode = "day_tile"
+train_tile_stride = 64
+train_tiles_per_day = 8
+val_centers_per_day = 8
+stage_parquet_to_nvme = true
+
+target_names = ["delta_tmax"]
+
+table_path = "/nas/dads/run_archive/station_day_hrrr_daily_cdr_pnw.parquet"
+background_dir = "/data/nvme0/dads_rasters/hrrr_1km_pnw"
+background_pattern = "HRRR_1km_{date}.tif"
+static_tifs = ["/data/nvme0/dads_rasters/terrain_pnw_1km.tif"]
+landsat_tif = "/data/nvme0/dads_rasters/landsat_pnw_1km.tif"
+rsun_tif = "/data/nvme0/dads_rasters/rsun_pnw_1km.tif"
+cdr_dir = "/data/nvme0/dads_rasters/cdr_native_pnw"
+cdr_pattern = "CDR_005deg_{date}.tif"
+out_dir = "/nas/dads/runs/grid_pretrain_finetune_tmax_day_tile_smoke/seed_42"
+
+# Stage A artifacts
+pretrained_ckpt = "/nas/dads/runs/grid_pretrain_tmax/seed_42/best.ckpt"
+norm_stats_json = "/nas/dads/runs/grid_pretrain_tmax/seed_42/norm_stats.json"
+
+train_years = [2018, 2019, 2020, 2021, 2022, 2023]
+val_years = [2024]
+holdout_fids_json = "/home/dgketchum/code/dads/artifacts/canonical_holdout_fids.json"
+device = "cuda:0"

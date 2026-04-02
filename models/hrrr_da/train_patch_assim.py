@@ -28,7 +28,13 @@ from lightning.pytorch.callbacks import (
 from torch.utils.data import DataLoader
 
 from models.hrrr_da.lit_patch_assim import LitPatchAssim
-from models.hrrr_da.patch_assim_dataset import HRRRPatchDataset, collate_patch
+from models.hrrr_da.patch_assim_dataset import (
+    HRRRDayTileBatchDataset,
+    HRRRPatchDataset,
+    HRRRTilePatchDataset,
+    collate_day_tile_batch,
+    collate_patch,
+)
 from models.hrrr_da.train_hrrr_hetero import DayGroupedSampler, DayResamplingCallback
 from prep.paths import MVP_ROOT, stage_to_nvme
 
@@ -55,6 +61,11 @@ class PatchAssimConfig:
     patch_size: int = 64
     num_sanity_val_steps: int | None = None
     centers_per_day: int | None = None
+    train_centers_per_day: int | None = None
+    val_centers_per_day: int | None = None
+    train_sample_mode: str = "center"
+    train_tile_stride: int | None = None
+    train_tiles_per_day: int | None = None
     stage_parquet_to_nvme: bool = False
 
     target_names: list[str] = field(
@@ -116,6 +127,13 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--num-workers", type=int, default=None)
     p.add_argument("--train-num-workers", type=int, default=None)
     p.add_argument("--val-num-workers", type=int, default=None)
+    p.add_argument("--train-centers-per-day", type=int, default=None)
+    p.add_argument("--val-centers-per-day", type=int, default=None)
+    p.add_argument(
+        "--train-sample-mode", choices=["center", "tile", "day_tile"], default=None
+    )
+    p.add_argument("--train-tile-stride", type=int, default=None)
+    p.add_argument("--train-tiles-per-day", type=int, default=None)
     return p.parse_args()
 
 
@@ -130,6 +148,11 @@ def _build_config(args: argparse.Namespace) -> PatchAssimConfig:
         ("num_workers", "num_workers"),
         ("train_num_workers", "train_num_workers"),
         ("val_num_workers", "val_num_workers"),
+        ("train_centers_per_day", "train_centers_per_day"),
+        ("val_centers_per_day", "val_centers_per_day"),
+        ("train_sample_mode", "train_sample_mode"),
+        ("train_tile_stride", "train_tile_stride"),
+        ("train_tiles_per_day", "train_tiles_per_day"),
     ]:
         val = getattr(args, cli, None)
         if val is not None:
@@ -177,6 +200,71 @@ def _resolve_loader_settings(
     )
 
 
+def _resolve_center_limits(cfg: PatchAssimConfig) -> tuple[int | None, int | None]:
+    train_centers_per_day = (
+        cfg.train_centers_per_day
+        if cfg.train_centers_per_day is not None
+        else cfg.centers_per_day
+    )
+    val_centers_per_day = (
+        cfg.val_centers_per_day
+        if cfg.val_centers_per_day is not None
+        else cfg.centers_per_day
+    )
+    return train_centers_per_day, val_centers_per_day
+
+
+def _resolve_train_dataset_kwargs(cfg: PatchAssimConfig) -> tuple[type, dict]:
+    if cfg.train_sample_mode == "center":
+        return (
+            HRRRPatchDataset,
+            {
+                "centers_per_day": cfg.train_centers_per_day
+                if cfg.train_centers_per_day is not None
+                else cfg.centers_per_day,
+                "center_sampling_seed": cfg.seed,
+            },
+        )
+    if cfg.train_sample_mode == "tile":
+        return (
+            HRRRTilePatchDataset,
+            {
+                "tile_stride": cfg.train_tile_stride,
+                "tiles_per_day": cfg.train_tiles_per_day,
+                "tile_sampling_seed": cfg.seed,
+            },
+        )
+    if cfg.train_sample_mode == "day_tile":
+        return (
+            HRRRDayTileBatchDataset,
+            {
+                "tile_stride": cfg.train_tile_stride,
+                "tiles_per_day": cfg.train_tiles_per_day,
+                "tile_sampling_seed": cfg.seed,
+            },
+        )
+    raise ValueError(f"Unsupported train_sample_mode: {cfg.train_sample_mode}")
+
+
+class DayTileResamplingCallback(L.Callback):
+    """Calls set_epoch on both the sampler and the day-tile dataset each epoch."""
+
+    def __init__(
+        self,
+        sampler: DayGroupedSampler,
+        train_dataset: HRRRDayTileBatchDataset,
+    ) -> None:
+        self.sampler = sampler
+        self.train_dataset = train_dataset
+
+    def on_train_epoch_start(
+        self, trainer: L.Trainer, pl_module: L.LightningModule
+    ) -> None:
+        epoch = trainer.current_epoch
+        self.sampler.set_epoch(epoch)
+        self.train_dataset.set_epoch(epoch)
+
+
 def main() -> None:
     args = _parse_args()
     cfg = _build_config(args)
@@ -186,6 +274,8 @@ def main() -> None:
         train_persistent_workers,
         val_persistent_workers,
     ) = _resolve_loader_settings(cfg)
+    train_centers_per_day, val_centers_per_day = _resolve_center_limits(cfg)
+    train_dataset_cls, train_dataset_extra = _resolve_train_dataset_kwargs(cfg)
 
     L.seed_everything(cfg.seed, workers=True)
     os.makedirs(cfg.out_dir, exist_ok=True)
@@ -204,7 +294,7 @@ def main() -> None:
         effective_table_path = stage_to_nvme(cfg.table_path)
 
     parquet_t0 = time.time()
-    df = pd.read_parquet(effective_table_path)
+    df = pd.read_parquet(effective_table_path, columns=["day", "fid"])
     if isinstance(df.index, pd.MultiIndex):
         df = df.reset_index()
     df["day"] = pd.to_datetime(df["day"])
@@ -269,7 +359,7 @@ def main() -> None:
         print(f"Loaded norm stats from {cfg.norm_stats_json}")
 
     train_ds_t0 = time.time()
-    train_ds = HRRRPatchDataset(
+    train_ds = train_dataset_cls(
         table_path=effective_table_path,
         background_dir=cfg.background_dir,
         background_pattern=cfg.background_pattern,
@@ -286,11 +376,12 @@ def main() -> None:
         drop_bands=cfg.drop_bands or None,
         norm_stats=provided_norm_stats,
         patch_size=cfg.patch_size,
-        centers_per_day=cfg.centers_per_day,
+        **train_dataset_extra,
     )
     in_channels = train_ds.in_channels
     print(
-        f"Train samples: {len(train_ds)}, in_channels: {in_channels}, "
+        f"Train dataset: {train_ds.__class__.__name__}, "
+        f"samples: {len(train_ds)}, in_channels: {in_channels}, "
         f"build={time.time() - train_ds_t0:.1f}s"
     )
 
@@ -317,8 +408,25 @@ def main() -> None:
         json.dump(
             {
                 "tile_size": cfg.patch_size,
-                "stride": "station-centered (one tile per station-day)",
-                "overlap": "variable (tiles centered on different stations may overlap)",
+                "stride": (
+                    "station-centered (one tile per station-day)"
+                    if cfg.train_sample_mode == "center"
+                    and train_centers_per_day is None
+                    else (
+                        f"station-centered (capped to {train_centers_per_day} centers/day)"
+                        if cfg.train_sample_mode == "center"
+                        else (
+                            f"day-centric tile batch (stride={cfg.train_tile_stride or cfg.patch_size})"
+                            if cfg.train_sample_mode == "day_tile"
+                            else f"tile-indexed (stride={cfg.train_tile_stride or cfg.patch_size})"
+                        )
+                    )
+                ),
+                "overlap": (
+                    "variable (tiles centered on different stations may overlap)"
+                    if cfg.train_sample_mode == "center"
+                    else "fixed tile lattice"
+                ),
             },
             f,
             indent=2,
@@ -376,6 +484,8 @@ def main() -> None:
         drop_bands=cfg.drop_bands or None,
         norm_stats=train_ds.norm_stats,
         patch_size=cfg.patch_size,
+        centers_per_day=val_centers_per_day,
+        center_sampling_seed=cfg.seed,
     )
     print(f"Val samples: {len(val_ds)}, build={time.time() - val_ds_t0:.1f}s")
 
@@ -384,6 +494,7 @@ def main() -> None:
     if len(val_ds) == 0:
         raise ValueError("Validation dataset is empty.")
 
+    is_day_tile = isinstance(train_ds, HRRRDayTileBatchDataset)
     day_sampler = DayGroupedSampler(
         train_ds.samples,
         days_per_epoch=cfg.days_per_epoch,
@@ -391,11 +502,11 @@ def main() -> None:
     )
     train_loader = DataLoader(
         train_ds,
-        batch_size=cfg.batch_size,
+        batch_size=1 if is_day_tile else cfg.batch_size,
         sampler=day_sampler,
         num_workers=train_num_workers,
         persistent_workers=train_persistent_workers,
-        collate_fn=collate_patch,
+        collate_fn=collate_day_tile_batch if is_day_tile else collate_patch,
     )
     n_val_days = val_ds.samples["day"].nunique()
     val_sampler = DayGroupedSampler(
@@ -476,7 +587,9 @@ def main() -> None:
         ),
         EarlyStopping(monitor=ckpt_metric, patience=20, mode="min", strict=False),
         LearningRateMonitor(logging_interval="epoch"),
-        DayResamplingCallback(day_sampler),
+        DayTileResamplingCallback(day_sampler, train_ds)
+        if is_day_tile
+        else DayResamplingCallback(day_sampler),
     ]
 
     trainer_kwargs: dict = dict(

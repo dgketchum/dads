@@ -12,6 +12,8 @@ station pixel locations. TV regularization keeps the field smooth between statio
 
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 
 import numpy as np
@@ -28,6 +30,7 @@ from models.hrrr_da.hetero_dataset import (
     _discover_band_names,
     _doy_features,
 )
+from prep.paths import NVME_CACHE
 
 _LANDSAT_BANDS = 7  # B2, B3, B4, B5, B6, B7, B10 per period
 _LANDSAT_PERIODS = 5
@@ -137,6 +140,306 @@ def _compute_cdr_norm_stats(
     return stats
 
 
+def _background_path_for(
+    background_dir: str, background_pattern: str, day: pd.Timestamp
+) -> str:
+    return os.path.join(
+        background_dir,
+        background_pattern.format(date=pd.Timestamp(day).strftime("%Y%m%d")),
+    )
+
+
+def _normalise_day_tokens(days: set | None) -> list[str]:
+    if days is None:
+        return []
+    return [
+        pd.Timestamp(d).normalize().strftime("%Y-%m-%d")
+        for d in sorted(pd.Timestamp(d).normalize() for d in days)
+    ]
+
+
+def _normalise_str_tokens(values: set[str] | None) -> list[str]:
+    if values is None:
+        return []
+    return sorted(str(v) for v in values)
+
+
+def _patch_metadata_root() -> str:
+    if os.path.isdir(os.path.dirname(NVME_CACHE)):
+        return os.path.join(NVME_CACHE, "patch_assim_metadata")
+    return os.path.join("/tmp", "dads_patch_assim_metadata")
+
+
+def _patch_metadata_dir(
+    table_path: str,
+    background_dir: str,
+    background_pattern: str,
+    target_names: list[str],
+    train_days: set | None,
+    target_include_fids: set[str] | None,
+    target_exclude_fids: set[str] | None,
+    supervision_exclude_fids: set[str] | None,
+    centers_per_day: int | None,
+    center_sampling_seed: int,
+) -> str:
+    stat = os.stat(table_path)
+    payload = {
+        "version": 1,
+        "table_path": os.path.realpath(table_path),
+        "table_size": stat.st_size,
+        "table_mtime_ns": stat.st_mtime_ns,
+        "background_dir": os.path.realpath(background_dir),
+        "background_pattern": background_pattern,
+        "target_names": list(target_names),
+        "train_days": _normalise_day_tokens(train_days),
+        "target_include_fids": _normalise_str_tokens(target_include_fids),
+        "target_exclude_fids": _normalise_str_tokens(target_exclude_fids),
+        "supervision_exclude_fids": _normalise_str_tokens(supervision_exclude_fids),
+        "centers_per_day": centers_per_day,
+        "center_sampling_seed": center_sampling_seed,
+    }
+    digest = hashlib.sha1(
+        json.dumps(payload, sort_keys=True).encode("utf-8")
+    ).hexdigest()[:16]
+    return os.path.join(_patch_metadata_root(), digest)
+
+
+def _project_rows_cols(
+    df: pd.DataFrame, bg_crs, bg_tf
+) -> tuple[np.ndarray, np.ndarray]:
+    lons = df["longitude"].to_numpy(dtype="float64")
+    lats = df["latitude"].to_numpy(dtype="float64")
+    to_bg = Transformer.from_crs("EPSG:4326", bg_crs, always_xy=True)
+    x, y = to_bg.transform(lons, lats)
+    rows, cols = rowcol(bg_tf, x, y)
+    return np.asarray(rows, dtype="int32"), np.asarray(cols, dtype="int32")
+
+
+def _build_day_slices(days: pd.Series) -> dict[pd.Timestamp, tuple[int, int]]:
+    if days.empty:
+        return {}
+    day_values = pd.to_datetime(days).dt.normalize().to_numpy()
+    unique_days, starts = np.unique(day_values, return_index=True)
+    stops = np.append(starts[1:], len(day_values))
+    return {
+        pd.Timestamp(day).normalize(): (int(start), int(stop))
+        for day, start, stop in zip(unique_days, starts, stops, strict=False)
+    }
+
+
+def _write_day_slices(
+    path: str, day_slices: dict[pd.Timestamp, tuple[int, int]]
+) -> None:
+    payload = {
+        pd.Timestamp(day).strftime("%Y-%m-%d"): [int(start), int(stop)]
+        for day, (start, stop) in day_slices.items()
+    }
+    with open(path, "w") as f:
+        json.dump(payload, f, indent=2, sort_keys=True)
+
+
+def _read_day_slices(path: str) -> dict[pd.Timestamp, tuple[int, int]]:
+    with open(path) as f:
+        payload = json.load(f)
+    return {
+        pd.Timestamp(day).normalize(): (int(bounds[0]), int(bounds[1]))
+        for day, bounds in payload.items()
+    }
+
+
+def _load_or_build_patch_metadata(
+    table_path: str,
+    background_dir: str,
+    background_pattern: str,
+    target_names: list[str],
+    train_days: set | None,
+    target_include_fids: set[str] | None,
+    target_exclude_fids: set[str] | None,
+    supervision_exclude_fids: set[str] | None,
+    centers_per_day: int | None,
+    center_sampling_seed: int,
+) -> tuple[pd.DataFrame, pd.DataFrame, dict[pd.Timestamp, tuple[int, int]], str]:
+    cache_dir = _patch_metadata_dir(
+        table_path=table_path,
+        background_dir=background_dir,
+        background_pattern=background_pattern,
+        target_names=target_names,
+        train_days=train_days,
+        target_include_fids=target_include_fids,
+        target_exclude_fids=target_exclude_fids,
+        supervision_exclude_fids=supervision_exclude_fids,
+        centers_per_day=centers_per_day,
+        center_sampling_seed=center_sampling_seed,
+    )
+    samples_path = os.path.join(cache_dir, "samples.parquet")
+    neighbors_path = os.path.join(cache_dir, "neighbors.parquet")
+    day_slices_path = os.path.join(cache_dir, "neighbor_day_slices.json")
+
+    if (
+        os.path.exists(samples_path)
+        and os.path.exists(neighbors_path)
+        and os.path.exists(day_slices_path)
+    ):
+        print(f"[patch_meta] cache hit: {cache_dir}")
+        samples = pd.read_parquet(samples_path)
+        neighbors = pd.read_parquet(neighbors_path)
+        samples["day"] = pd.to_datetime(samples["day"]).dt.normalize()
+        neighbors["day"] = pd.to_datetime(neighbors["day"]).dt.normalize()
+        return samples, neighbors, _read_day_slices(day_slices_path), cache_dir
+
+    print(f"[patch_meta] building cache: {cache_dir}")
+    df = pd.read_parquet(table_path)
+    if isinstance(df.index, pd.MultiIndex):
+        df = df.reset_index()
+    df["fid"] = df["fid"].astype(str)
+    df["day"] = pd.to_datetime(df["day"]).dt.normalize()
+
+    day_set: set | None = None
+    if train_days is not None:
+        day_set = {pd.Timestamp(d).normalize() for d in train_days}
+        df = df[df["day"].isin(day_set)]
+
+    samples = df
+    if target_include_fids is not None:
+        samples = samples[samples["fid"].isin(target_include_fids)]
+    if target_exclude_fids is not None:
+        samples = samples[~samples["fid"].isin(target_exclude_fids)]
+
+    sample_mask = samples[target_names].notna().any(axis=1)
+    samples = samples[sample_mask].copy()
+
+    bg_exists = samples["day"].map(
+        lambda d: os.path.exists(
+            _background_path_for(background_dir, background_pattern, d)
+        )
+    )
+    samples = samples[bg_exists].copy()
+    if samples.empty:
+        raise ValueError("No supervised samples remain after raster/day filtering.")
+
+    samples = samples.sort_values(["day", "fid"]).reset_index(drop=True)
+    if centers_per_day is not None and centers_per_day > 0:
+        rng = np.random.default_rng(center_sampling_seed)
+        keep_idx: list[int] = []
+        for _, grp in samples.groupby("day", sort=False):
+            idxs = grp.index.to_numpy()
+            if len(idxs) > centers_per_day:
+                idxs = np.sort(rng.choice(idxs, centers_per_day, replace=False))
+            keep_idx.extend(idxs.tolist())
+        samples = samples.loc[keep_idx].reset_index(drop=True)
+
+    valid_days = set(samples["day"].unique())
+    neighbors = df[df["day"].isin(valid_days)].copy()
+    if supervision_exclude_fids is not None:
+        neighbors = neighbors[~neighbors["fid"].isin(supervision_exclude_fids)]
+    neighbors = neighbors.sort_values(["day", "fid"]).reset_index(drop=True)
+
+    example_bg = _background_path_for(
+        background_dir, background_pattern, samples.iloc[0]["day"]
+    )
+    with rasterio.open(example_bg) as src:
+        bg_crs = src.crs
+        bg_tf = src.transform
+
+    sample_rows, sample_cols = _project_rows_cols(samples, bg_crs, bg_tf)
+    neighbor_rows, neighbor_cols = _project_rows_cols(neighbors, bg_crs, bg_tf)
+    samples["bg_row"] = sample_rows
+    samples["bg_col"] = sample_cols
+    neighbors["bg_row"] = neighbor_rows
+    neighbors["bg_col"] = neighbor_cols
+
+    day_slices = _build_day_slices(neighbors["day"])
+
+    os.makedirs(cache_dir, exist_ok=True)
+    samples.to_parquet(samples_path, index=False)
+    neighbors.to_parquet(neighbors_path, index=False)
+    _write_day_slices(day_slices_path, day_slices)
+    return samples, neighbors, day_slices, cache_dir
+
+
+def _tile_index_cache_path(
+    cache_dir: str,
+    patch_size: int,
+    tile_stride: int,
+    tiles_per_day: int | None,
+    tile_sampling_seed: int,
+) -> str:
+    tpd = "all" if tiles_per_day is None else str(int(tiles_per_day))
+    filename = (
+        f"tile_index_ps{int(patch_size)}"
+        f"_st{int(tile_stride)}"
+        f"_tpd{tpd}"
+        f"_seed{int(tile_sampling_seed)}.parquet"
+    )
+    return os.path.join(cache_dir, filename)
+
+
+def _load_or_build_tile_index(
+    station_samples: pd.DataFrame,
+    cache_dir: str,
+    domain_h: int,
+    domain_w: int,
+    patch_size: int,
+    tile_stride: int,
+    tiles_per_day: int | None,
+    tile_sampling_seed: int,
+) -> pd.DataFrame:
+    cache_path = _tile_index_cache_path(
+        cache_dir=cache_dir,
+        patch_size=patch_size,
+        tile_stride=tile_stride,
+        tiles_per_day=tiles_per_day,
+        tile_sampling_seed=tile_sampling_seed,
+    )
+    if os.path.exists(cache_path):
+        tile_df = pd.read_parquet(cache_path)
+        tile_df["day"] = pd.to_datetime(tile_df["day"]).dt.normalize()
+        return tile_df
+
+    max_r0 = max(domain_h - patch_size, 0)
+    max_c0 = max(domain_w - patch_size, 0)
+    tile_rows = np.clip(
+        (station_samples["bg_row"].to_numpy(dtype="int32") // tile_stride)
+        * tile_stride,
+        0,
+        max_r0,
+    )
+    tile_cols = np.clip(
+        (station_samples["bg_col"].to_numpy(dtype="int32") // tile_stride)
+        * tile_stride,
+        0,
+        max_c0,
+    )
+
+    tile_df = pd.DataFrame(
+        {
+            "day": pd.to_datetime(station_samples["day"]).dt.normalize(),
+            "tile_r0": tile_rows.astype("int32"),
+            "tile_c0": tile_cols.astype("int32"),
+        }
+    )
+    tile_df = (
+        tile_df.groupby(["day", "tile_r0", "tile_c0"], as_index=False)
+        .size()
+        .rename(columns={"size": "n_station_samples"})
+        .sort_values(["day", "tile_r0", "tile_c0"])
+        .reset_index(drop=True)
+    )
+
+    if tiles_per_day is not None and tiles_per_day > 0:
+        rng = np.random.default_rng(tile_sampling_seed)
+        keep_idx: list[int] = []
+        for _, grp in tile_df.groupby("day", sort=False):
+            idxs = grp.index.to_numpy()
+            if len(idxs) > tiles_per_day:
+                idxs = np.sort(rng.choice(idxs, tiles_per_day, replace=False))
+            keep_idx.extend(idxs.tolist())
+        tile_df = tile_df.loc[keep_idx].reset_index(drop=True)
+
+    tile_df.to_parquet(cache_path, index=False)
+    return tile_df
+
+
 class HRRRPatchDataset(Dataset):
     """
     Dataset for raster-patch HRRR bias learning.
@@ -170,6 +473,7 @@ class HRRRPatchDataset(Dataset):
         patch_size: int = 64,
         cache_size: int = 8,
         centers_per_day: int | None = None,
+        center_sampling_seed: int = 42,
     ):
         super().__init__()
         self._holdout_fids = holdout_fids or set()
@@ -185,6 +489,7 @@ class HRRRPatchDataset(Dataset):
         self.target_names = target_names or list(DEFAULT_TARGET_NAMES)
         self.patch_size = patch_size
         self._centers_per_day = centers_per_day
+        self._center_sampling_seed = center_sampling_seed
 
         actual_cache = max(
             cache_size,
@@ -195,64 +500,23 @@ class HRRRPatchDataset(Dataset):
         )
         self.raster_cache = _RasterCache(max_items=actual_cache)
 
-        # --- Patch-center table ---
-        df = pd.read_parquet(table_path)
-        if isinstance(df.index, pd.MultiIndex):
-            df = df.reset_index()
-        df["fid"] = df["fid"].astype(str)
-        df["day"] = pd.to_datetime(df["day"]).dt.normalize()
-
-        day_set: set | None = None
-        if train_days is not None:
-            day_set = {pd.Timestamp(d).normalize() for d in train_days}
-            df = df[df["day"].isin(day_set)]
-        if target_include_fids is not None:
-            df = df[df["fid"].isin(target_include_fids)]
-        if target_exclude_fids is not None:
-            df = df[~df["fid"].isin(target_exclude_fids)]
-
-        sample_mask = df[self.target_names].notna().any(axis=1)
-        df = df[sample_mask].copy()
-
-        bg_exists = df["day"].map(lambda d: os.path.exists(self._background_path(d)))
-        df = df[bg_exists].copy()
-        if df.empty:
-            raise ValueError("No supervised samples remain after raster/day filtering.")
-
-        df = df.sort_values("day").reset_index(drop=True)
-
-        # Cap center patches per day to reduce sample count for fast iteration
-        if self._centers_per_day is not None and self._centers_per_day > 0:
-            rng = np.random.default_rng(42)
-            keep_idx: list[int] = []
-            for _, grp in df.groupby("day"):
-                idxs = grp.index.tolist()
-                if len(idxs) > self._centers_per_day:
-                    idxs = rng.choice(
-                        idxs, self._centers_per_day, replace=False
-                    ).tolist()
-                keep_idx.extend(idxs)
-            df = df.loc[sorted(keep_idx)].reset_index(drop=True)
-
-        self.samples = df
-
-        # --- Neighbor pool for in-patch supervision ---
-        neighbor_df = pd.read_parquet(table_path)
-        if isinstance(neighbor_df.index, pd.MultiIndex):
-            neighbor_df = neighbor_df.reset_index()
-        neighbor_df["fid"] = neighbor_df["fid"].astype(str)
-        neighbor_df["day"] = pd.to_datetime(neighbor_df["day"]).dt.normalize()
-        if day_set is not None:
-            neighbor_df = neighbor_df[neighbor_df["day"].isin(day_set)]
-        if supervision_exclude_fids is not None:
-            neighbor_df = neighbor_df[
-                ~neighbor_df["fid"].isin(supervision_exclude_fids)
-            ]
-
-        self._neighbor_day_groups = {
-            pd.Timestamp(day).normalize(): grp.reset_index(drop=True)
-            for day, grp in neighbor_df.groupby("day")
-        }
+        (
+            self.samples,
+            self._neighbor_df,
+            self._neighbor_day_slices,
+            self.metadata_cache_dir,
+        ) = _load_or_build_patch_metadata(
+            table_path=table_path,
+            background_dir=self.background_dir,
+            background_pattern=self.background_pattern,
+            target_names=self.target_names,
+            train_days=train_days,
+            target_include_fids=target_include_fids,
+            target_exclude_fids=target_exclude_fids,
+            supervision_exclude_fids=supervision_exclude_fids,
+            centers_per_day=self._centers_per_day,
+            center_sampling_seed=self._center_sampling_seed,
+        )
 
         # --- Band names ---
         example_bg = self._background_path(self.samples.iloc[0]["day"])
@@ -475,26 +739,11 @@ class HRRRPatchDataset(Dataset):
                     cdr_w - 1,
                 )
 
-        # Pre-project center station coordinates to raster row/col
-        to_bg = Transformer.from_crs("EPSG:4326", bg_crs, always_xy=True)
-        center_lons = self.samples["longitude"].to_numpy(dtype="float64")
-        center_lats = self.samples["latitude"].to_numpy(dtype="float64")
-        cx, cy = to_bg.transform(center_lons, center_lats)
-        cr, cc = rowcol(bg_tf, cx, cy)
-        self._center_rows = np.asarray(cr, dtype="int32")
-        self._center_cols = np.asarray(cc, dtype="int32")
-
-        # Pre-project neighbor stations per day
-        self._neighbor_rc: dict[pd.Timestamp, tuple[np.ndarray, np.ndarray]] = {}
-        for day, grp in self._neighbor_day_groups.items():
-            sta_lons = grp["longitude"].to_numpy(dtype="float64")
-            sta_lats = grp["latitude"].to_numpy(dtype="float64")
-            sx, sy = to_bg.transform(sta_lons, sta_lats)
-            sr, sc = rowcol(bg_tf, sx, sy)
-            self._neighbor_rc[day] = (
-                np.asarray(sr, dtype="int32"),
-                np.asarray(sc, dtype="int32"),
-            )
+        # Pre-projected center / neighbor station coordinates come from cached metadata.
+        self._center_rows = self.samples["bg_row"].to_numpy(dtype="int32")
+        self._center_cols = self.samples["bg_col"].to_numpy(dtype="int32")
+        self._neighbor_rows = self._neighbor_df["bg_row"].to_numpy(dtype="int32")
+        self._neighbor_cols = self._neighbor_df["bg_col"].to_numpy(dtype="int32")
 
         # Eager-load static rasters so DataLoader workers share via COW
         for tif_path in self.static_tifs:
@@ -517,18 +766,32 @@ class HRRRPatchDataset(Dataset):
             self.cdr_pattern.format(date=pd.Timestamp(day).strftime("%Y%m%d")),
         )
 
-    def __getitem__(self, idx: int):
-        row = self.samples.iloc[idx]
-        day = pd.Timestamp(row["day"]).normalize()
+    def _neighbor_day_data(
+        self, day: pd.Timestamp
+    ) -> tuple[pd.DataFrame | None, np.ndarray | None, np.ndarray | None]:
+        bounds = self._neighbor_day_slices.get(pd.Timestamp(day).normalize())
+        if bounds is None:
+            return None, None, None
+        start, stop = bounds
+        return (
+            self._neighbor_df.iloc[start:stop],
+            self._neighbor_rows[start:stop],
+            self._neighbor_cols[start:stop],
+        )
+
+    def _build_patch_sample(
+        self,
+        day: pd.Timestamp,
+        r0: int,
+        c0: int,
+        center_fid: str | None = None,
+        center_rc: tuple[int, int] | None = None,
+        center_row: pd.Series | None = None,
+    ):
+        day = pd.Timestamp(day).normalize()
         doy = day.dayofyear
         period = _landsat_period(doy)
         H = W = self.patch_size
-
-        # Patch bounds from pre-computed center pixel
-        r_center = int(self._center_rows[idx])
-        c_center = int(self._center_cols[idx])
-        r0 = int(np.clip(r_center - H // 2, 0, self._domain_H - H))
-        c0 = int(np.clip(c_center - W // 2, 0, self._domain_W - W))
         r1, c1 = r0 + H, c0 + W
 
         # --- HRRR background patch (cache hit for same-day samples) ---
@@ -626,19 +889,18 @@ class HRRRPatchDataset(Dataset):
         sta_valid_list: list[list[bool]] = []
         sta_holdout_list: list[bool] = []
         sta_is_center_list: list[bool] = []
-        center_fid = str(row["fid"])
 
-        day_group = self._neighbor_day_groups.get(day)
-        day_rc = self._neighbor_rc.get(day)
-        if day_group is not None and day_rc is not None and not day_group.empty:
-            sta_r, sta_c = day_rc
+        day_group, sta_r, sta_c = self._neighbor_day_data(day)
+        if day_group is not None and sta_r is not None and not day_group.empty:
             in_patch = (sta_r >= r0) & (sta_r < r1) & (sta_c >= c0) & (sta_c < c1)
             for j in np.where(in_patch)[0]:
                 sta_rows_list.append(int(sta_r[j] - r0))
                 sta_cols_list.append(int(sta_c[j] - c0))
                 fid_j = str(day_group.iloc[j]["fid"])
                 sta_holdout_list.append(fid_j in self._holdout_fids)
-                sta_is_center_list.append(fid_j == center_fid)
+                sta_is_center_list.append(
+                    center_fid is not None and fid_j == center_fid
+                )
                 tgt = []
                 vld = []
                 for name in self.target_names:
@@ -651,8 +913,14 @@ class HRRRPatchDataset(Dataset):
 
         # Fallback: use the patch-center station if no in-patch stations were found
         if not sta_rows_list:
+            if center_fid is None or center_rc is None or center_row is None:
+                raise RuntimeError(
+                    f"Tile patch for {day.strftime('%Y-%m-%d')} at ({r0}, {c0}) "
+                    "had no supervised stations."
+                )
+            r_center, c_center = center_rc
             r_in = int(np.clip(r_center - r0, 0, H - 1))
-            c_in = int(np.clip(c_center - c0, 0, W - 1))
+            c_in = int(np.clip(c_center - c0, 0, H - 1))
             sta_rows_list.append(r_in)
             sta_cols_list.append(c_in)
             sta_holdout_list.append(center_fid in self._holdout_fids)
@@ -660,7 +928,7 @@ class HRRRPatchDataset(Dataset):
             tgt = []
             vld = []
             for name in self.target_names:
-                val = row.get(name, float("nan"))
+                val = center_row.get(name, float("nan"))
                 is_valid = pd.notna(val)
                 tgt.append(float(val) if is_valid else 0.0)
                 vld.append(bool(is_valid))
@@ -675,6 +943,183 @@ class HRRRPatchDataset(Dataset):
             torch.tensor(sta_valid_list, dtype=torch.bool),
             torch.tensor(sta_holdout_list, dtype=torch.bool),
             torch.tensor(sta_is_center_list, dtype=torch.bool),
+        )
+
+    def __getitem__(self, idx: int):
+        row = self.samples.iloc[idx]
+        day = pd.Timestamp(row["day"]).normalize()
+
+        # Patch bounds from pre-computed center pixel
+        r_center = int(self._center_rows[idx])
+        c_center = int(self._center_cols[idx])
+        r0 = int(
+            np.clip(
+                r_center - self.patch_size // 2, 0, self._domain_H - self.patch_size
+            )
+        )
+        c0 = int(
+            np.clip(
+                c_center - self.patch_size // 2, 0, self._domain_W - self.patch_size
+            )
+        )
+        return self._build_patch_sample(
+            day=day,
+            r0=r0,
+            c0=c0,
+            center_fid=str(row["fid"]),
+            center_rc=(r_center, c_center),
+            center_row=row,
+        )
+
+
+class HRRRDayTileBatchDataset(HRRRPatchDataset):
+    """Day-centric tile batch dataset for fast Stage B iteration.
+
+    One dataset sample = one day.  ``__getitem__`` loads that day's rasters
+    once and returns *K* tile-patch samples.  A dedicated collate function
+    (``collate_day_tile_batch``) flattens them into the standard Stage B
+    batch format so ``LitPatchAssim`` needs no changes.
+
+    ``set_epoch(epoch)`` varies the per-day tile selection each epoch.
+    """
+
+    def __init__(
+        self,
+        *args,
+        tile_stride: int | None = None,
+        tiles_per_day: int | None = None,
+        tile_sampling_seed: int = 42,
+        **kwargs,
+    ):
+        super().__init__(*args, **kwargs)
+        stride = tile_stride if tile_stride is not None else self.patch_size
+        if stride <= 0:
+            raise ValueError(f"tile_stride must be > 0, got {stride}")
+        if stride > self.patch_size:
+            raise ValueError(
+                f"tile_stride must be <= patch_size ({self.patch_size}), got {stride}"
+            )
+
+        self.tile_stride = int(stride)
+        self.tiles_per_day = tiles_per_day
+        self.tile_sampling_seed = tile_sampling_seed
+
+        # Build FULL tile index (no per-day cap) so set_epoch() can resample
+        station_samples = self.samples
+        self._tile_index = _load_or_build_tile_index(
+            station_samples=station_samples,
+            cache_dir=self.metadata_cache_dir,
+            domain_h=self._domain_H,
+            domain_w=self._domain_W,
+            patch_size=self.patch_size,
+            tile_stride=self.tile_stride,
+            tiles_per_day=None,
+            tile_sampling_seed=self.tile_sampling_seed,
+        )
+        self._tile_r0 = self._tile_index["tile_r0"].to_numpy(dtype="int32")
+        self._tile_c0 = self._tile_index["tile_c0"].to_numpy(dtype="int32")
+        self._tile_day_slices = _build_day_slices(self._tile_index["day"])
+
+        # Rebuild samples as one-row-per-day for DayGroupedSampler compatibility
+        day_list = sorted(self._tile_index["day"].unique())
+        self.samples = pd.DataFrame({"day": day_list})
+
+        self._center_rows = None
+        self._center_cols = None
+        self._epoch = 0
+
+    def set_epoch(self, epoch: int) -> None:
+        """Update epoch so tile choices change across epochs."""
+        self._epoch = epoch
+
+    def __len__(self) -> int:
+        return len(self.samples)
+
+    def __getitem__(self, idx: int):
+        day = pd.Timestamp(self.samples.iloc[idx]["day"]).normalize()
+
+        bounds = self._tile_day_slices.get(day)
+        if bounds is None:
+            return []
+        start, stop = bounds
+        tile_r0 = self._tile_r0[start:stop]
+        tile_c0 = self._tile_c0[start:stop]
+        n_tiles = len(tile_r0)
+
+        if self.tiles_per_day is not None and n_tiles > self.tiles_per_day:
+            rng = np.random.default_rng(
+                self.tile_sampling_seed + self._epoch * 100_000 + idx
+            )
+            chosen = np.sort(rng.choice(n_tiles, self.tiles_per_day, replace=False))
+            tile_r0 = tile_r0[chosen]
+            tile_c0 = tile_c0[chosen]
+            n_tiles = self.tiles_per_day
+
+        samples = []
+        for i in range(n_tiles):
+            sample = self._build_patch_sample(
+                day=day,
+                r0=int(tile_r0[i]),
+                c0=int(tile_c0[i]),
+            )
+            samples.append(sample)
+        return samples
+
+
+class HRRRTilePatchDataset(HRRRPatchDataset):
+    """Tile-indexed variant of ``HRRRPatchDataset`` for Stage B training.
+
+    The patch geometry is fixed on a regular tile lattice. One dataset sample is one
+    occupied ``(day, tile)`` pair, and supervision is provided by all stations that
+    fall inside the tile.
+    """
+
+    def __init__(
+        self,
+        *args,
+        tile_stride: int | None = None,
+        tiles_per_day: int | None = None,
+        tile_sampling_seed: int = 42,
+        **kwargs,
+    ):
+        super().__init__(*args, **kwargs)
+        stride = tile_stride if tile_stride is not None else self.patch_size
+        if stride <= 0:
+            raise ValueError(f"tile_stride must be > 0, got {stride}")
+        if stride > self.patch_size:
+            raise ValueError(
+                f"tile_stride must be <= patch_size ({self.patch_size}), got {stride}"
+            )
+
+        self.tile_stride = int(stride)
+        self.tiles_per_day = tiles_per_day
+        self.tile_sampling_seed = tile_sampling_seed
+
+        station_samples = self.samples
+        self.samples = _load_or_build_tile_index(
+            station_samples=station_samples,
+            cache_dir=self.metadata_cache_dir,
+            domain_h=self._domain_H,
+            domain_w=self._domain_W,
+            patch_size=self.patch_size,
+            tile_stride=self.tile_stride,
+            tiles_per_day=self.tiles_per_day,
+            tile_sampling_seed=self.tile_sampling_seed,
+        )
+        self._tile_rows = self.samples["tile_r0"].to_numpy(dtype="int32")
+        self._tile_cols = self.samples["tile_c0"].to_numpy(dtype="int32")
+
+        # Center arrays are not used in tile mode and keeping them doubles the
+        # indexed coordinate payload in memory.
+        self._center_rows = None
+        self._center_cols = None
+
+    def __getitem__(self, idx: int):
+        row = self.samples.iloc[idx]
+        return self._build_patch_sample(
+            day=pd.Timestamp(row["day"]).normalize(),
+            r0=int(self._tile_rows[idx]),
+            c0=int(self._tile_cols[idx]),
         )
 
 
@@ -727,3 +1172,16 @@ def collate_patch(batch):
             sta_is_center[i, :n] = center_list[i]
 
     return x, sta_rows, sta_cols, sta_targets, sta_valid, sta_holdout, sta_is_center
+
+
+def collate_day_tile_batch(batch):
+    """Flatten day-centric batches into the standard Stage B collated format.
+
+    Each item in *batch* is a list of K sample tuples (one day's worth of tiles).
+    We flatten all day payloads into a single sample list and delegate to
+    ``collate_patch``.
+    """
+    flat = []
+    for day_samples in batch:
+        flat.extend(day_samples)
+    return collate_patch(flat)
