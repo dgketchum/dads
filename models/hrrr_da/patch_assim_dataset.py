@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import multiprocessing as mp
 import os
 
 import numpy as np
@@ -787,6 +788,8 @@ class HRRRPatchDataset(Dataset):
         center_fid: str | None = None,
         center_rc: tuple[int, int] | None = None,
         center_row: pd.Series | None = None,
+        *,
+        prefetched_neighbors: tuple | None = None,
     ):
         day = pd.Timestamp(day).normalize()
         doy = day.dayofyear
@@ -890,7 +893,10 @@ class HRRRPatchDataset(Dataset):
         sta_holdout_list: list[bool] = []
         sta_is_center_list: list[bool] = []
 
-        day_group, sta_r, sta_c = self._neighbor_day_data(day)
+        if prefetched_neighbors is not None:
+            day_group, sta_r, sta_c = prefetched_neighbors
+        else:
+            day_group, sta_r, sta_c = self._neighbor_day_data(day)
         if day_group is not None and sta_r is not None and not day_group.empty:
             in_patch = (sta_r >= r0) & (sta_r < r1) & (sta_c >= c0) & (sta_c < c1)
             for j in np.where(in_patch)[0]:
@@ -1026,16 +1032,19 @@ class HRRRDayTileBatchDataset(HRRRPatchDataset):
 
         self._center_rows = None
         self._center_cols = None
-        self._epoch = 0
+        # Shared int so DataLoader workers (including persistent ones) see
+        # epoch updates made by the main-process callback.
+        self._shared_epoch = mp.Value("i", 0)
 
     def set_epoch(self, epoch: int) -> None:
         """Update epoch so tile choices change across epochs."""
-        self._epoch = epoch
+        self._shared_epoch.value = epoch
 
     def __len__(self) -> int:
         return len(self.samples)
 
     def __getitem__(self, idx: int):
+        epoch = self._shared_epoch.value
         day = pd.Timestamp(self.samples.iloc[idx]["day"]).normalize()
 
         bounds = self._tile_day_slices.get(day)
@@ -1047,13 +1056,14 @@ class HRRRDayTileBatchDataset(HRRRPatchDataset):
         n_tiles = len(tile_r0)
 
         if self.tiles_per_day is not None and n_tiles > self.tiles_per_day:
-            rng = np.random.default_rng(
-                self.tile_sampling_seed + self._epoch * 100_000 + idx
-            )
+            rng = np.random.default_rng(self.tile_sampling_seed + epoch * 100_000 + idx)
             chosen = np.sort(rng.choice(n_tiles, self.tiles_per_day, replace=False))
             tile_r0 = tile_r0[chosen]
             tile_c0 = tile_c0[chosen]
             n_tiles = self.tiles_per_day
+
+        # Fetch day's neighbor data ONCE for all K tiles
+        prefetched = self._neighbor_day_data(day)
 
         samples = []
         for i in range(n_tiles):
@@ -1061,6 +1071,7 @@ class HRRRDayTileBatchDataset(HRRRPatchDataset):
                 day=day,
                 r0=int(tile_r0[i]),
                 c0=int(tile_c0[i]),
+                prefetched_neighbors=prefetched,
             )
             samples.append(sample)
         return samples

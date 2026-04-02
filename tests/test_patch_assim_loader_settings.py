@@ -158,3 +158,27 @@ def test_day_tile_resampling_callback_calls_set_epoch():
 
     assert sampler.epoch == 7
     assert dataset.epoch == 7
+
+
+def test_shared_epoch_visible_across_processes():
+    """mp.Value epoch must be readable from a child process after main-process set_epoch."""
+    import multiprocessing as mp_mod
+
+    shared = mp_mod.Value("i", 0)
+
+    def _read_epoch(shared_val, result_queue):
+        result_queue.put(shared_val.value)
+
+    q = mp_mod.Queue()
+    # Initial value visible in child
+    p = mp_mod.Process(target=_read_epoch, args=(shared, q))
+    p.start()
+    p.join()
+    assert q.get() == 0
+
+    # After update, child sees new value
+    shared.value = 5
+    p2 = mp_mod.Process(target=_read_epoch, args=(shared, q))
+    p2.start()
+    p2.join()
+    assert q.get() == 5
