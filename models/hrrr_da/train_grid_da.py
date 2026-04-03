@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import time
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 
@@ -28,9 +29,19 @@ from lightning.pytorch.callbacks import (
 )
 from torch.utils.data import DataLoader
 
-from models.hrrr_da.grid_da_dataset import GridDAPatchDataset, collate_grid_da
+from models.hrrr_da.checkpoint_utils import (
+    checkpoint_filename_template,
+    symlink_best_checkpoint,
+)
+from models.hrrr_da.grid_da_dataset import (
+    GridDADayTileBatchDataset,
+    GridDAPatchDataset,
+    collate_grid_da,
+    collate_grid_da_day_tile,
+)
 from models.hrrr_da.lit_grid_da import LitGridDA
 from models.hrrr_da.train_hrrr_hetero import DayGroupedSampler, DayResamplingCallback
+from models.hrrr_da.train_patch_assim import DayTileResamplingCallback
 from prep.paths import MVP_ROOT
 
 
@@ -53,8 +64,16 @@ class GridDAConfig:
     days_per_epoch: int = 250
     val_days_per_epoch: int | None = None
     num_workers: int = 4
+    train_num_workers: int | None = None
+    val_num_workers: int | None = None
+    train_persistent_workers: bool | None = None
+    val_persistent_workers: bool | None = None
+    num_sanity_val_steps: int | None = None
     patch_size: int = 64
     benchmark_mode: bool = True
+    train_sample_mode: str = "center"
+    train_tile_stride: int | None = None
+    train_tiles_per_day: int | None = None
 
     target_names: list[str] = field(default_factory=lambda: ["delta_tmax"])
     payload_cols: list[str] = field(
@@ -131,6 +150,47 @@ def _build_config(args: argparse.Namespace) -> GridDAConfig:
     return cfg
 
 
+def _resolve_loader_settings(
+    cfg: GridDAConfig,
+) -> tuple[int, int, bool, bool]:
+    """Resolve per-split worker and persistence settings.
+
+    Benchmark mode defaults validation to 1 non-persistent worker to avoid the
+    multi-worker cold-load stall observed in Stage B/C station-centered val.
+    """
+    train_num_workers = (
+        cfg.train_num_workers if cfg.train_num_workers is not None else cfg.num_workers
+    )
+    if cfg.val_num_workers is not None:
+        val_num_workers = cfg.val_num_workers
+    elif cfg.benchmark_mode:
+        val_num_workers = 1 if cfg.num_workers > 0 else 0
+    else:
+        val_num_workers = cfg.num_workers
+
+    if cfg.train_persistent_workers is not None:
+        train_persistent_workers = cfg.train_persistent_workers
+    else:
+        train_persistent_workers = train_num_workers > 0
+
+    if cfg.val_persistent_workers is not None:
+        val_persistent_workers = cfg.val_persistent_workers
+    else:
+        val_persistent_workers = False
+
+    if train_num_workers == 0:
+        train_persistent_workers = False
+    if val_num_workers == 0:
+        val_persistent_workers = False
+
+    return (
+        train_num_workers,
+        val_num_workers,
+        train_persistent_workers,
+        val_persistent_workers,
+    )
+
+
 def _load_stage_b_weights(model: LitGridDA, ckpt_path: str) -> None:
     """Load Stage B checkpoint into LitGridDA.
 
@@ -183,10 +243,23 @@ def _load_stage_b_weights(model: LitGridDA, ckpt_path: str) -> None:
 def main() -> None:
     args = _parse_args()
     cfg = _build_config(args)
+    (
+        train_num_workers,
+        val_num_workers,
+        train_persistent_workers,
+        val_persistent_workers,
+    ) = _resolve_loader_settings(cfg)
 
     L.seed_everything(cfg.seed, workers=True)
     os.makedirs(cfg.out_dir, exist_ok=True)
     cfg.save_toml(os.path.join(cfg.out_dir, "experiment.toml"))
+    print(
+        "Loader settings: "
+        f"train_workers={train_num_workers} "
+        f"(persistent={train_persistent_workers}), "
+        f"val_workers={val_num_workers} "
+        f"(persistent={val_persistent_workers})"
+    )
 
     # Load norm stats
     provided_norm_stats: dict | None = None
@@ -238,7 +311,7 @@ def main() -> None:
         patch_size=cfg.patch_size,
     )
 
-    train_ds = GridDAPatchDataset(
+    da_kwargs = dict(
         payload_cols=cfg.payload_cols,
         teacher_dir=cfg.teacher_dir,
         teacher_pattern=cfg.teacher_pattern,
@@ -246,13 +319,29 @@ def main() -> None:
         train_days=train_days,
         target_exclude_fids=holdout_fids or None,
         supervision_exclude_fids=holdout_fids or None,
-        **base_kwargs,
     )
+
+    train_ds_t0 = time.time()
+    if cfg.train_sample_mode == "day_tile":
+        train_ds = GridDADayTileBatchDataset(
+            tile_stride=cfg.train_tile_stride,
+            tiles_per_day=cfg.train_tiles_per_day,
+            tile_sampling_seed=cfg.seed,
+            **da_kwargs,
+            **base_kwargs,
+        )
+    else:
+        train_ds = GridDAPatchDataset(
+            **da_kwargs,
+            **base_kwargs,
+        )
     in_channels = train_ds.in_channels
     source_ctx_dim = in_channels  # context extracted from x_patch
     source_pay_dim = train_ds.source_pay_dim
     print(
-        f"Train samples: {len(train_ds)}, in_channels: {in_channels}, pay_dim: {source_pay_dim}"
+        f"Train dataset: {train_ds.__class__.__name__}, "
+        f"samples: {len(train_ds)}, in_channels: {in_channels}, "
+        f"pay_dim: {source_pay_dim}, build={time.time() - train_ds_t0:.1f}s"
     )
 
     # Save manifests
@@ -299,16 +388,17 @@ def main() -> None:
     print(f"Val samples: {len(val_ds)}")
 
     # Dataloaders
+    is_day_tile = isinstance(train_ds, GridDADayTileBatchDataset)
     day_sampler = DayGroupedSampler(
         train_ds.samples, days_per_epoch=cfg.days_per_epoch, base_seed=cfg.seed
     )
     train_loader = DataLoader(
         train_ds,
-        batch_size=cfg.batch_size,
+        batch_size=1 if is_day_tile else cfg.batch_size,
         sampler=day_sampler,
-        num_workers=cfg.num_workers,
-        persistent_workers=(cfg.num_workers > 0),
-        collate_fn=collate_grid_da,
+        num_workers=train_num_workers,
+        persistent_workers=train_persistent_workers,
+        collate_fn=collate_grid_da_day_tile if is_day_tile else collate_grid_da,
     )
     n_val_days = val_ds.samples["day"].nunique()
     val_sampler = DayGroupedSampler(
@@ -318,8 +408,8 @@ def main() -> None:
         val_ds,
         batch_size=cfg.batch_size,
         sampler=val_sampler,
-        num_workers=cfg.num_workers,
-        persistent_workers=(cfg.num_workers > 0),
+        num_workers=val_num_workers,
+        persistent_workers=val_persistent_workers,
         collate_fn=collate_grid_da,
     )
 
@@ -365,14 +455,17 @@ def main() -> None:
             monitor=ckpt_metric,
             save_top_k=3,
             mode="min",
-            filename="ckpt-{epoch:03d}-{" + ckpt_metric + ":.4f}",
+            filename=checkpoint_filename_template(),
+            auto_insert_metric_name=False,
         ),
         EarlyStopping(monitor=ckpt_metric, patience=20, mode="min", strict=False),
         LearningRateMonitor(logging_interval="epoch"),
-        DayResamplingCallback(day_sampler),
+        DayTileResamplingCallback(day_sampler, train_ds)
+        if is_day_tile
+        else DayResamplingCallback(day_sampler),
     ]
 
-    trainer = L.Trainer(
+    trainer_kwargs: dict = dict(
         max_epochs=cfg.epochs,
         accelerator=accelerator,
         devices=devices,
@@ -381,6 +474,10 @@ def main() -> None:
         default_root_dir=cfg.out_dir,
         log_every_n_steps=10,
     )
+    if cfg.num_sanity_val_steps is not None:
+        trainer_kwargs["num_sanity_val_steps"] = cfg.num_sanity_val_steps
+
+    trainer = L.Trainer(**trainer_kwargs)
 
     trainer.fit(model, train_loader, val_loader)
 
@@ -388,10 +485,7 @@ def main() -> None:
     ckpt_cb = [c for c in callbacks if isinstance(c, ModelCheckpoint)][0]
     best = ckpt_cb.best_model_path
     if best:
-        link = os.path.join(cfg.out_dir, "best.ckpt")
-        if os.path.islink(link) or os.path.exists(link):
-            os.remove(link)
-        os.symlink(os.path.basename(best), link)
+        symlink_best_checkpoint(cfg.out_dir, best)
 
     metrics = {
         k: v.item() if hasattr(v, "item") else v

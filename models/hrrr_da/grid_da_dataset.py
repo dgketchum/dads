@@ -10,12 +10,18 @@ supervision query targets via the existing ``sta_holdout`` mask.
 
 from __future__ import annotations
 
+import multiprocessing as mp
+
 import numpy as np
 import pandas as pd
 import torch
 from torch.utils.data import Dataset
 
-from models.hrrr_da.patch_assim_dataset import HRRRPatchDataset
+from models.hrrr_da.patch_assim_dataset import (
+    HRRRPatchDataset,
+    _build_day_slices,
+    _load_or_build_tile_index,
+)
 
 # Default DA payload columns (aligned with DA v0 policy).
 DEFAULT_PAYLOAD_COLS = ["delta_tmax", "delta_tmin"]
@@ -117,38 +123,44 @@ class GridDAPatchDataset(Dataset):
     def __len__(self):
         return len(self._base)
 
-    def __getitem__(self, idx: int):
-        # Get base sample
+    def _augment_with_da(
+        self,
+        base_sample: tuple,
+        x_patch: torch.Tensor,
+        day: pd.Timestamp,
+        r0: int,
+        c0: int,
+        *,
+        prefetched_neighbors: tuple | None = None,
+    ) -> dict:
+        """Add DA source tensors to a base patch sample.
+
+        This is the shared augmentation logic used by both the station-centered
+        ``__getitem__`` and the day-tile variant.
+        """
         (
-            x_patch,
+            _x_patch,
             sta_rows,
             sta_cols,
             sta_targets,
             sta_valid,
             sta_holdout,
             sta_is_center,
-        ) = self._base[idx]
+        ) = base_sample
 
-        row = self._base.samples.iloc[idx]
-        day = pd.Timestamp(row["day"]).normalize()
         H = W = self._base.patch_size
 
-        # Recover patch bounds (same logic as base dataset)
-        r_center = int(self._base._center_rows[idx])
-        c_center = int(self._base._center_cols[idx])
-        r0 = int(np.clip(r_center - H // 2, 0, self._base._domain_H - H))
-        c0 = int(np.clip(c_center - W // 2, 0, self._base._domain_W - W))
-
         # --- Source stations: non-holdout in-patch stations ---
-        day_group = self._base._neighbor_day_groups.get(day)
-        day_rc = self._base._neighbor_rc.get(day)
+        if prefetched_neighbors is not None:
+            day_group, sta_r, sta_c = prefetched_neighbors
+        else:
+            day_group, sta_r, sta_c = self._base._neighbor_day_data(day)
 
         src_rows_list: list[int] = []
         src_cols_list: list[int] = []
         src_pay_list: list[list[float]] = []
 
-        if day_group is not None and day_rc is not None and not day_group.empty:
-            sta_r, sta_c = day_rc
+        if day_group is not None and sta_r is not None and not day_group.empty:
             in_patch = (
                 (sta_r >= r0) & (sta_r < r0 + H) & (sta_c >= c0) & (sta_c < c0 + W)
             )
@@ -256,6 +268,23 @@ class GridDAPatchDataset(Dataset):
             "y_valid_dense": y_valid_dense,
         }
 
+    def __getitem__(self, idx: int):
+        # Get base sample
+        base_sample = self._base[idx]
+        x_patch = base_sample[0]
+
+        row = self._base.samples.iloc[idx]
+        day = pd.Timestamp(row["day"]).normalize()
+        H = W = self._base.patch_size
+
+        # Recover patch bounds (same logic as base dataset)
+        r_center = int(self._base._center_rows[idx])
+        c_center = int(self._base._center_cols[idx])
+        r0 = int(np.clip(r_center - H // 2, 0, self._base._domain_H - H))
+        c0 = int(np.clip(c_center - W // 2, 0, self._base._domain_W - W))
+
+        return self._augment_with_da(base_sample, x_patch, day, r0, c0)
+
 
 def collate_grid_da(batch: list[dict]) -> dict:
     """Collate GridDAPatchDataset samples, padding both station and source dims."""
@@ -349,3 +378,155 @@ def collate_grid_da(batch: list[dict]) -> dict:
         "y_dense": y_dense,
         "y_valid_dense": y_valid_dense,
     }
+
+
+def collate_grid_da_day_tile(batch: list[list[dict]]) -> dict:
+    """Flatten day-centric batches into the standard Stage C collated format.
+
+    Each item in *batch* is a list of K sample dicts (one day's worth of tiles).
+    We flatten all day payloads into a single sample list and delegate to
+    ``collate_grid_da``.
+    """
+    flat = []
+    for day_samples in batch:
+        flat.extend(day_samples)
+    return collate_grid_da(flat)
+
+
+class GridDADayTileBatchDataset(Dataset):
+    """Day-centric tile batch dataset for Stage C DA training.
+
+    One dataset sample = one day.  ``__getitem__`` loads that day's rasters
+    once and returns *K* tile-patch dicts augmented with DA source tensors.
+
+    Mirrors ``HRRRDayTileBatchDataset`` geometry but uses ``GridDAPatchDataset``
+    DA augmentation for each tile.  Validation stays station-centered.
+
+    ``set_epoch(epoch)`` varies the per-day tile selection each epoch.
+    """
+
+    def __init__(
+        self,
+        *,
+        tile_stride: int | None = None,
+        tiles_per_day: int | None = None,
+        tile_sampling_seed: int = 42,
+        payload_cols: list[str] | None = None,
+        teacher_dir: str | None = None,
+        teacher_pattern: str = "URMA_1km_{date}.tif",
+        increment_map: dict[str, str] | None = None,
+        **base_kwargs,
+    ):
+        # Build the DA-augmentation wrapper around an HRRRPatchDataset
+        self._da = GridDAPatchDataset(
+            payload_cols=payload_cols,
+            teacher_dir=teacher_dir,
+            teacher_pattern=teacher_pattern,
+            increment_map=increment_map,
+            **base_kwargs,
+        )
+        base = self._da._base  # the inner HRRRPatchDataset
+
+        stride = tile_stride if tile_stride is not None else base.patch_size
+        if stride <= 0:
+            raise ValueError(f"tile_stride must be > 0, got {stride}")
+        if stride > base.patch_size:
+            raise ValueError(
+                f"tile_stride must be <= patch_size ({base.patch_size}), got {stride}"
+            )
+
+        self.tile_stride = int(stride)
+        self.tiles_per_day = tiles_per_day
+        self.tile_sampling_seed = tile_sampling_seed
+
+        # Build FULL tile index (no per-day cap) so set_epoch() can resample
+        station_samples = base.samples
+        self._tile_index = _load_or_build_tile_index(
+            station_samples=station_samples,
+            cache_dir=base.metadata_cache_dir,
+            domain_h=base._domain_H,
+            domain_w=base._domain_W,
+            patch_size=base.patch_size,
+            tile_stride=self.tile_stride,
+            tiles_per_day=None,
+            tile_sampling_seed=self.tile_sampling_seed,
+        )
+        self._tile_r0 = self._tile_index["tile_r0"].to_numpy(dtype="int32")
+        self._tile_c0 = self._tile_index["tile_c0"].to_numpy(dtype="int32")
+        self._tile_day_slices = _build_day_slices(self._tile_index["day"])
+
+        # Rebuild samples as one-row-per-day for DayGroupedSampler compatibility
+        day_list = sorted(self._tile_index["day"].unique())
+        self.samples = pd.DataFrame({"day": day_list})
+
+        # Shared int so DataLoader workers see epoch updates from the main
+        # process callback (same pattern as HRRRDayTileBatchDataset).
+        self._shared_epoch = mp.Value("i", 0)
+
+    def set_epoch(self, epoch: int) -> None:
+        """Update epoch so tile choices change across epochs."""
+        self._shared_epoch.value = epoch
+
+    # Delegate properties
+    @property
+    def in_channels(self):
+        return self._da.in_channels
+
+    @property
+    def feature_names(self):
+        return self._da.feature_names
+
+    @property
+    def target_names(self):
+        return self._da.target_names
+
+    @property
+    def norm_stats(self):
+        return self._da.norm_stats
+
+    @property
+    def source_pay_dim(self):
+        return self._da.source_pay_dim
+
+    def __len__(self) -> int:
+        return len(self.samples)
+
+    def __getitem__(self, idx: int) -> list[dict]:
+        epoch = self._shared_epoch.value
+        day = pd.Timestamp(self.samples.iloc[idx]["day"]).normalize()
+        base = self._da._base
+
+        bounds = self._tile_day_slices.get(day)
+        if bounds is None:
+            return []
+        start, stop = bounds
+        tile_r0 = self._tile_r0[start:stop]
+        tile_c0 = self._tile_c0[start:stop]
+        n_tiles = len(tile_r0)
+
+        if self.tiles_per_day is not None and n_tiles > self.tiles_per_day:
+            rng = np.random.default_rng(self.tile_sampling_seed + epoch * 100_000 + idx)
+            chosen = np.sort(rng.choice(n_tiles, self.tiles_per_day, replace=False))
+            tile_r0 = tile_r0[chosen]
+            tile_c0 = tile_c0[chosen]
+            n_tiles = self.tiles_per_day
+
+        # Fetch day's neighbor data ONCE for all K tiles
+        prefetched = base._neighbor_day_data(day)
+
+        samples = []
+        for i in range(n_tiles):
+            r0 = int(tile_r0[i])
+            c0 = int(tile_c0[i])
+            base_sample = base._build_patch_sample(
+                day=day,
+                r0=r0,
+                c0=c0,
+                prefetched_neighbors=prefetched,
+            )
+            x_patch = base_sample[0]
+            da_dict = self._da._augment_with_da(
+                base_sample, x_patch, day, r0, c0, prefetched_neighbors=prefetched
+            )
+            samples.append(da_dict)
+        return samples
