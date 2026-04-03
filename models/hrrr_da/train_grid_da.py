@@ -272,11 +272,13 @@ def main() -> None:
             provided_norm_stats = json.load(f).get("norm_stats")
         print(f"Loaded norm stats from {cfg.norm_stats_json}")
 
-    # Station table
-    df = pd.read_parquet(cfg.table_path)
+    # Station table — read only day/fid to derive splits (avoids full-table I/O)
+    parquet_t0 = time.time()
+    df = pd.read_parquet(cfg.table_path, columns=["day", "fid"])
     if isinstance(df.index, pd.MultiIndex):
         df = df.reset_index()
     df["day"] = pd.to_datetime(df["day"])
+    print(f"Parquet index loaded: {len(df)} rows, {time.time() - parquet_t0:.1f}s")
 
     train_days = set(df[df["day"].dt.year.isin(cfg.train_years)]["day"].unique())
     val_days = set(df[df["day"].dt.year.isin(cfg.val_years)]["day"].unique())
