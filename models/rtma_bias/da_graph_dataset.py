@@ -1,9 +1,12 @@
 """
-Dataset loader for DA benchmark HeteroData graphs (da-graph-v0).
+Dataset loader for DA benchmark HeteroData graphs.
 
 Loads pre-built HeteroData .pt files with source/query node separation.
 Applies z-score normalization to query and source features separately.
 Attaches loss_mask on query nodes for transductive holdout.
+
+Optionally applies a runtime source/query partition for training so that
+no station can simultaneously be a DA source and a supervised query.
 """
 
 from __future__ import annotations
@@ -12,6 +15,7 @@ import json
 import os
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import torch
 from torch.utils.data import Dataset
@@ -33,6 +37,16 @@ class DAGraphDataset(Dataset):
         Pre-computed {col: {mean, std}} for query and source features.
     target_index : int | None
         Select a single target column from multi-target y. None = all targets.
+    is_train : bool
+        Whether this is a training dataset (enables runtime split).
+    da_split_enabled : bool
+        Enable runtime source/query partition for training.
+    da_source_fraction : float
+        Fraction of non-holdout stations assigned as sources (rest are queries).
+    da_exclude_radius_km : float
+        Remove source→query edges shorter than this distance.
+    split_seed : int
+        Base seed for deterministic per-epoch split re-randomization.
     """
 
     def __init__(
@@ -42,10 +56,21 @@ class DAGraphDataset(Dataset):
         loss_fids: set | None = None,
         norm_stats: dict | None = None,
         target_index: int | None = None,
+        is_train: bool = False,
+        da_split_enabled: bool = False,
+        da_source_fraction: float = 0.5,
+        da_exclude_radius_km: float = 20.0,
+        split_seed: int = 42,
     ):
         super().__init__()
         self.loss_fids = loss_fids
         self.target_index = target_index
+        self.is_train = is_train
+        self.da_split_enabled = da_split_enabled
+        self.da_source_fraction = da_source_fraction
+        self.da_exclude_radius_km = da_exclude_radius_km
+        self.split_seed = split_seed
+        self._epoch = 0
 
         # Load and verify metadata
         meta_path = os.path.join(graph_dir, "meta.json")
@@ -61,6 +86,7 @@ class DAGraphDataset(Dataset):
 
         self.query_feature_cols: list[str] = meta["query_feature_cols"]
         self.target_cols: list[str] = meta["target_cols"]
+        self._sq_edge_norm = meta.get("source_query_edge_norm", {})
 
         # v1: separate context/payload; v0: combined source_feature_cols
         if family in ("da-graph-v1", "da-graph-v2"):
@@ -164,8 +190,100 @@ class DAGraphDataset(Dataset):
                     }
         return stats
 
+    def set_epoch(self, epoch: int) -> None:
+        """Update epoch for per-epoch split re-randomization."""
+        self._epoch = epoch
+
     def __len__(self) -> int:
         return len(self._graphs)
+
+    def _apply_split(
+        self,
+        g: HeteroData,
+        idx: int,
+        s_ctx: torch.Tensor,
+        s_pay: torch.Tensor | None,
+        sq_edge_index: torch.Tensor,
+        sq_edge_attr: torch.Tensor,
+        loss_mask: torch.Tensor,
+        q_valid: torch.Tensor,
+    ) -> tuple[
+        torch.Tensor, torch.Tensor | None, torch.Tensor, torch.Tensor, torch.Tensor
+    ]:
+        """Apply runtime source/query partition for training.
+
+        Returns updated (s_ctx, s_pay, sq_edge_index, sq_edge_attr, loss_mask).
+        """
+        q_fids = list(g["query"].fids)
+        s_fids = list(g["source"].fids)
+        n_src = len(s_fids)
+
+        # Identify non-holdout query fids that also exist as sources
+        holdout_fids = (
+            set() if self.loss_fids is None else (set(q_fids) - self.loss_fids)
+        )
+        eligible = [i for i, f in enumerate(s_fids) if f not in holdout_fids]
+        if len(eligible) < 2:
+            return s_ctx, s_pay, sq_edge_index, sq_edge_attr, loss_mask
+
+        # Deterministic per-graph, per-epoch partition
+        rng = np.random.default_rng(self.split_seed + self._epoch * 100_000 + idx)
+        n_source = max(1, int(round(len(eligible) * self.da_source_fraction)))
+        n_source = min(n_source, len(eligible) - 1)
+        perm = rng.permutation(len(eligible))
+        source_eligible_idx = set(perm[:n_source].tolist())
+
+        # Map back to source-node indices
+        source_keep = set()  # source node indices to keep
+        query_designated_fids = set()  # fids that should be supervised as queries
+        for ei, si in enumerate(eligible):
+            if ei in source_eligible_idx:
+                source_keep.add(si)
+            else:
+                query_designated_fids.add(s_fids[si])
+
+        # Build source node mask and reindex
+        src_mask = torch.zeros(n_src, dtype=torch.bool)
+        for si in source_keep:
+            src_mask[si] = True
+        new_src_idx = torch.full((n_src,), -1, dtype=torch.long)
+        new_src_idx[src_mask] = torch.arange(src_mask.sum())
+
+        # Filter source tensors
+        s_ctx = s_ctx[src_mask]
+        if s_pay is not None:
+            s_pay = s_pay[src_mask]
+
+        # Reindex source→query edges
+        old_src, old_dst = sq_edge_index[0], sq_edge_index[1]
+        edge_keep = src_mask[old_src]
+        sq_edge_index = torch.stack(
+            [new_src_idx[old_src[edge_keep]], old_dst[edge_keep]]
+        )
+        sq_edge_attr = sq_edge_attr[edge_keep]
+
+        # Apply exclusion radius: reconstruct km distance from normalized edge ch0
+        if self.da_exclude_radius_km > 0 and sq_edge_index.numel() > 0:
+            dist_mean = self._sq_edge_norm.get("dist_mean", 0.0)
+            dist_std = self._sq_edge_norm.get("dist_std", 1.0)
+            dist_km = sq_edge_attr[:, 0] * dist_std + dist_mean
+            radius_keep = dist_km >= self.da_exclude_radius_km
+            sq_edge_index = sq_edge_index[:, radius_keep]
+            sq_edge_attr = sq_edge_attr[radius_keep]
+
+        # Update loss_mask: only query-designated non-holdout stations get train loss
+        q_fid_to_idx = {}
+        for qi, f in enumerate(q_fids):
+            q_fid_to_idx.setdefault(f, []).append(qi)
+
+        new_loss_mask = torch.zeros_like(loss_mask)
+        for f in query_designated_fids:
+            for qi in q_fid_to_idx.get(f, []):
+                if q_valid[qi] if q_valid.ndim == 1 else q_valid[qi].any():
+                    new_loss_mask[qi] = True
+        loss_mask = new_loss_mask
+
+        return s_ctx, s_pay, sq_edge_index, sq_edge_attr, loss_mask
 
     def __getitem__(self, idx: int) -> HeteroData:
         g = self._graphs[idx]
@@ -222,6 +340,16 @@ class DAGraphDataset(Dataset):
         else:
             loss_mask = torch.ones(qx.shape[0], dtype=torch.bool)
 
+        # Clone edge tensors
+        sq_edge_index = g["source", "influences", "query"].edge_index.clone()
+        sq_edge_attr = g["source", "influences", "query"].edge_attr.clone()
+
+        # Runtime source/query split (train only)
+        if self.is_train and self.da_split_enabled:
+            s_ctx, s_pay, sq_edge_index, sq_edge_attr, loss_mask = self._apply_split(
+                g, idx, s_ctx, s_pay, sq_edge_index, sq_edge_attr, loss_mask, q_valid
+            )
+
         # Build output HeteroData
         out = HeteroData()
         out["query"].x = qx
@@ -239,12 +367,8 @@ class DAGraphDataset(Dataset):
         else:
             out["source"].x = s_ctx  # v0 compat
 
-        out["source", "influences", "query"].edge_index = g[
-            "source", "influences", "query"
-        ].edge_index.clone()
-        out["source", "influences", "query"].edge_attr = g[
-            "source", "influences", "query"
-        ].edge_attr.clone()
+        out["source", "influences", "query"].edge_index = sq_edge_index
+        out["source", "influences", "query"].edge_attr = sq_edge_attr
         out["query", "neighbors", "query"].edge_index = g[
             "query", "neighbors", "query"
         ].edge_index.clone()

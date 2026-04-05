@@ -49,6 +49,11 @@ class DAGNNConfig:
     da_gate_init_bias: float = -2.0
     source_edge_dropout: float = 0.0
 
+    da_split_enabled: bool = False
+    da_source_fraction: float = 0.5
+    da_exclude_radius_km: float = 20.0
+    split_seed: int = 42
+
     train_years: list[int] = field(default_factory=list)
     val_years: list[int] = field(default_factory=list)
 
@@ -69,6 +74,18 @@ class DAGNNConfig:
         with open(path, "rb") as f:
             d = tomllib.load(f)
         return cls(**d)
+
+
+class DASplitEpochCallback(L.Callback):
+    """Call set_epoch on the train dataset each epoch for split re-randomization."""
+
+    def __init__(self, train_dataset: DAGraphDataset) -> None:
+        self.train_dataset = train_dataset
+
+    def on_train_epoch_start(
+        self, trainer: L.Trainer, pl_module: L.LightningModule
+    ) -> None:
+        self.train_dataset.set_epoch(trainer.current_epoch)
 
 
 def _parse_args():
@@ -115,6 +132,11 @@ def main():
         train_days=train_days,
         loss_fids=train_loss_fids,
         target_index=cfg.target_index,
+        is_train=True,
+        da_split_enabled=cfg.da_split_enabled,
+        da_source_fraction=cfg.da_source_fraction,
+        da_exclude_radius_km=cfg.da_exclude_radius_km,
+        split_seed=cfg.split_seed,
     )
     train_ds.save_norm_stats(os.path.join(cfg.out_dir, "norm_stats.json"))
 
@@ -148,6 +170,11 @@ def main():
         json.dump(sorted(val_holdout), f)
 
     print(f"Train: {len(train_ds)} days, Val: {len(val_ds)} days")
+    if cfg.da_split_enabled:
+        print(
+            f"DA split: enabled, source_frac={cfg.da_source_fraction}, "
+            f"exclude_radius={cfg.da_exclude_radius_km}km, seed={cfg.split_seed}"
+        )
     print(
         f"Query features: {train_ds.query_node_dim}, "
         f"Source context: {train_ds.source_context_dim}, "
@@ -229,23 +256,27 @@ def main():
         accelerator = "auto"
         devices = 1
 
+    callbacks = [
+        ModelCheckpoint(
+            dirpath=cfg.out_dir,
+            monitor=ckpt_metric,
+            save_top_k=3,
+            mode="min",
+            filename="ckpt-{epoch:03d}-{" + ckpt_metric + ":.4f}",
+        ),
+        EarlyStopping(monitor=ckpt_metric, patience=20, mode="min"),
+        LearningRateMonitor(logging_interval="epoch"),
+    ]
+    if cfg.da_split_enabled:
+        callbacks.append(DASplitEpochCallback(train_ds))
+
     trainer = L.Trainer(
         max_epochs=cfg.epochs,
         accelerator=accelerator,
         devices=devices,
         precision="16-mixed" if accelerator == "gpu" else 32,
         gradient_clip_val=1.0,
-        callbacks=[
-            ModelCheckpoint(
-                dirpath=cfg.out_dir,
-                monitor=ckpt_metric,
-                save_top_k=3,
-                mode="min",
-                filename="ckpt-{epoch:03d}-{" + ckpt_metric + ":.4f}",
-            ),
-            EarlyStopping(monitor=ckpt_metric, patience=20, mode="min"),
-            LearningRateMonitor(logging_interval="epoch"),
-        ],
+        callbacks=callbacks,
         default_root_dir=cfg.out_dir,
         log_every_n_steps=10,
     )
