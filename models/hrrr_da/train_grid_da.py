@@ -74,6 +74,12 @@ class GridDAConfig:
     train_sample_mode: str = "center"
     train_tile_stride: int | None = None
     train_tiles_per_day: int | None = None
+    train_query_frac: float = 0.0
+    train_min_query_source_dist_px: int = 0
+    train_source_dropout_prob: float = 0.0
+    bg_loss_weight: float = 1.0
+    da_query_loss_weight: float = 1.0
+    gate_source_penalty_weight: float = 0.0
 
     target_names: list[str] = field(default_factory=lambda: ["delta_tmax"])
     payload_cols: list[str] = field(
@@ -329,6 +335,9 @@ def main() -> None:
             tile_stride=cfg.train_tile_stride,
             tiles_per_day=cfg.train_tiles_per_day,
             tile_sampling_seed=cfg.seed,
+            train_query_frac=cfg.train_query_frac,
+            train_min_query_source_dist_px=cfg.train_min_query_source_dist_px,
+            train_source_dropout_prob=cfg.train_source_dropout_prob,
             **da_kwargs,
             **base_kwargs,
         )
@@ -430,6 +439,9 @@ def main() -> None:
         support_radius_px=cfg.support_radius_px,
         da_gate_init_bias=cfg.da_gate_init_bias,
         benchmark_mode=cfg.benchmark_mode,
+        bg_loss_weight=cfg.bg_loss_weight,
+        da_query_loss_weight=cfg.da_query_loss_weight,
+        gate_source_penalty_weight=cfg.gate_source_penalty_weight,
     )
 
     # Load Stage B weights

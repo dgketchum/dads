@@ -132,11 +132,21 @@ class GridDAPatchDataset(Dataset):
         c0: int,
         *,
         prefetched_neighbors: tuple | None = None,
+        train_query_frac: float = 0.0,
+        train_min_query_source_dist_px: int = 0,
+        train_source_dropout_prob: float = 0.0,
+        rng: np.random.Generator | None = None,
     ) -> dict:
         """Add DA source tensors to a base patch sample.
 
         This is the shared augmentation logic used by both the station-centered
         ``__getitem__`` and the day-tile variant.
+
+        When ``train_query_frac > 0``, non-holdout stations are split into
+        disjoint source and query subsets.  Source stations provide DA tensors;
+        query stations are supervised with the full (bg + DA) prediction.
+        Source stations too close to any query station (within
+        ``train_min_query_source_dist_px``) are removed from the source set.
         """
         (
             _x_patch,
@@ -149,6 +159,7 @@ class GridDAPatchDataset(Dataset):
         ) = base_sample
 
         H = W = self._base.patch_size
+        n_sta = sta_rows.shape[0]
 
         # --- Source stations: non-holdout in-patch stations ---
         if prefetched_neighbors is not None:
@@ -156,9 +167,12 @@ class GridDAPatchDataset(Dataset):
         else:
             day_group, sta_r, sta_c = self._base._neighbor_day_data(day)
 
-        src_rows_list: list[int] = []
-        src_cols_list: list[int] = []
-        src_pay_list: list[list[float]] = []
+        # Collect ALL non-holdout in-patch stations with their pixel coords and
+        # payload.  We need the full list before partitioning.
+        candidate_rows: list[int] = []
+        candidate_cols: list[int] = []
+        candidate_pay: list[list[float]] = []
+        candidate_fids: list[str] = []
 
         if day_group is not None and sta_r is not None and not day_group.empty:
             in_patch = (
@@ -166,18 +180,93 @@ class GridDAPatchDataset(Dataset):
             )
             for j in np.where(in_patch)[0]:
                 fid_j = str(day_group.iloc[j]["fid"])
-                # Holdout stations excluded from source set
                 if fid_j in self._base._holdout_fids:
                     continue
-                src_rows_list.append(int(sta_r[j] - r0))
-                src_cols_list.append(int(sta_c[j] - c0))
+                candidate_rows.append(int(sta_r[j] - r0))
+                candidate_cols.append(int(sta_c[j] - c0))
+                candidate_fids.append(fid_j)
                 pay = []
                 for col in self.payload_cols:
                     val = day_group.iloc[j].get(col, float("nan"))
                     is_valid = pd.notna(val)
                     pay.append(float(val) if is_valid else 0.0)
                     pay.append(1.0 if is_valid else 0.0)
-                src_pay_list.append(pay)
+                candidate_pay.append(pay)
+
+        n_cand = len(candidate_rows)
+
+        # --- Source / query partition (train only) ---
+        # sta_is_source / sta_is_query are per-supervision-station masks that
+        # indicate the role assigned during this sample.  For validation
+        # (train_query_frac == 0) all non-holdout stations are sources and
+        # is_query is all-False.
+        sta_is_source = torch.zeros(n_sta, dtype=torch.bool)
+        sta_is_query = torch.zeros(n_sta, dtype=torch.bool)
+
+        if train_query_frac > 0 and n_cand >= 2:
+            if rng is None:
+                rng = np.random.default_rng()
+            n_query = max(1, int(round(n_cand * train_query_frac)))
+            n_query = min(n_query, n_cand - 1)  # keep at least 1 source
+            perm = rng.permutation(n_cand)
+            query_idx = set(perm[:n_query].tolist())
+            source_idx = set(perm[n_query:].tolist())
+
+            # Enforce min-distance: remove sources too close to any query
+            if train_min_query_source_dist_px > 0:
+                qr = np.array([candidate_rows[i] for i in query_idx])
+                qc = np.array([candidate_cols[i] for i in query_idx])
+                to_remove = set()
+                for si in source_idx:
+                    sr, sc = candidate_rows[si], candidate_cols[si]
+                    dists = np.sqrt((qr - sr) ** 2 + (qc - sc) ** 2)
+                    if dists.min() < train_min_query_source_dist_px:
+                        to_remove.add(si)
+                source_idx -= to_remove
+
+            # Source dropout
+            if train_source_dropout_prob > 0 and len(source_idx) > 1:
+                keep = rng.random(len(source_idx)) >= train_source_dropout_prob
+                if not keep.any():
+                    keep[0] = True  # keep at least one
+                source_idx = {s for s, k in zip(sorted(source_idx), keep) if k}
+
+            # Map candidate indices → supervision-station masks.  The
+            # supervision sta_* arrays come from _build_patch_sample which
+            # iterates the same neighbor day-data in the same order, so
+            # candidate_fids[i] aligns with the i-th non-holdout station in
+            # the supervision arrays.  We match by (row, col) pixel coords
+            # since FIDs aren't stored in the supervision tensors.
+            cand_rc = {(candidate_rows[i], candidate_cols[i]): i for i in range(n_cand)}
+            for si in range(n_sta):
+                if sta_holdout[si]:
+                    continue
+                rc = (int(sta_rows[si]), int(sta_cols[si]))
+                ci = cand_rc.get(rc)
+                if ci is None:
+                    continue
+                if ci in source_idx:
+                    sta_is_source[si] = True
+                elif ci in query_idx:
+                    sta_is_query[si] = True
+        else:
+            # No partition: all non-holdout stations are sources (legacy path
+            # and validation).
+            for si in range(n_sta):
+                if not sta_holdout[si]:
+                    sta_is_source[si] = True
+            source_idx = set(range(n_cand))
+
+        # Build DA source tensors from the source subset only
+        src_rows_list = (
+            [candidate_rows[i] for i in sorted(source_idx)] if n_cand > 0 else []
+        )
+        src_cols_list = (
+            [candidate_cols[i] for i in sorted(source_idx)] if n_cand > 0 else []
+        )
+        src_pay_list = (
+            [candidate_pay[i] for i in sorted(source_idx)] if n_cand > 0 else []
+        )
 
         n_src = len(src_rows_list)
 
@@ -185,7 +274,6 @@ class GridDAPatchDataset(Dataset):
         if n_src > 0:
             src_r = torch.tensor(src_rows_list, dtype=torch.long)
             src_c = torch.tensor(src_cols_list, dtype=torch.long)
-            # x_patch is (C, H, W); extract (n_src, C) at source pixels
             src_ctx = x_patch[:, src_r, src_c].T  # (n_src, C)
             src_pay = torch.tensor(src_pay_list, dtype=torch.float32)
         else:
@@ -257,6 +345,8 @@ class GridDAPatchDataset(Dataset):
             "sta_valid": sta_valid,
             "sta_holdout": sta_holdout,
             "sta_is_center": sta_is_center,
+            "sta_is_source": sta_is_source,
+            "sta_is_query": sta_is_query,
             "src_rows": src_r,
             "src_cols": src_c,
             "src_ctx": src_ctx,
@@ -305,6 +395,8 @@ def collate_grid_da(batch: list[dict]) -> dict:
     sta_valid = torch.zeros(B, max_sta, n_targets, dtype=torch.bool)
     sta_holdout = torch.zeros(B, max_sta, dtype=torch.bool)
     sta_is_center = torch.zeros(B, max_sta, dtype=torch.bool)
+    sta_is_source = torch.zeros(B, max_sta, dtype=torch.bool)
+    sta_is_query = torch.zeros(B, max_sta, dtype=torch.bool)
 
     for i, s in enumerate(batch):
         n = s["sta_rows"].shape[0]
@@ -314,6 +406,8 @@ def collate_grid_da(batch: list[dict]) -> dict:
         sta_valid[i, :n] = s["sta_valid"]
         sta_holdout[i, :n] = s["sta_holdout"]
         sta_is_center[i, :n] = s["sta_is_center"]
+        sta_is_source[i, :n] = s["sta_is_source"]
+        sta_is_query[i, :n] = s["sta_is_query"]
 
     # --- Source stations (variable length, pad to max) ---
     max_src = max(s["src_rows"].shape[0] for s in batch)
@@ -368,6 +462,8 @@ def collate_grid_da(batch: list[dict]) -> dict:
         "sta_valid": sta_valid,
         "sta_holdout": sta_holdout,
         "sta_is_center": sta_is_center,
+        "sta_is_source": sta_is_source,
+        "sta_is_query": sta_is_query,
         "src_rows": src_rows,
         "src_cols": src_cols,
         "src_ctx": src_ctx,
@@ -411,12 +507,19 @@ class GridDADayTileBatchDataset(Dataset):
         tile_stride: int | None = None,
         tiles_per_day: int | None = None,
         tile_sampling_seed: int = 42,
+        train_query_frac: float = 0.0,
+        train_min_query_source_dist_px: int = 0,
+        train_source_dropout_prob: float = 0.0,
         payload_cols: list[str] | None = None,
         teacher_dir: str | None = None,
         teacher_pattern: str = "URMA_1km_{date}.tif",
         increment_map: dict[str, str] | None = None,
         **base_kwargs,
     ):
+        self.train_query_frac = float(train_query_frac)
+        self.train_min_query_source_dist_px = int(train_min_query_source_dist_px)
+        self.train_source_dropout_prob = float(train_source_dropout_prob)
+
         # Build the DA-augmentation wrapper around an HRRRPatchDataset
         self._da = GridDAPatchDataset(
             payload_cols=payload_cols,
@@ -514,6 +617,11 @@ class GridDADayTileBatchDataset(Dataset):
         # Fetch day's neighbor data ONCE for all K tiles
         prefetched = base._neighbor_day_data(day)
 
+        # Per-day RNG for reproducible source/query splits
+        tile_rng = np.random.default_rng(
+            self.tile_sampling_seed + epoch * 100_000 + idx + 7
+        )
+
         samples = []
         for i in range(n_tiles):
             r0 = int(tile_r0[i])
@@ -526,7 +634,16 @@ class GridDADayTileBatchDataset(Dataset):
             )
             x_patch = base_sample[0]
             da_dict = self._da._augment_with_da(
-                base_sample, x_patch, day, r0, c0, prefetched_neighbors=prefetched
+                base_sample,
+                x_patch,
+                day,
+                r0,
+                c0,
+                prefetched_neighbors=prefetched,
+                train_query_frac=self.train_query_frac,
+                train_min_query_source_dist_px=self.train_min_query_source_dist_px,
+                train_source_dropout_prob=self.train_source_dropout_prob,
+                rng=tile_rng,
             )
             samples.append(da_dict)
         return samples

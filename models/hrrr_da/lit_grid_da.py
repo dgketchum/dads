@@ -71,6 +71,9 @@ class LitGridDA(L.LightningModule):
         support_radius_px: int = 16,
         da_gate_init_bias: float = -2.0,
         benchmark_mode: bool = True,
+        bg_loss_weight: float = 1.0,
+        da_query_loss_weight: float = 1.0,
+        gate_source_penalty_weight: float = 0.0,
     ):
         super().__init__()
         self.save_hyperparameters()
@@ -80,6 +83,9 @@ class LitGridDA(L.LightningModule):
         self.tv_weight = tv_weight
         self.huber_delta = huber_delta
         self.dense_loss_weight = dense_loss_weight
+        self.bg_loss_weight = bg_loss_weight
+        self.da_query_loss_weight = da_query_loss_weight
+        self.gate_source_penalty_weight = gate_source_penalty_weight
         n_targets = len(target_names)
         self.benchmark_mode = benchmark_mode
 
@@ -120,6 +126,7 @@ class LitGridDA(L.LightningModule):
         x = batch["x_patch"]
         F_grid = self.backbone(x, return_features=True)  # (B, base, H, W)
         bg_increment = self.bg_head(F_grid)  # (B, n_targets, H, W)
+        self._last_bg_increment = bg_increment
 
         if not self.da_enabled:
             return bg_increment
@@ -139,6 +146,8 @@ class LitGridDA(L.LightningModule):
         da_gate = torch.sigmoid(self.gate_head(fused))
         # Hard-zero DA contribution outside support radius and when no sources
         da_correction = da_gate * da_residual * coverage_mask
+        self._last_da_gate = da_gate
+        self._last_coverage_mask = coverage_mask
         self._last_gate_mean = (
             da_gate[coverage_mask.expand_as(da_gate) > 0].mean()
             if coverage_mask.any()
@@ -199,9 +208,107 @@ class LitGridDA(L.LightningModule):
 
         return loss, pred_at_sta, mask
 
+    def _compute_split_train_loss(self, batch: dict, pred: torch.Tensor):
+        """Compute separated background and DA query losses for training.
+
+        Background loss: bg_increment only, evaluated at source stations.
+        DA query loss: full prediction (bg + DA), evaluated at query stations.
+        """
+        sta_rows = batch["sta_rows"]
+        sta_cols = batch["sta_cols"]
+        sta_targets = batch["sta_targets"]
+        sta_valid = batch["sta_valid"]
+        sta_is_source = batch["sta_is_source"]
+        sta_is_query = batch["sta_is_query"]
+
+        bg_increment = self._last_bg_increment
+        bg_at_sta = self._gather_at_stations(bg_increment, sta_rows, sta_cols)
+        pred_at_sta = self._gather_at_stations(pred, sta_rows, sta_cols)
+
+        # Background loss on source stations (bg_increment only)
+        src_mask = sta_valid & sta_is_source.unsqueeze(-1).expand_as(sta_valid)
+        if src_mask.any():
+            bg_loss = F.huber_loss(
+                bg_at_sta[src_mask],
+                sta_targets[src_mask],
+                delta=self.huber_delta,
+                reduction="mean",
+            )
+        else:
+            bg_loss = pred.sum() * 0.0
+
+        # DA query loss on query stations (full prediction)
+        qry_mask = sta_valid & sta_is_query.unsqueeze(-1).expand_as(sta_valid)
+        if qry_mask.any():
+            da_query_loss = F.huber_loss(
+                pred_at_sta[qry_mask],
+                sta_targets[qry_mask],
+                delta=self.huber_delta,
+                reduction="mean",
+            )
+        else:
+            da_query_loss = pred.sum() * 0.0
+
+        loss = (
+            self.bg_loss_weight * bg_loss
+            + self.da_query_loss_weight * da_query_loss
+            + self.tv_weight * tv_loss(pred)
+        )
+
+        # Gate source penalty: penalise high gate values at source station pixels
+        if (
+            self.gate_source_penalty_weight > 0
+            and hasattr(self, "_last_da_gate")
+            and sta_is_source.any()
+        ):
+            gate_at_src = self._gather_at_stations(
+                self._last_da_gate, sta_rows, sta_cols
+            )
+            src_mask_1d = sta_is_source
+            if src_mask_1d.any():
+                # Mean squared gate at source pixels
+                gate_penalty = (
+                    gate_at_src[src_mask_1d.unsqueeze(-1).expand_as(gate_at_src)]
+                    .pow(2)
+                    .mean()
+                )
+                loss = loss + self.gate_source_penalty_weight * gate_penalty
+
+        # Optional dense teacher loss
+        if self.dense_loss_weight > 0 and batch.get("y_dense") is not None:
+            y_dense = batch["y_dense"]
+            y_vmask = batch["y_valid_dense"]
+            if y_vmask.any():
+                dense_loss = F.huber_loss(
+                    pred[:, : y_dense.shape[1]][y_vmask],
+                    y_dense[y_vmask],
+                    delta=self.huber_delta,
+                    reduction="mean",
+                )
+                loss = loss + self.dense_loss_weight * dense_loss
+
+        # For logging, combine masks so validation metrics remain comparable
+        all_train_mask = src_mask | qry_mask
+
+        return loss, pred_at_sta, all_train_mask, bg_loss, da_query_loss
+
     def training_step(self, batch, batch_idx):
         pred = self.forward(batch)
-        loss, _, _ = self._compute_loss(batch, pred, is_train=True)
+
+        # Use split losses when source/query partition is active
+        has_split = (
+            "sta_is_query" in batch and batch["sta_is_query"].any() and self.da_enabled
+        )
+
+        if has_split:
+            loss, _, _, bg_loss, da_qry_loss = self._compute_split_train_loss(
+                batch, pred
+            )
+            self.log("train_bg_loss", bg_loss, on_step=True, on_epoch=True)
+            self.log("train_da_query_loss", da_qry_loss, on_step=True, on_epoch=True)
+        else:
+            loss, _, _ = self._compute_loss(batch, pred, is_train=True)
+
         self.log("train_loss", loss, on_step=True, on_epoch=True, prog_bar=True)
         if self.da_enabled and hasattr(self, "_last_gate_mean"):
             self.log("da_gate_mean", self._last_gate_mean, on_step=True, on_epoch=True)

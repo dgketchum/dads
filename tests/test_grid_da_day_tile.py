@@ -76,6 +76,8 @@ def _make_da_sample(C=10, H=16, W=16, n_src=2, pay_dim=4, n_targets=1):
         "sta_valid": torch.ones(3, n_targets, dtype=torch.bool),
         "sta_holdout": torch.tensor([True, False, False], dtype=torch.bool),
         "sta_is_center": torch.tensor([False, False, False], dtype=torch.bool),
+        "sta_is_source": torch.tensor([False, True, False], dtype=torch.bool),
+        "sta_is_query": torch.tensor([False, False, False], dtype=torch.bool),
         "src_rows": torch.randint(0, H, (n_src,)),
         "src_cols": torch.randint(0, W, (n_src,)),
         "src_ctx": torch.randn(n_src, C),

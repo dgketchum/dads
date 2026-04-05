@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from unittest.mock import patch
+
 import torch
 
 from models.hrrr_da.grid_da_fusion import GridDAFusion
@@ -21,6 +23,10 @@ def _make_dummy_batch(B=2, C=10, H=16, W=16, n_src=3, pay_dim=4, n_targets=1) ->
         "sta_is_center": torch.tensor(
             [[True, False, False, False]] * B, dtype=torch.bool
         ),
+        "sta_is_source": torch.tensor(
+            [[False, True, True, False]] * B, dtype=torch.bool
+        ),
+        "sta_is_query": torch.zeros(B, 4, dtype=torch.bool),
         "src_rows": torch.randint(0, H, (B, n_src)),
         "src_cols": torch.randint(0, W, (B, n_src)),
         "src_ctx": torch.randn(B, n_src, C),
@@ -110,6 +116,37 @@ def test_fusion_radius_bound():
     # Source pixel should be covered
     assert cov[0, 0, 16, 16] == 1
     assert not (da_ctx[0, :, 16, 16] == 0).all()
+
+
+def test_fusion_casts_messages_to_grid_dtype():
+    """Fusion tolerates a higher-precision softmax output before scatter-add."""
+    fusion = GridDAFusion(
+        grid_latent_dim=8,
+        source_ctx_dim=10,
+        source_pay_dim=4,
+        hidden_dim=8,
+        support_radius_px=3,
+    )
+    B, H, W = 1, 16, 16
+    F_grid = torch.randn(B, 8, H, W, dtype=torch.float32)
+
+    with patch(
+        "models.hrrr_da.grid_da_fusion.pyg_softmax",
+        side_effect=lambda src, index: torch.ones_like(src, dtype=torch.float64),
+    ):
+        da_ctx, cov = fusion(
+            F_grid,
+            src_rows=torch.tensor([[8]]),
+            src_cols=torch.tensor([[8]]),
+            src_ctx=torch.randn(B, 1, 10),
+            src_pay=torch.randn(B, 1, 4),
+            src_valid=torch.ones(B, 1, dtype=torch.bool),
+            raw_elev_patch=torch.zeros(B, 1, H, W),
+            src_elev=torch.zeros(B, 1),
+        )
+
+    assert da_ctx.dtype == F_grid.dtype
+    assert cov.dtype == F_grid.dtype
 
 
 def test_da_bypass_exact():
