@@ -204,7 +204,7 @@ def test_smoke_da_off_config_parses():
 
 
 def test_smoke_configs_match_geometry():
-    """DA-on and DA-off smoke configs differ only in da_enabled."""
+    """DA-on and DA-off smoke configs differ only in da_enabled and gate penalty."""
     on = GridDAConfig.from_toml("models/hrrr_da/configs/grid_da_s_tmax_smoke.toml")
     off = GridDAConfig.from_toml("models/hrrr_da/configs/grid_da_off_tmax_smoke.toml")
     # Same training geometry
@@ -215,6 +215,12 @@ def test_smoke_configs_match_geometry():
     assert on.val_days_per_epoch == off.val_days_per_epoch
     assert on.batch_size == off.batch_size
     assert on.num_sanity_val_steps == off.num_sanity_val_steps
-    # Only da_enabled differs
+    # Same supervision contract
+    assert on.train_query_frac == off.train_query_frac
+    assert on.train_min_query_source_dist_px == off.train_min_query_source_dist_px
+    assert on.train_source_dropout_prob == off.train_source_dropout_prob
+    assert on.bg_loss_weight == off.bg_loss_weight
+    assert on.da_query_loss_weight == off.da_query_loss_weight
+    # Only da_enabled and gate penalty differ
     assert on.da_enabled is True
     assert off.da_enabled is False

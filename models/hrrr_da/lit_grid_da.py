@@ -295,10 +295,11 @@ class LitGridDA(L.LightningModule):
     def training_step(self, batch, batch_idx):
         pred = self.forward(batch)
 
-        # Use split losses when source/query partition is active
-        has_split = (
-            "sta_is_query" in batch and batch["sta_is_query"].any() and self.da_enabled
-        )
+        # Use split losses when source/query partition is active.  This
+        # includes sparse tiles where all non-holdout stations are sources
+        # and sta_is_query is all-False: _compute_split_train_loss handles
+        # that correctly (zero DA query loss, bg-only supervision).
+        has_split = "sta_is_source" in batch and batch["sta_is_source"].any()
 
         if has_split:
             loss, _, _, bg_loss, da_qry_loss = self._compute_split_train_loss(

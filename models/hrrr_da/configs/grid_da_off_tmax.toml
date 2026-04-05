@@ -23,6 +23,12 @@ drop_bands = ["n_hours"]
 train_sample_mode = "day_tile"
 train_tile_stride = 64
 train_tiles_per_day = 16
+train_query_frac = 0.5
+train_min_query_source_dist_px = 2
+train_source_dropout_prob = 0.2
+bg_loss_weight = 1.0
+da_query_loss_weight = 1.0
+gate_source_penalty_weight = 0.0
 
 target_names = ["delta_tmax"]
 payload_cols = ["delta_tmax", "delta_tmin"]

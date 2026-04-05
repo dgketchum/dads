@@ -284,11 +284,16 @@ def test_smoke_config_has_query_source_fields():
     assert cfg.gate_source_penalty_weight == 0.01
 
 
-def test_da_off_config_defaults_no_partition():
-    """DA-off config defaults to no source/query partition."""
+def test_da_off_config_matches_da_on_supervision():
+    """DA-off config uses same supervision contract as DA-on."""
     from models.hrrr_da.train_grid_da import GridDAConfig
 
-    cfg = GridDAConfig.from_toml("models/hrrr_da/configs/grid_da_off_tmax_smoke.toml")
-    assert cfg.train_query_frac == 0.0
-    assert cfg.train_min_query_source_dist_px == 0
-    assert cfg.train_source_dropout_prob == 0.0
+    on = GridDAConfig.from_toml("models/hrrr_da/configs/grid_da_s_tmax_smoke.toml")
+    off = GridDAConfig.from_toml("models/hrrr_da/configs/grid_da_off_tmax_smoke.toml")
+    assert off.train_query_frac == on.train_query_frac
+    assert off.train_min_query_source_dist_px == on.train_min_query_source_dist_px
+    assert off.train_source_dropout_prob == on.train_source_dropout_prob
+    assert off.bg_loss_weight == on.bg_loss_weight
+    assert off.da_query_loss_weight == on.da_query_loss_weight
+    # Only gate penalty differs (DA-off has no gate)
+    assert off.gate_source_penalty_weight == 0.0

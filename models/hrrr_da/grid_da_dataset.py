@@ -231,24 +231,30 @@ class GridDAPatchDataset(Dataset):
                     keep[0] = True  # keep at least one
                 source_idx = {s for s, k in zip(sorted(source_idx), keep) if k}
 
-            # Map candidate indices → supervision-station masks.  The
-            # supervision sta_* arrays come from _build_patch_sample which
-            # iterates the same neighbor day-data in the same order, so
-            # candidate_fids[i] aligns with the i-th non-holdout station in
-            # the supervision arrays.  We match by (row, col) pixel coords
-            # since FIDs aren't stored in the supervision tensors.
-            cand_rc = {(candidate_rows[i], candidate_cols[i]): i for i in range(n_cand)}
+            # Map candidate indices → supervision-station masks.
+            # Both _build_patch_sample and the candidate loop iterate the same
+            # day_group rows in the same order, skipping holdout FIDs.  So the
+            # k-th non-holdout supervision station corresponds to candidate
+            # index k.  We use a sequential counter rather than pixel-coordinate
+            # matching to handle multiple stations on the same 1 km cell.
+            cand_idx = 0
             for si in range(n_sta):
                 if sta_holdout[si]:
                     continue
-                rc = (int(sta_rows[si]), int(sta_cols[si]))
-                ci = cand_rc.get(rc)
-                if ci is None:
-                    continue
-                if ci in source_idx:
+                if cand_idx < n_cand:
+                    if cand_idx in source_idx:
+                        sta_is_source[si] = True
+                    elif cand_idx in query_idx:
+                        sta_is_query[si] = True
+                cand_idx += 1
+        elif train_query_frac > 0 and n_cand < 2:
+            # Sparse tile: not enough stations for a split.  Mark all
+            # non-holdout as source so they get background-only supervision
+            # (no DA query loss, consistent with the split contract).
+            for si in range(n_sta):
+                if not sta_holdout[si]:
                     sta_is_source[si] = True
-                elif ci in query_idx:
-                    sta_is_query[si] = True
+            source_idx = set(range(n_cand))
         else:
             # No partition: all non-holdout stations are sources (legacy path
             # and validation).
