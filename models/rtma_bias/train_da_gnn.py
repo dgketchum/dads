@@ -94,36 +94,52 @@ class DASplitEpochCallback(L.Callback):
         # Audit first n_audit graphs to report split geometry
         ds = self.train_dataset
         n = min(self.n_audit, len(ds))
-        n_src_list, n_qry_list, n_edges_list, min_dist_list = [], [], [], []
+        n_src_list, n_qry_list, n_holdout_list = [], [], []
+        edges_before_list, edges_after_list = [], []
+        min_dist_list = []
+        dist_mean = ds._sq_edge_norm.get("dist_mean", 0.0)
+        dist_std = ds._sq_edge_norm.get("dist_std", 1.0)
 
         for i in range(n):
+            g_raw = ds._graphs[i]
+            # Edge count before split
+            raw_ei = g_raw["source", "influences", "query"].edge_index
+            edges_before_list.append(raw_ei.shape[1] if raw_ei.numel() > 0 else 0)
+
+            # Holdout count
+            q_fids = list(g_raw["query"].fids)
+            n_hold = sum(1 for f in q_fids if f not in (ds.loss_fids or set()))
+            n_holdout_list.append(n_hold)
+
             out = ds[i]
             n_src_list.append(out["source"].context_x.shape[0])
             n_qry_list.append(int(out["query"].loss_mask.sum()))
             sq_ei = out["source", "influences", "query"].edge_index
-            n_edges_list.append(sq_ei.shape[1] if sq_ei.numel() > 0 else 0)
+            edges_after_list.append(sq_ei.shape[1] if sq_ei.numel() > 0 else 0)
 
             # Nearest source distance per supervised query
             if sq_ei.numel() > 0:
-                dist_mean = ds._sq_edge_norm.get("dist_mean", 0.0)
-                dist_std = ds._sq_edge_norm.get("dist_std", 1.0)
                 ea = out["source", "influences", "query"].edge_attr
-                dist_km = (ea[:, 0] * dist_std + dist_mean).numpy()
+                d_km = (ea[:, 0] * dist_std + dist_mean).numpy()
                 dst = sq_ei[1].numpy()
                 qry_idx = _np.where(out["query"].loss_mask.numpy())[0]
-                if len(qry_idx) > 0:
-                    for qi in qry_idx:
-                        d = dist_km[dst == qi]
-                        if len(d) > 0:
-                            min_dist_list.append(float(d.min()))
+                for qi in qry_idx:
+                    d = d_km[dst == qi]
+                    if len(d) > 0:
+                        min_dist_list.append(float(d.min()))
 
         md = _np.array(min_dist_list) if min_dist_list else _np.array([0.0])
         print(
-            f"  [epoch {epoch}] split audit ({n} graphs): "
-            f"src={_np.mean(n_src_list):.0f}, qry={_np.mean(n_qry_list):.0f}, "
-            f"edges={_np.mean(n_edges_list):.0f}, "
-            f"nearest_src_km: med={_np.median(md):.1f} p25={_np.percentile(md, 25):.1f} "
-            f"p75={_np.percentile(md, 75):.1f} min={md.min():.1f}",
+            f"  [epoch {epoch}] split audit ({n} graphs):\n"
+            f"    src={_np.mean(n_src_list):.0f}, "
+            f"qry={_np.mean(n_qry_list):.0f}, "
+            f"holdout={_np.mean(n_holdout_list):.0f}\n"
+            f"    edges: before={_np.mean(edges_before_list):.0f}, "
+            f"after={_np.mean(edges_after_list):.0f}\n"
+            f"    nearest_src_km: "
+            f"min={md.min():.1f} p25={_np.percentile(md, 25):.1f} "
+            f"med={_np.median(md):.1f} p75={_np.percentile(md, 75):.1f} "
+            f"p95={_np.percentile(md, 95):.1f} max={md.max():.1f}",
             flush=True,
         )
 
