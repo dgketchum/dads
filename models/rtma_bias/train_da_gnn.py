@@ -77,15 +77,55 @@ class DAGNNConfig:
 
 
 class DASplitEpochCallback(L.Callback):
-    """Call set_epoch on the train dataset each epoch for split re-randomization."""
+    """Call set_epoch and log split diagnostics each epoch."""
 
-    def __init__(self, train_dataset: DAGraphDataset) -> None:
+    def __init__(self, train_dataset: DAGraphDataset, n_audit: int = 10) -> None:
         self.train_dataset = train_dataset
+        self.n_audit = n_audit
 
     def on_train_epoch_start(
         self, trainer: L.Trainer, pl_module: L.LightningModule
     ) -> None:
-        self.train_dataset.set_epoch(trainer.current_epoch)
+        import numpy as _np
+
+        epoch = trainer.current_epoch
+        self.train_dataset.set_epoch(epoch)
+
+        # Audit first n_audit graphs to report split geometry
+        ds = self.train_dataset
+        n = min(self.n_audit, len(ds))
+        n_src_list, n_qry_list, n_edges_list, min_dist_list = [], [], [], []
+
+        for i in range(n):
+            out = ds[i]
+            n_src_list.append(out["source"].context_x.shape[0])
+            n_qry_list.append(int(out["query"].loss_mask.sum()))
+            sq_ei = out["source", "influences", "query"].edge_index
+            n_edges_list.append(sq_ei.shape[1] if sq_ei.numel() > 0 else 0)
+
+            # Nearest source distance per supervised query
+            if sq_ei.numel() > 0:
+                dist_mean = ds._sq_edge_norm.get("dist_mean", 0.0)
+                dist_std = ds._sq_edge_norm.get("dist_std", 1.0)
+                ea = out["source", "influences", "query"].edge_attr
+                dist_km = (ea[:, 0] * dist_std + dist_mean).numpy()
+                dst = sq_ei[1].numpy()
+                qry_idx = _np.where(out["query"].loss_mask.numpy())[0]
+                if len(qry_idx) > 0:
+                    for qi in qry_idx:
+                        d = dist_km[dst == qi]
+                        if len(d) > 0:
+                            min_dist_list.append(float(d.min()))
+
+        md = _np.array(min_dist_list) if min_dist_list else _np.array([0.0])
+        print(
+            f"  [epoch {epoch}] split audit ({n} graphs): "
+            f"src={_np.mean(n_src_list):.0f}, qry={_np.mean(n_qry_list):.0f}, "
+            f"edges={_np.mean(n_edges_list):.0f}, "
+            f"nearest_src_km: med={_np.median(md):.1f} p25={_np.percentile(md, 25):.1f} "
+            f"p75={_np.percentile(md, 75):.1f} min={md.min():.1f}",
+            flush=True,
+        )
 
 
 def _parse_args():
@@ -170,10 +210,30 @@ def main():
         json.dump(sorted(val_holdout), f)
 
     print(f"Train: {len(train_ds)} days, Val: {len(val_ds)} days")
+    print(f"Effective family: {train_ds.effective_family}")
     if cfg.da_split_enabled:
         print(
             f"DA split: enabled, source_frac={cfg.da_source_fraction}, "
             f"exclude_radius={cfg.da_exclude_radius_km}km, seed={cfg.split_seed}"
+        )
+
+    # Record effective family in run metadata
+    with open(os.path.join(cfg.out_dir, "split_pointer.json"), "w") as f:
+        json.dump(
+            {
+                "artifact_family": train_ds._family,
+                "effective_family": train_ds.effective_family,
+                "da_split_enabled": cfg.da_split_enabled,
+                "da_source_fraction": cfg.da_source_fraction,
+                "da_exclude_radius_km": cfg.da_exclude_radius_km,
+                "split_seed": cfg.split_seed,
+                "graph_dir": cfg.graph_dir,
+                "holdout_fids_json": cfg.holdout_fids_json,
+                "train_years": cfg.train_years,
+                "val_years": cfg.val_years,
+            },
+            f,
+            indent=2,
         )
     print(
         f"Query features: {train_ds.query_node_dim}, "

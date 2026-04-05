@@ -80,8 +80,8 @@ class DAGraphDataset(Dataset):
             meta = json.load(f)
 
         family = meta.get("family", "")
-        if family not in ("da-graph-v0", "da-graph-v1", "da-graph-v2"):
-            raise ValueError(f"Expected da-graph-v0/v1/v2 family, got {family}")
+        if family not in ("da-graph-v0", "da-graph-v1", "da-graph-v2", "da-graph-v3"):
+            raise ValueError(f"Expected da-graph-v0/v1/v2/v3 family, got {family}")
         self._family = family
 
         self.query_feature_cols: list[str] = meta["query_feature_cols"]
@@ -118,6 +118,13 @@ class DAGraphDataset(Dataset):
             self.norm_stats = self._compute_norm_stats()
         else:
             self.norm_stats = norm_stats
+
+    @property
+    def effective_family(self) -> str:
+        """Runtime family label reflecting source masking policy."""
+        if self.da_split_enabled:
+            return "da-graph-v3"
+        return self._family
 
     @property
     def query_node_dim(self) -> int:
@@ -224,6 +231,10 @@ class DAGraphDataset(Dataset):
         )
         eligible = [i for i, f in enumerate(s_fids) if f not in holdout_fids]
         if len(eligible) < 2:
+            # Sparse day: not enough stations for a split.  Keep sources as-is
+            # but zero out the loss_mask so no station is both source and
+            # supervised query (bg-only supervision via holdout-only loss).
+            loss_mask = torch.zeros_like(loss_mask)
             return s_ctx, s_pay, sq_edge_index, sq_edge_attr, loss_mask
 
         # Deterministic per-graph, per-epoch partition
