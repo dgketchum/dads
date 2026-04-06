@@ -1,0 +1,1921 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Data Assimilation and Downscaling — terrain-aware surface reanalysis for the Pacific Northwest">
+      
+      
+      
+      
+        <link rel="prev" href="../architecture/">
+      
+      
+        <link rel="next" href="../../temperature/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
+    
+    
+      
+        <title>Data Provenance - DADS Documentation</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../../assets/stylesheets/main.484c7ddc.min.css">
+      
+        
+        <link rel="stylesheet" href="../../../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CJetBrains+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"JetBrains Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL("../../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="slate" data-md-color-primary="teal" data-md-color-accent="cyan">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#data-provenance" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../../.." title="DADS Documentation" class="md-header__button md-logo" aria-label="DADS Documentation" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            DADS Documentation
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Data Provenance
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="teal" data-md-color-accent="cyan"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="teal" data-md-color-accent="cyan"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/dgketchum/dads" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    dgketchum/dads
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../../.." title="DADS Documentation" class="md-nav__button md-logo" aria-label="DADS Documentation" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    DADS Documentation
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/dgketchum/dads" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    dgketchum/dads
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../dads_project_overview.md" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Project Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../madis_qaqc/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    MADIS Observation QC
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" checked>
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    RTMA Bias Correction
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_4" id="__nav_4_label" tabindex="">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    RTMA Bias Correction
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4_2" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../humidity/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Humidity
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_4_2" id="__nav_4_2_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_4_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Humidity
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../humidity/algorithms/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Algorithms
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../humidity/architecture/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../humidity/data_provenance/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Data Provenance
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_3" checked>
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Wind
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_4_3" id="__nav_4_3_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_4_3_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_4_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Wind
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../algorithms/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Algorithms
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../architecture/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Data Provenance
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Data Provenance
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#rtma-cog-archive" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        RTMA COG Archive
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="RTMA COG Archive">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#wind-relevant-bands" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Wind-Relevant Bands
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#madis-station-observations" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        MADIS Station Observations
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#station-inventory" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Station Inventory
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#terrain" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Terrain
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#winstral-sx" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Winstral Sx
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Winstral Sx">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#computation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Computation
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#physical-interpretation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Physical Interpretation
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#derived-features" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Derived Features
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#flow-terrain-interactions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Flow-Terrain Interactions
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#complete-feature-roster" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Complete Feature Roster
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#edge-features" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Edge Features
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../temperature/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Temperature
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../shortwave/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Shortwave
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../hrrr/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    HRRR Reanalysis
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_6" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../../cube/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    DADS Cube
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_6" id="__nav_6_label" tabindex="">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    DADS Cube
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../cube/architecture/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../cube/cube_schema/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Cube Schema
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../cube/data_provenance/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Data Provenance
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../cube/algorithms/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Algorithms
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../cube/decisions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Design Decisions
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#rtma-cog-archive" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        RTMA COG Archive
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="RTMA COG Archive">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#wind-relevant-bands" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Wind-Relevant Bands
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#madis-station-observations" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        MADIS Station Observations
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#station-inventory" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Station Inventory
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#terrain" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Terrain
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#winstral-sx" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Winstral Sx
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Winstral Sx">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#computation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Computation
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#physical-interpretation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Physical Interpretation
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#derived-features" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Derived Features
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#flow-terrain-interactions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Flow-Terrain Interactions
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#complete-feature-roster" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Complete Feature Roster
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#edge-features" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Edge Features
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="data-provenance">Data Provenance<a class="headerlink" href="#data-provenance" title="Permanent link">&para;</a></h1>
+<p>Every input to the Wind MVP traces to a direct observation, a direct measurement, or a deterministic physical quantity. RTMA is the <em>correction target</em> -- the model learns to fix RTMA's wind biases using station truth, terrain, and neighbor context.</p>
+<hr />
+<h2 id="rtma-cog-archive">RTMA COG Archive<a class="headerlink" href="#rtma-cog-archive" title="Permanent link">&para;</a></h2>
+<p>The Wind MVP uses the same RTMA COG archive as the <a href="../../humidity/data_provenance/#rtma-cog-archive">Humidity MVP</a>. Key properties are summarized here; see the humidity docs for full details on format, coverage, and day boundary alignment.</p>
+<table>
+<thead>
+<tr>
+<th>Property</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Path</td>
+<td><code>/data/ssd1/rtma/tif/RTMA_YYYYMMDD.tif</code></td>
+</tr>
+<tr>
+<td>Coverage</td>
+<td>2012-01-01 to 2025-01-08 (4,688 files)</td>
+</tr>
+<tr>
+<td>Format</td>
+<td>LZW-compressed COG, EPSG:4326, Int32, 256x256 tiled</td>
+</tr>
+</tbody>
+</table>
+<h3 id="wind-relevant-bands">Wind-Relevant Bands<a class="headerlink" href="#wind-relevant-bands" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Band</th>
+<th>Field</th>
+<th>Decode</th>
+<th>Units</th>
+<th>Role in Wind MVP</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>4</td>
+<td>UGRD</td>
+<td>/ 100</td>
+<td>m/s</td>
+<td>RTMA u-component (primary input + target construction)</td>
+</tr>
+<tr>
+<td>5</td>
+<td>VGRD</td>
+<td>/ 100</td>
+<td>m/s</td>
+<td>RTMA v-component (primary input + target construction)</td>
+</tr>
+<tr>
+<td>8</td>
+<td>WIND</td>
+<td>/ 100</td>
+<td>m/s</td>
+<td>RTMA wind speed (loss weighting)</td>
+</tr>
+<tr>
+<td>2</td>
+<td>TMP</td>
+<td>/ 100</td>
+<td>C</td>
+<td>Weather context</td>
+</tr>
+<tr>
+<td>3</td>
+<td>DPT</td>
+<td>/ 100</td>
+<td>C</td>
+<td>Stability proxy (tmp - dpt)</td>
+</tr>
+<tr>
+<td>1</td>
+<td>PRES</td>
+<td>/ 10</td>
+<td>kPa</td>
+<td>Weather context</td>
+</tr>
+<tr>
+<td>9</td>
+<td>TCDC</td>
+<td>/ 100</td>
+<td>%</td>
+<td>Weather context</td>
+</tr>
+<tr>
+<td>10</td>
+<td>ACPC01</td>
+<td>/ 100</td>
+<td>mm/day</td>
+<td>Weather context</td>
+</tr>
+</tbody>
+</table>
+<p>All 10 bands are sampled at station locations via <code>grid/sources/rtma_station_daily.py</code>, then <code>ea</code> (vapor pressure from Magnus formula) and <code>tmp_dpt_diff</code> are derived.</p>
+<hr />
+<h2 id="madis-station-observations">MADIS Station Observations<a class="headerlink" href="#madis-station-observations" title="Permanent link">&para;</a></h2>
+<p>Same source as the <a href="../../humidity/data_provenance/#madis-station-observations">Humidity MVP</a>, but different variables are used:</p>
+<table>
+<thead>
+<tr>
+<th>Property</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Source</td>
+<td>NOAA Meteorological Assimilation Data Ingest System</td>
+</tr>
+<tr>
+<td>Path</td>
+<td><code>/data/ssd2/madis/daily/</code> (one Parquet per station)</td>
+</tr>
+<tr>
+<td>Variables used</td>
+<td><code>u</code>, <code>v</code> (wind components, m/s); <code>wind</code> (speed); <code>wind_dir</code> (direction)</td>
+</tr>
+<tr>
+<td>Coverage</td>
+<td>Variable by station; typically 2010--2025</td>
+</tr>
+</tbody>
+</table>
+<p>Observations are joined to RTMA-sampled values to compute parallel and perpendicular residual targets (<span class="arithmatex">\(\delta_{w,par}\)</span>, <span class="arithmatex">\(\delta_{w,perp}\)</span>).</p>
+<div class="admonition note">
+<p class="admonition-title">QC filtering</p>
+<p>The station-day table builder applies:</p>
+<ul>
+<li>Drop NaN wind observations</li>
+<li>Wind speed range: 0--50 m/s</li>
+<li>Component residual range: <span class="arithmatex">\(|\delta_u| &lt; 20\)</span> m/s and <span class="arithmatex">\(|\delta_v| &lt; 20\)</span> m/s</li>
+</ul>
+</div>
+<hr />
+<h2 id="station-inventory">Station Inventory<a class="headerlink" href="#station-inventory" title="Permanent link">&para;</a></h2>
+<p>Same as the <a href="../../humidity/data_provenance/#station-inventory">Humidity MVP</a>:</p>
+<table>
+<thead>
+<tr>
+<th>Property</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Source</td>
+<td>MADIS 02JULY2025 inventory</td>
+</tr>
+<tr>
+<td>Path</td>
+<td><code>/nas/dads/met/stations/madis_02JULY2025_mgrs.csv</code></td>
+</tr>
+<tr>
+<td>PNW clip</td>
+<td><code>artifacts/madis_pnw.csv</code> (9,168 stations)</td>
+</tr>
+<tr>
+<td>Bounds</td>
+<td><span class="arithmatex">\(-125.0\)</span> to <span class="arithmatex">\(-104.0\)</span> lon, <span class="arithmatex">\(42.0\)</span> to <span class="arithmatex">\(49.0\)</span> lat</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="terrain">Terrain<a class="headerlink" href="#terrain" title="Permanent link">&para;</a></h2>
+<p>Same 6-band GeoTIFF as the <a href="../../humidity/data_provenance/#terrain">Humidity MVP</a>, sampled at station points rather than as gridded patches:</p>
+<table>
+<thead>
+<tr>
+<th>Channel</th>
+<th>Method</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>elevation</code></td>
+<td>Direct from DEM</td>
+<td>Meters, average resampling</td>
+</tr>
+<tr>
+<td><code>slope</code></td>
+<td>Horn's 3x3</td>
+<td>Degrees</td>
+</tr>
+<tr>
+<td><code>aspect_sin</code></td>
+<td><span class="arithmatex">\(\sin(\text{aspect})\)</span></td>
+<td>Circular encoding</td>
+</tr>
+<tr>
+<td><code>aspect_cos</code></td>
+<td><span class="arithmatex">\(\cos(\text{aspect})\)</span></td>
+<td>Circular encoding</td>
+</tr>
+<tr>
+<td><code>tpi_4</code></td>
+<td>TPI, 4-pixel radius</td>
+<td>Topographic Position Index</td>
+</tr>
+<tr>
+<td><code>tpi_10</code></td>
+<td>TPI, 10-pixel radius</td>
+<td>Broader-scale ridge/valley signal</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="winstral-sx">Winstral Sx<a class="headerlink" href="#winstral-sx" title="Permanent link">&para;</a></h2>
+<div class="admonition note">
+<p class="admonition-title">New in Wind MVP</p>
+<p>Sx is unique to the Wind MVP -- not used in the Humidity MVP.</p>
+</div>
+<p>Winstral Sx measures the maximum upwind terrain slope angle along a ray from each station, quantifying shelter or exposure from specific directions.</p>
+<table>
+<thead>
+<tr>
+<th>Property</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Source</td>
+<td>Computed from projected DEM (EPSG:5071, 250 m cells)</td>
+</tr>
+<tr>
+<td>Build script</td>
+<td><code>prep/build_station_sx.py</code></td>
+</tr>
+<tr>
+<td>Output</td>
+<td><code>artifacts/sx_pnw.parquet</code></td>
+</tr>
+<tr>
+<td>Azimuth bins</td>
+<td>16 (0, 22.5, 45, ..., 337.5 degrees)</td>
+</tr>
+<tr>
+<td>Search distances</td>
+<td>2 km (local) and 10 km (outlying)</td>
+</tr>
+<tr>
+<td>Columns</td>
+<td>32 directional values + 2 derived = 34 total</td>
+</tr>
+</tbody>
+</table>
+<h3 id="computation">Computation<a class="headerlink" href="#computation" title="Permanent link">&para;</a></h3>
+<p>For each station and each azimuth bin, the algorithm:</p>
+<ol>
+<li>Casts rays from the station location in the DEM's projected CRS</li>
+<li>For each ray, walks outward from the station at pixel resolution</li>
+<li>Records the maximum terrain slope angle: <span class="arithmatex">\(\text{Sx} = \max_d \frac{z_d - z_\text{station}}{d}\)</span></li>
+<li>Uses a 30-degree sector (3 sub-rays per azimuth) for robustness</li>
+</ol>
+<h3 id="physical-interpretation">Physical Interpretation<a class="headerlink" href="#physical-interpretation" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>Positive Sx</strong> = station is sheltered (upwind terrain obstacle rises above station)</li>
+<li><strong>Negative Sx</strong> = station is exposed (terrain slopes away in that direction)</li>
+<li>Values typically range from <span class="arithmatex">\(-0.3\)</span> to <span class="arithmatex">\(+0.5\)</span> (slope angles in radians)</li>
+</ul>
+<h3 id="derived-features">Derived Features<a class="headerlink" href="#derived-features" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Feature</th>
+<th>Computation</th>
+<th>Physical meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>terrain_openness</code></td>
+<td>Mean of all 32 Sx values</td>
+<td>Overall shelter vs exposure</td>
+</tr>
+<tr>
+<td><code>terrain_directionality</code></td>
+<td>Std of 10 km Sx values</td>
+<td>How directionally variable the terrain exposure is</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="flow-terrain-interactions">Flow-Terrain Interactions<a class="headerlink" href="#flow-terrain-interactions" title="Permanent link">&para;</a></h2>
+<p>Dynamic features computed at table-build time from the combination of RTMA wind direction and station terrain:</p>
+<table>
+<thead>
+<tr>
+<th>Feature</th>
+<th>Computation</th>
+<th>Physical meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>flow_upslope</code></td>
+<td><span class="arithmatex">\(\hat{e}_{par} \cdot \hat{e}_{upslope}\)</span></td>
+<td>Alignment of RTMA wind with local terrain slope</td>
+</tr>
+<tr>
+<td><code>flow_cross</code></td>
+<td><span class="arithmatex">\(\hat{e}_{par} \cdot \hat{e}_{cross}\)</span></td>
+<td>Cross-slope wind component</td>
+</tr>
+<tr>
+<td><code>wind_aligned_sx</code></td>
+<td>Sx interpolated to RTMA wind-from direction (10 km)</td>
+<td>Terrain shelter/exposure from the actual upwind direction</td>
+</tr>
+</tbody>
+</table>
+<p>These features explicitly model how terrain deflects and shelters wind, varying daily with wind direction.</p>
+<hr />
+<h2 id="complete-feature-roster">Complete Feature Roster<a class="headerlink" href="#complete-feature-roster" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Group</th>
+<th>Features</th>
+<th>Count</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>RTMA weather</td>
+<td>ugrd, vgrd, wind, tmp, dpt, pres, tcdc, prcp, ea, tmp_dpt_diff</td>
+<td>10</td>
+</tr>
+<tr>
+<td>Terrain</td>
+<td>elevation, slope, aspect_sin, aspect_cos, tpi_4, tpi_10</td>
+<td>6</td>
+</tr>
+<tr>
+<td>Sx directional</td>
+<td>sx_{000..337}<em>2k, sx</em>{000..337}_10k</td>
+<td>32</td>
+</tr>
+<tr>
+<td>Sx derived</td>
+<td>terrain_openness, terrain_directionality</td>
+<td>2</td>
+</tr>
+<tr>
+<td>Flow-terrain</td>
+<td>flow_upslope, flow_cross, wind_aligned_sx</td>
+<td>3</td>
+</tr>
+<tr>
+<td>Temporal</td>
+<td>doy_sin, doy_cos</td>
+<td>2</td>
+</tr>
+<tr>
+<td>Location</td>
+<td>latitude, longitude</td>
+<td>2</td>
+</tr>
+<tr>
+<td><strong>Total</strong></td>
+<td></td>
+<td><strong>57</strong></td>
+</tr>
+</tbody>
+</table>
+<div class="admonition warning">
+<p class="admonition-title">Feature flag control</p>
+<p>Not all features are used in every experiment. The <code>use_sx</code> flag controls Sx + derived (34 features), and <code>use_flow_terrain</code> controls flow-terrain interactions (3 features). The MLP baseline uses only 20 features (RTMA + terrain + temporal + location).</p>
+</div>
+<hr />
+<h2 id="edge-features">Edge Features<a class="headerlink" href="#edge-features" title="Permanent link">&para;</a></h2>
+<p>Edge attributes encode the spatial relationship between neighboring stations:</p>
+<table>
+<thead>
+<tr>
+<th>Feature</th>
+<th>Type</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>distance_norm</code></td>
+<td>Static</td>
+<td>Haversine distance (z-score normalized)</td>
+</tr>
+<tr>
+<td><code>bearing_sin</code></td>
+<td>Static</td>
+<td><span class="arithmatex">\(\sin(\text{bearing}_{i \to j})\)</span></td>
+</tr>
+<tr>
+<td><code>bearing_cos</code></td>
+<td>Static</td>
+<td><span class="arithmatex">\(\cos(\text{bearing}_{i \to j})\)</span></td>
+</tr>
+<tr>
+<td><code>delta_elevation</code></td>
+<td>Static</td>
+<td><span class="arithmatex">\(z_j - z_i\)</span> (z-score normalized)</td>
+</tr>
+<tr>
+<td><code>delta_tpi</code></td>
+<td>Static</td>
+<td>TPI difference (reserved, currently 0)</td>
+</tr>
+<tr>
+<td><code>upwind_cos</code></td>
+<td>Dynamic</td>
+<td><span class="arithmatex">\(\cos(\theta_\text{wind} - \theta_\text{bearing})\)</span> -- alignment of wind with edge direction</td>
+</tr>
+<tr>
+<td><code>upwind_sin</code></td>
+<td>Dynamic</td>
+<td><span class="arithmatex">\(\sin(\theta_\text{wind} - \theta_\text{bearing})\)</span> -- cross-wind component of edge</td>
+</tr>
+</tbody>
+</table>
+<p>Static attributes are computed once from the station inventory. Dynamic attributes (upwind_cos, upwind_sin) are recomputed daily from RTMA wind direction, encoding whether a neighbor is upwind or downwind of the target station.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../../..", "features": ["navigation.sections", "navigation.expand", "navigation.indexes", "content.code.copy", "toc.follow"], "search": "../../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../../../assets/javascripts/bundle.79ae519e.min.js"></script>
+      
+        <script src="../../../javascripts/mathjax.js"></script>
+      
+        <script src="https://unpkg.com/mathjax@3/es5/tex-mml-chtml.js"></script>
+      
+    
+  </body>
+</html>

@@ -1,0 +1,2178 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Data Assimilation and Downscaling — terrain-aware surface reanalysis for the Pacific Northwest">
+      
+      
+      
+      
+        <link rel="prev" href="../">
+      
+      
+        <link rel="next" href="../architecture/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
+    
+    
+      
+        <title>Algorithms - DADS Documentation</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../../assets/stylesheets/main.484c7ddc.min.css">
+      
+        
+        <link rel="stylesheet" href="../../../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CJetBrains+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"JetBrains Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL("../../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="slate" data-md-color-primary="teal" data-md-color-accent="cyan">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#algorithms" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../../.." title="DADS Documentation" class="md-header__button md-logo" aria-label="DADS Documentation" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            DADS Documentation
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Algorithms
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="teal" data-md-color-accent="cyan"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="teal" data-md-color-accent="cyan"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/dgketchum/dads" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    dgketchum/dads
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../../.." title="DADS Documentation" class="md-nav__button md-logo" aria-label="DADS Documentation" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    DADS Documentation
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/dgketchum/dads" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    dgketchum/dads
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../dads_project_overview.md" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Project Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../madis_qaqc/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    MADIS Observation QC
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" checked>
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    RTMA Bias Correction
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_4" id="__nav_4_label" tabindex="">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    RTMA Bias Correction
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_2" checked>
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Humidity
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_4_2" id="__nav_4_2_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_4_2_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_4_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Humidity
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Algorithms
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Algorithms
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#target-variable" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Target Variable
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Target Variable">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#why-log-space" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Why log-space?
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#why-bias-correction-not-direct-prediction" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Why bias-correction, not direct prediction?
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#u-net-overview" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        U-Net Overview
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#unetsmall-architecture" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        UNetSmall Architecture
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#input-channel-stack" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Input Channel Stack
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#center-pixel-supervision" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Center-Pixel Supervision
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Center-Pixel Supervision">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#total-variation-regularization" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Total Variation Regularization
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#combined-loss" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Combined Loss
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#normalization" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Normalization
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#cog-preloading-strategy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        COG Preloading Strategy
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#metrics" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Metrics
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Metrics">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#log-space-metrics-deltalog-e_a" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Log-space metrics (\(\Delta\!\log e_a\))
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#e_a-space-metrics-kpa" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        \(e_a\)-space metrics (kPa)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#training-configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Training Configuration
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#ablation-results" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Ablation Results
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#lr-scheduling" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        LR Scheduling
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#gridded-inference" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Gridded Inference
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Gridded Inference">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#approach" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Approach
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#domain-shift-considerations" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Domain shift considerations
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../architecture/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../data_provenance/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Data Provenance
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4_3" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../wind/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Wind
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_4_3" id="__nav_4_3_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_4_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Wind
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../wind/algorithms/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Algorithms
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../wind/architecture/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../wind/data_provenance/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Data Provenance
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../temperature/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Temperature
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../shortwave/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Shortwave
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../hrrr/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    HRRR Reanalysis
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_6" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../../cube/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    DADS Cube
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_6" id="__nav_6_label" tabindex="">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    DADS Cube
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../cube/architecture/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../cube/cube_schema/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Cube Schema
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../cube/data_provenance/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Data Provenance
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../cube/algorithms/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Algorithms
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../cube/decisions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Design Decisions
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#target-variable" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Target Variable
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Target Variable">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#why-log-space" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Why log-space?
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#why-bias-correction-not-direct-prediction" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Why bias-correction, not direct prediction?
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#u-net-overview" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        U-Net Overview
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#unetsmall-architecture" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        UNetSmall Architecture
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#input-channel-stack" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Input Channel Stack
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#center-pixel-supervision" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Center-Pixel Supervision
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Center-Pixel Supervision">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#total-variation-regularization" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Total Variation Regularization
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#combined-loss" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Combined Loss
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#normalization" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Normalization
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#cog-preloading-strategy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        COG Preloading Strategy
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#metrics" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Metrics
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Metrics">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#log-space-metrics-deltalog-e_a" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Log-space metrics (\(\Delta\!\log e_a\))
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#e_a-space-metrics-kpa" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        \(e_a\)-space metrics (kPa)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#training-configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Training Configuration
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#ablation-results" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Ablation Results
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#lr-scheduling" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        LR Scheduling
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#gridded-inference" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Gridded Inference
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Gridded Inference">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#approach" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Approach
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#domain-shift-considerations" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Domain shift considerations
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="algorithms">Algorithms<a class="headerlink" href="#algorithms" title="Permanent link">&para;</a></h1>
+<hr />
+<h2 id="target-variable">Target Variable<a class="headerlink" href="#target-variable" title="Permanent link">&para;</a></h2>
+<p>The model predicts a log-space residual between observed and RTMA-derived vapor pressure:</p>
+<div class="arithmatex">\[
+\Delta\!\log e_a = \log(e_{a,\text{obs}}) - \log(e_{a,\text{rtma}})
+\]</div>
+<p>At inference the correction is applied multiplicatively:</p>
+<div class="arithmatex">\[
+e_{a,\text{corrected}} = e_{a,\text{rtma}} \cdot \exp(\widehat{\Delta\!\log e_a})
+\]</div>
+<h3 id="why-log-space">Why log-space?<a class="headerlink" href="#why-log-space" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>Variance stabilization.</strong> Absolute humidity spans two orders of magnitude across dry continental winters and humid maritime summers. In linear space the loss would be dominated by high-humidity samples; log-space makes the correction scale-free.</li>
+<li><strong>Multiplicative structure.</strong> RTMA biases tend to be proportional to magnitude (e.g., consistently 10% too dry). A log-space residual naturally captures this.</li>
+<li><strong>Non-negativity.</strong> Exponentiation guarantees <span class="arithmatex">\(e_{a,\text{corrected}} &gt; 0\)</span> regardless of the predicted correction magnitude.</li>
+</ul>
+<h3 id="why-bias-correction-not-direct-prediction">Why bias-correction, not direct prediction?<a class="headerlink" href="#why-bias-correction-not-direct-prediction" title="Permanent link">&para;</a></h3>
+<p>Run 4 tested direct prediction of <span class="arithmatex">\(\log(e_{a,\text{obs}})\)</span> without humidity inputs (dewpoint, <span class="arithmatex">\(e_a\)</span>). The model converged to RTMA-level accuracy (MAE 0.110 vs RTMA baseline 0.111) -- it could reconstruct humidity from temperature, wind, and terrain, but could not <em>improve</em> on what RTMA already provides. The bias-correction framing (Runs 1--3, 5) achieves 28% improvement because the model has access to RTMA's estimate and only needs to learn the <em>residual error structure</em>.</p>
+<hr />
+<h2 id="u-net-overview">U-Net Overview<a class="headerlink" href="#u-net-overview" title="Permanent link">&para;</a></h2>
+<p>RTMA is a ~2.5 km gridded weather analysis, but its humidity field has systematic biases — especially in complex terrain where valley inversions, elevation gradients, and land cover effects operate at scales finer than the analysis can resolve. We correct these biases using a small U-Net trained on station observations.</p>
+<p><strong>What the model sees.</strong> For each training sample the model receives a 64×64 pixel patch (~160 km) of gridded inputs centered on a weather station. The input channels include RTMA weather fields (temperature, dewpoint, wind, pressure, cloud cover, precipitation, vapor pressure), terrain attributes (elevation, slope, aspect, TPI), clear-sky solar radiation, day of year, and Landsat surface reflectance composites. Everything comes from gridded products that are available wall to wall — no station observations appear in the inputs.</p>
+<p><strong>What the model predicts.</strong> The U-Net outputs a full 64×64 correction field, but during training only the center pixel is supervised. The target is the log-space humidity residual between the station observation and RTMA at that location: <code>delta_log_ea = log(ea_obs) - log(ea_rtma)</code>. Working in log space keeps the correction multiplicative and stabilizes variance across dry and wet regimes.</p>
+<p><strong>How the U-Net works.</strong> The encoder compresses the patch through two rounds of convolution + pooling, capturing progressively larger spatial context. At the bottom (16×16), the model has a wide receptive field — it can see terrain and weather patterns tens of kilometers away from the station. The decoder then upsamples back to full resolution through transposed convolutions, with skip connections that carry fine-grained detail from the encoder. The final 1×1 convolution produces a single-channel correction field.</p>
+<p><strong>Why a U-Net for point targets.</strong> The architecture is fully convolutional, so it naturally produces spatially coherent corrections — neighboring pixels get similar adjustments unless the input features (terrain, land cover) change. A total-variation penalty on the output field reinforces this smoothness. Training on station points scattered across the domain teaches the model the relationship between gridded covariates and humidity bias; at inference the same convolutions slide over the entire grid to produce a wall-to-wall correction.</p>
+<p><strong>What matters most.</strong> Ablation experiments show that terrain covariates are the single largest contributor — they tell the model where RTMA's smooth analysis misrepresents local conditions. Humidity inputs (dewpoint, vapor pressure) provide a useful but modest additional boost. Without terrain, the model barely beats raw RTMA.</p>
+<hr />
+<h2 id="unetsmall-architecture">UNetSmall Architecture<a class="headerlink" href="#unetsmall-architecture" title="Permanent link">&para;</a></h2>
+<p>A minimal 2-level encoder-decoder with skip connections, designed for fast iteration:</p>
+<table>
+<thead>
+<tr>
+<th>Layer</th>
+<th>Operation</th>
+<th>Output Shape</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>down1</code></td>
+<td>ConvBlock(<span class="arithmatex">\(C_\text{in}\)</span>, <span class="arithmatex">\(b\)</span>)</td>
+<td><span class="arithmatex">\((B, b, 64, 64)\)</span></td>
+</tr>
+<tr>
+<td><code>pool1</code></td>
+<td>MaxPool2d(2)</td>
+<td><span class="arithmatex">\((B, b, 32, 32)\)</span></td>
+</tr>
+<tr>
+<td><code>down2</code></td>
+<td>ConvBlock(<span class="arithmatex">\(b\)</span>, <span class="arithmatex">\(2b\)</span>)</td>
+<td><span class="arithmatex">\((B, 2b, 32, 32)\)</span></td>
+</tr>
+<tr>
+<td><code>pool2</code></td>
+<td>MaxPool2d(2)</td>
+<td><span class="arithmatex">\((B, 2b, 16, 16)\)</span></td>
+</tr>
+<tr>
+<td><code>mid</code></td>
+<td>ConvBlock(<span class="arithmatex">\(2b\)</span>, <span class="arithmatex">\(4b\)</span>)</td>
+<td><span class="arithmatex">\((B, 4b, 16, 16)\)</span></td>
+</tr>
+<tr>
+<td><code>up2</code></td>
+<td>ConvTranspose2d(<span class="arithmatex">\(4b\)</span>, <span class="arithmatex">\(2b\)</span>, k=2, s=2)</td>
+<td><span class="arithmatex">\((B, 2b, 32, 32)\)</span></td>
+</tr>
+<tr>
+<td>concat</td>
+<td>cat(up2, skip₂)</td>
+<td><span class="arithmatex">\((B, 4b, 32, 32)\)</span></td>
+</tr>
+<tr>
+<td><code>dec2</code></td>
+<td>ConvBlock(<span class="arithmatex">\(4b\)</span>, <span class="arithmatex">\(2b\)</span>)</td>
+<td><span class="arithmatex">\((B, 2b, 32, 32)\)</span></td>
+</tr>
+<tr>
+<td><code>up1</code></td>
+<td>ConvTranspose2d(<span class="arithmatex">\(2b\)</span>, <span class="arithmatex">\(b\)</span>, k=2, s=2)</td>
+<td><span class="arithmatex">\((B, b, 64, 64)\)</span></td>
+</tr>
+<tr>
+<td>concat</td>
+<td>cat(up1, skip₁)</td>
+<td><span class="arithmatex">\((B, 2b, 64, 64)\)</span></td>
+</tr>
+<tr>
+<td><code>dec1</code></td>
+<td>ConvBlock(<span class="arithmatex">\(2b\)</span>, <span class="arithmatex">\(b\)</span>)</td>
+<td><span class="arithmatex">\((B, b, 64, 64)\)</span></td>
+</tr>
+<tr>
+<td><code>out</code></td>
+<td>Conv2d(<span class="arithmatex">\(b\)</span>, 1, k=1)</td>
+<td><span class="arithmatex">\((B, 1, 64, 64)\)</span></td>
+</tr>
+</tbody>
+</table>
+<p>Each <code>ConvBlock</code> is: Conv2d(3×3, pad=1) <span class="arithmatex">\(\to\)</span> ReLU <span class="arithmatex">\(\to\)</span> Conv2d(3×3, pad=1) <span class="arithmatex">\(\to\)</span> ReLU.</p>
+<table>
+<thead>
+<tr>
+<th>base (<span class="arithmatex">\(b\)</span>)</th>
+<th>Params</th>
+<th>Runs</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>32</td>
+<td>~120K</td>
+<td>1, 2, 3, 4</td>
+</tr>
+<tr>
+<td>48</td>
+<td>~270K</td>
+<td>5</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="input-channel-stack">Input Channel Stack<a class="headerlink" href="#input-channel-stack" title="Permanent link">&para;</a></h2>
+<p>Channels are stacked in a fixed order determined by the feature group resolution:</p>
+<table>
+<thead>
+<tr>
+<th>Slot</th>
+<th>Channels</th>
+<th>Source</th>
+<th>Count</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1--8</td>
+<td>tmp_c, dpt_c, ugrd, vgrd, pres_kpa, tcdc_pct, prcp_mm, ea_kpa</td>
+<td>RTMA COG</td>
+<td>8</td>
+</tr>
+<tr>
+<td>9--10</td>
+<td>doy_sin, doy_cos</td>
+<td>Computed from date</td>
+<td>2</td>
+</tr>
+<tr>
+<td>11--16</td>
+<td>elevation, slope, aspect_sin, aspect_cos, tpi_4, tpi_10</td>
+<td>Terrain GeoTIFF</td>
+<td>6</td>
+</tr>
+<tr>
+<td>17</td>
+<td>rsun</td>
+<td>r.sun GeoTIFF (DOY band)</td>
+<td>1</td>
+</tr>
+<tr>
+<td>18--24</td>
+<td>ls_b2, ls_b3, ls_b4, ls_b5, ls_b6, ls_b7, ls_b10</td>
+<td>Landsat composite (period band)</td>
+<td>7</td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td><strong>Total</strong></td>
+<td><strong>24</strong></td>
+</tr>
+</tbody>
+</table>
+<p>All channels are extracted as aligned 64×64 patches and normalized to zero mean / unit variance before entering the model.</p>
+<hr />
+<h2 id="center-pixel-supervision">Center-Pixel Supervision<a class="headerlink" href="#center-pixel-supervision" title="Permanent link">&para;</a></h2>
+<p>Station observations provide point labels at patch centers. The model predicts a full 64×64 correction field, but the supervised signal comes from a single pixel:</p>
+<div class="arithmatex">\[
+\mathcal{L}_\text{fit} = \text{Huber}\bigl(\hat{y}_{c,c},\ y_\text{obs}\bigr)
+\]</div>
+<p>where <span class="arithmatex">\(\hat{y}_{c,c}\)</span> is the predicted correction at the center pixel and <span class="arithmatex">\(y_\text{obs}\)</span> is the station-observed <span class="arithmatex">\(\Delta\!\log e_a\)</span>. Huber loss (with <span class="arithmatex">\(\delta = 1.0\)</span>) is used for robustness to the remaining outliers that pass the filtering threshold.</p>
+<h3 id="total-variation-regularization">Total Variation Regularization<a class="headerlink" href="#total-variation-regularization" title="Permanent link">&para;</a></h3>
+<p>To ensure spatial coherence of the predicted correction field (preventing the model from learning a spike at the center and noise elsewhere), a TV penalty is applied to the full patch output:</p>
+<div class="arithmatex">\[
+\mathcal{L}_\text{TV} = \frac{1}{N}\sum_{i,j}\bigl(|\hat{y}_{i,j+1} - \hat{y}_{i,j}| + |\hat{y}_{i+1,j} - \hat{y}_{i,j}|\bigr)
+\]</div>
+<h3 id="combined-loss">Combined Loss<a class="headerlink" href="#combined-loss" title="Permanent link">&para;</a></h3>
+<div class="arithmatex">\[
+\mathcal{L} = \mathcal{L}_\text{fit} + \lambda \cdot \mathcal{L}_\text{TV}
+\]</div>
+<p>with <span class="arithmatex">\(\lambda = 10^{-3}\)</span> (default). This balances center-pixel accuracy with smooth spatial fields suitable for gridded application.</p>
+<hr />
+<h2 id="normalization">Normalization<a class="headerlink" href="#normalization" title="Permanent link">&para;</a></h2>
+<p>Per-channel mean and standard deviation are computed from the training set during dataset initialization and saved to <code>norm_stats.json</code>:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="p">{</span>
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="w">  </span><span class="nt">&quot;channels&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;tmp_c&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;dpt_c&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;ugrd&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;vgrd&quot;</span><span class="p">,</span><span class="w"> </span><span class="err">...</span><span class="p">],</span>
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="w">  </span><span class="nt">&quot;mean&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="mf">5.23</span><span class="p">,</span><span class="w"> </span><span class="mf">1.87</span><span class="p">,</span><span class="w"> </span><span class="mf">-0.12</span><span class="p">,</span><span class="w"> </span><span class="err">...</span><span class="p">],</span>
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="w">  </span><span class="nt">&quot;std&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="mf">10.1</span><span class="p">,</span><span class="w"> </span><span class="mf">9.4</span><span class="p">,</span><span class="w"> </span><span class="mf">3.2</span><span class="p">,</span><span class="w"> </span><span class="err">...</span><span class="p">]</span>
+<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="p">}</span>
+</code></pre></div>
+<ul>
+<li>Statistics are computed over all valid (non-NaN) pixels in preloaded COGs.</li>
+<li>Standard deviation is clamped to <span class="arithmatex">\(\geq 10^{-8}\)</span> to avoid division by zero.</li>
+<li>Normalization is critical: Run 1 (unnormalized) achieved only 4% improvement vs baseline; Run 2 (normalized) jumped to 29%.</li>
+<li>The <code>norm_stats.json</code> file is saved alongside checkpoints and must be used at inference time.</li>
+</ul>
+<hr />
+<h2 id="cog-preloading-strategy">COG Preloading Strategy<a class="headerlink" href="#cog-preloading-strategy" title="Permanent link">&para;</a></h2>
+<p>LZW-compressed COGs are slow for random windowed reads:</p>
+<table>
+<thead>
+<tr>
+<th>Access pattern</th>
+<th>Latency</th>
+<th>Throughput at 848K reads</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Random 64×64 windowed read</td>
+<td>~170 ms</td>
+<td>~40 hours/epoch</td>
+</tr>
+<tr>
+<td>Preloaded numpy slice</td>
+<td>~0.2 ms</td>
+<td>~3 minutes/epoch</td>
+</tr>
+</tbody>
+</table>
+<p>The dataset preloads all unique daily COGs into RAM as decoded float16 arrays. With 2,556 COGs (7 years) at ~108 MB each in float16, this requires ~276 GB -- well within the machine's 540 GB.</p>
+<p>Key implementation details:</p>
+<ul>
+<li><strong>Float16 storage</strong>: COGs are decoded to float32 and downcast to float16 for storage, halving memory. Individual patches are upcast to float32 on access.</li>
+<li><strong>Threaded loading</strong>: COGs are loaded in parallel via a thread pool.</li>
+<li><strong>Fork COW sharing</strong>: DataLoader workers (forked processes) share preloaded memory via copy-on-write, so <code>num_workers=2--4</code> adds no memory overhead.</li>
+<li><strong>Training throughput</strong>: ~25 min preload + ~5 min/epoch (A6000, float16-mixed).</li>
+</ul>
+<hr />
+<h2 id="metrics">Metrics<a class="headerlink" href="#metrics" title="Permanent link">&para;</a></h2>
+<h3 id="log-space-metrics-deltalog-e_a">Log-space metrics (<span class="arithmatex">\(\Delta\!\log e_a\)</span>)<a class="headerlink" href="#log-space-metrics-deltalog-e_a" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Metric</th>
+<th>Tag</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>val_loss</td>
+<td><code>val_loss</code></td>
+<td>Huber + TV at center pixel</td>
+</tr>
+<tr>
+<td>val_mae</td>
+<td><code>val_mae</code></td>
+<td>MAE of predicted vs observed residual</td>
+</tr>
+<tr>
+<td>val_rmse</td>
+<td><code>val_rmse</code></td>
+<td>RMSE</td>
+</tr>
+<tr>
+<td>val_r2</td>
+<td><code>val_r2</code></td>
+<td>Fraction of residual variance explained</td>
+</tr>
+<tr>
+<td>val_bias</td>
+<td><code>val_bias</code></td>
+<td>Mean signed error (pred <span class="arithmatex">\(-\)</span> target)</td>
+</tr>
+<tr>
+<td>baseline_mae</td>
+<td><code>baseline_mae</code></td>
+<td>MAE of zero-correction (raw RTMA)</td>
+</tr>
+<tr>
+<td>val_rtma_mae</td>
+<td><code>val_rtma_mae</code></td>
+<td>MAE of RTMA baseline in log-space</td>
+</tr>
+</tbody>
+</table>
+<h3 id="e_a-space-metrics-kpa"><span class="arithmatex">\(e_a\)</span>-space metrics (kPa)<a class="headerlink" href="#e_a-space-metrics-kpa" title="Permanent link">&para;</a></h3>
+<p>These reconstruct actual vapor pressure values for stakeholder-interpretable evaluation:</p>
+<table>
+<thead>
+<tr>
+<th>Metric</th>
+<th>Tag</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Model MAE</td>
+<td><code>val/mae_ea_kpa</code></td>
+<td>MAE of corrected <span class="arithmatex">\(e_a\)</span> vs observed</td>
+</tr>
+<tr>
+<td>RTMA MAE</td>
+<td><code>val/mae_rtma_ea_kpa</code></td>
+<td>MAE of uncorrected RTMA vs observed</td>
+</tr>
+<tr>
+<td>Model MAPE</td>
+<td><code>val/mape_ea</code></td>
+<td>Mean absolute percentage error</td>
+</tr>
+<tr>
+<td>RTMA MAPE</td>
+<td><code>val/mape_rtma_ea</code></td>
+<td>RTMA MAPE for comparison</td>
+</tr>
+<tr>
+<td>Improvement</td>
+<td><code>val/pct_improvement</code></td>
+<td><span class="arithmatex">\((1 - \text{MAE}_\text{model} / \text{MAE}_\text{rtma}) \times 100\)</span></td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="training-configuration">Training Configuration<a class="headerlink" href="#training-configuration" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Parameter</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Optimizer</td>
+<td>AdamW, lr = <span class="arithmatex">\(3 \times 10^{-4}\)</span></td>
+</tr>
+<tr>
+<td>LR schedule</td>
+<td>ReduceLROnPlateau (factor=0.5, patience=7, min_lr=<span class="arithmatex">\(10^{-6}\)</span>)</td>
+</tr>
+<tr>
+<td>Precision</td>
+<td>float16-mixed (GPU), float32 (CPU)</td>
+</tr>
+<tr>
+<td>Gradient clipping</td>
+<td>max_norm = 1.0</td>
+</tr>
+<tr>
+<td>Checkpointing</td>
+<td>Top-5 by val_loss (ModelCheckpoint)</td>
+</tr>
+<tr>
+<td>Early stopping</td>
+<td>patience = 20 on val_loss</td>
+</tr>
+<tr>
+<td>Train/val split</td>
+<td>80/20 by station (seeded), shared across all runs</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="ablation-results">Ablation Results<a class="headerlink" href="#ablation-results" title="Permanent link">&para;</a></h2>
+<p>Five runs tested incremental additions to the input stack:</p>
+<table>
+<thead>
+<tr>
+<th>Run</th>
+<th>Inputs</th>
+<th>Channels</th>
+<th>val_mae</th>
+<th><span class="arithmatex">\(\Delta\)</span> vs RTMA</th>
+<th>R²</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1</td>
+<td>RTMA only (no norm)</td>
+<td>10</td>
+<td>0.107</td>
+<td><span class="arithmatex">\(-\)</span>4%</td>
+<td>0.02</td>
+</tr>
+<tr>
+<td>2</td>
+<td>+ terrain + rsun + <strong>normalization</strong></td>
+<td>17</td>
+<td>0.079</td>
+<td><span class="arithmatex">\(-\)</span>29%</td>
+<td>0.61</td>
+</tr>
+<tr>
+<td>3</td>
+<td>+ Landsat</td>
+<td>24</td>
+<td>0.080</td>
+<td><span class="arithmatex">\(-\)</span>28%</td>
+<td>0.69</td>
+</tr>
+<tr>
+<td>4</td>
+<td>Drop humidity inputs (direct pred.)</td>
+<td>22</td>
+<td>0.110</td>
+<td><span class="arithmatex">\(-\)</span>1%</td>
+<td>0.89*</td>
+</tr>
+<tr>
+<td>5</td>
+<td>All features, base=48, 7 years</td>
+<td>24</td>
+<td>0.073</td>
+<td><span class="arithmatex">\(-\)</span>29%</td>
+<td>0.60</td>
+</tr>
+</tbody>
+</table>
+<p>*Run 4's R² is against total <span class="arithmatex">\(\log e_a\)</span> variance, not residual variance.</p>
+<p>Key findings:</p>
+<ul>
+<li><strong>Normalization is essential</strong> (Run 1 → 2): without it, high-magnitude bands (pressure) dominate and the model barely learns.</li>
+<li><strong>Terrain covariates provide the largest single gain</strong> (2% → 29% improvement): elevation, slope, and TPI give the model spatial context about where RTMA struggles.</li>
+<li><strong>Landsat adds ~8 pp of explained variance</strong> (R² 0.61 → 0.69) at fixed epochs, providing land-cover context.</li>
+<li><strong>Humidity inputs are essential</strong> (Run 4): without dewpoint and <span class="arithmatex">\(e_a\)</span> as inputs, the model cannot improve on RTMA.</li>
+<li><strong>More data improves generalization</strong> (Run 5): 7 years of training produces more robust corrections than 1 year, though per-year R² is slightly lower due to greater inter-annual variance.</li>
+</ul>
+<hr />
+<h2 id="lr-scheduling">LR Scheduling<a class="headerlink" href="#lr-scheduling" title="Permanent link">&para;</a></h2>
+<p>The learning rate follows a ReduceLROnPlateau schedule:</p>
+<table>
+<thead>
+<tr>
+<th>Parameter</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Monitor</td>
+<td>val_loss</td>
+</tr>
+<tr>
+<td>Factor</td>
+<td>0.5 (halve LR)</td>
+</tr>
+<tr>
+<td>Patience</td>
+<td>7 epochs without improvement</td>
+</tr>
+<tr>
+<td>Min LR</td>
+<td><span class="arithmatex">\(10^{-6}\)</span></td>
+</tr>
+</tbody>
+</table>
+<p>In Run 5 (24 epochs), the scheduler had not yet triggered a reduction -- the model was still improving at the initial learning rate. With early stopping patience of 20, training can continue for up to 100 epochs.</p>
+<hr />
+<h2 id="gridded-inference">Gridded Inference<a class="headerlink" href="#gridded-inference" title="Permanent link">&para;</a></h2>
+<p>The model is trained on patches centered on weather stations, but it needs no station observations at inference time. Every input channel — RTMA weather fields, terrain, solar radiation, Landsat composites, day of year — is a gridded product available at every pixel in the domain. Station observations only appear in the training targets (the residual between observed and RTMA humidity). This means the trained model can be applied directly to the full grid to produce a wall-to-wall corrected humidity field.</p>
+<div class="admonition note">
+<p class="admonition-title">Forward-looking</p>
+<p>Gridded inference over the full RTMA domain is planned but not yet implemented.</p>
+</div>
+<h3 id="approach">Approach<a class="headerlink" href="#approach" title="Permanent link">&para;</a></h3>
+<p><strong>1. Tile the domain.</strong> Divide the full RTMA grid into overlapping patches (e.g., 64×64 with some overlap stride). For each patch, assemble the same input channels used in training: RTMA bands for that day, static terrain, solar radiation for that DOY, and the seasonal Landsat composite.</p>
+<p><strong>2. Run the U-Net.</strong> Each patch goes through the same forward pass used in training. Because the model is fully convolutional, it outputs a correction value at every pixel in the patch — not just at the center where supervision happened during training. The spatial coherence enforced by the convolutional architecture and the TV smoothness penalty means the correction field varies smoothly, changing only where the input features (terrain, land cover) change.</p>
+<p><strong>3. Stitch and blend.</strong> Overlapping patch outputs are blended (e.g., linear ramp in the overlap zone) to eliminate edge artifacts, producing a single seamless correction grid over the full domain.</p>
+<p><strong>4. Apply corrections.</strong> The correction grid is applied back to RTMA:</p>
+<div class="arithmatex">\[
+e_{a,\text{corrected}} = e_{a,\text{rtma}} \cdot \exp(\widehat{\Delta\!\log e_a})
+\]</div>
+<p>The log-space residual becomes a multiplicative adjustment, guaranteeing positive output values.</p>
+<h3 id="domain-shift-considerations">Domain shift considerations<a class="headerlink" href="#domain-shift-considerations" title="Permanent link">&para;</a></h3>
+<p>During training, every patch is centered on a station, so the model always sees a station at the center pixel. At inference, most patches are centered on arbitrary grid locations with no station nearby. The model must generalize from "correct RTMA where I have a station" to "correct RTMA everywhere based on the same covariate patterns." This works because the model learns the mapping from gridded covariates (terrain shape, weather regime, land cover) to bias — not from station identity. A valley with a temperature inversion signature in the RTMA fields should receive a similar correction whether or not a station happens to sit there.</p>
+<p>A second consideration is station density. Stations cluster in valleys and near population centers, so the model has more training signal in those areas. Corrections in remote ridgetops or deep wilderness are extrapolations — the model applies patterns learned elsewhere to terrain configurations it may have seen less often. Spatial holdout evaluation (holding out entire stations) partially tests this generalization.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../../..", "features": ["navigation.sections", "navigation.expand", "navigation.indexes", "content.code.copy", "toc.follow"], "search": "../../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../../../assets/javascripts/bundle.79ae519e.min.js"></script>
+      
+        <script src="../../../javascripts/mathjax.js"></script>
+      
+        <script src="https://unpkg.com/mathjax@3/es5/tex-mml-chtml.js"></script>
+      
+    
+  </body>
+</html>
