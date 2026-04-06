@@ -1,0 +1,38 @@
+name = "da_split_s_tmax_k64_mixed_local"
+description = "DA split k64 with mixed-local: 15% of graphs allow up to 2 sub-20km source edges per query"
+
+hidden_dim = 64
+n_hops = 1
+lr = 3e-4
+weight_decay = 1e-3
+huber_delta = 1.0
+dropout = 0.3
+batch_size = 16
+epochs = 100
+seed = 42
+task = "scalar"
+target_index = 0
+da_version = "v1"
+disable_payload = false
+da_gate_init_bias = -2.0
+source_edge_dropout = 0.2
+
+da_split_enabled = true
+da_source_fraction = 0.5
+da_exclude_radius_km = 20.0
+da_target_source_k = 16
+split_seed = 42
+
+da_mixed_local_enabled = true
+da_mixed_local_graph_fraction = 0.15
+da_mixed_local_max_edges_per_query = 2
+da_mixed_local_radius_km = 20.0
+
+train_years = [2018, 2019, 2020, 2021, 2022, 2023]
+val_years = [2024]
+
+graph_dir = "/nas/dads/runs/da_v1_graphs_k64_r300"
+out_dir = "/nas/dads/runs/da_split_s_tmax_k64_mixed_local/seed_42"
+holdout_fids_json = "/home/dgketchum/code/dads/artifacts/canonical_holdout_fids.json"
+device = "cuda:0"
+num_workers = 0

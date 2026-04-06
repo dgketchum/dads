@@ -50,6 +50,15 @@ class DAGraphDataset(Dataset):
         surviving source neighbors per query. ``None`` disables this cap.
     split_seed : int
         Base seed for deterministic per-epoch split re-randomization.
+    da_mixed_local_enabled : bool
+        Allow a small number of sub-exclusion-radius edges on a fraction of
+        training graphs.
+    da_mixed_local_graph_fraction : float
+        Fraction of training graphs that use mixed-local mode.
+    da_mixed_local_max_edges_per_query : int
+        Max local (< exclusion radius) edges kept per query in mixed-local mode.
+    da_mixed_local_radius_km : float
+        Distance threshold for "local" edges (typically == da_exclude_radius_km).
     """
 
     def __init__(
@@ -65,6 +74,10 @@ class DAGraphDataset(Dataset):
         da_exclude_radius_km: float = 20.0,
         da_target_source_k: int | None = 16,
         split_seed: int = 42,
+        da_mixed_local_enabled: bool = False,
+        da_mixed_local_graph_fraction: float = 0.0,
+        da_mixed_local_max_edges_per_query: int = 0,
+        da_mixed_local_radius_km: float = 20.0,
     ):
         super().__init__()
         self.loss_fids = loss_fids
@@ -79,6 +92,10 @@ class DAGraphDataset(Dataset):
             else None
         )
         self.split_seed = split_seed
+        self.da_mixed_local_enabled = da_mixed_local_enabled
+        self.da_mixed_local_graph_fraction = da_mixed_local_graph_fraction
+        self.da_mixed_local_max_edges_per_query = da_mixed_local_max_edges_per_query
+        self.da_mixed_local_radius_km = da_mixed_local_radius_km
         self._epoch = 0
 
         # Load and verify metadata
@@ -287,8 +304,13 @@ class DAGraphDataset(Dataset):
         )
         sq_edge_attr = sq_edge_attr[edge_keep]
 
+        # Decide whether this graph uses mixed-local mode
+        use_mixed_local = self.da_mixed_local_enabled and (
+            rng.random() < self.da_mixed_local_graph_fraction
+        )
+
         sq_edge_index, sq_edge_attr = self._prune_source_edges(
-            sq_edge_index, sq_edge_attr
+            sq_edge_index, sq_edge_attr, mixed_local=use_mixed_local
         )
 
         # Update loss_mask: only query-designated non-holdout stations get train loss
@@ -309,8 +331,14 @@ class DAGraphDataset(Dataset):
         self,
         sq_edge_index: torch.Tensor,
         sq_edge_attr: torch.Tensor,
+        mixed_local: bool = False,
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        """Apply distance floor and nearest-surviving-K cap to source edges."""
+        """Apply distance floor and nearest-surviving-K cap to source edges.
+
+        When *mixed_local* is True, a limited number of sub-exclusion-radius
+        ("local") edges are retained per query before filling the remaining
+        budget from far-field edges.
+        """
         if sq_edge_index.numel() == 0:
             return sq_edge_index, sq_edge_attr
 
@@ -318,6 +346,10 @@ class DAGraphDataset(Dataset):
         dist_std = self._sq_edge_norm.get("dist_std", 1.0)
         dist_km = sq_edge_attr[:, 0] * dist_std + dist_mean
 
+        if mixed_local and self.da_mixed_local_max_edges_per_query > 0:
+            return self._prune_mixed_local(sq_edge_index, sq_edge_attr, dist_km)
+
+        # --- strict mode: remove all edges below exclusion radius ---
         if self.da_exclude_radius_km > 0:
             radius_keep = dist_km >= self.da_exclude_radius_km
             sq_edge_index = sq_edge_index[:, radius_keep]
@@ -339,6 +371,48 @@ class DAGraphDataset(Dataset):
                 continue
             nearest = torch.argsort(dist_km[edge_idx])[: self.da_target_source_k]
             keep_mask[edge_idx[nearest]] = True
+
+        return sq_edge_index[:, keep_mask], sq_edge_attr[keep_mask]
+
+    def _prune_mixed_local(
+        self,
+        sq_edge_index: torch.Tensor,
+        sq_edge_attr: torch.Tensor,
+        dist_km: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Keep up to *max_local* local edges + fill from far up to K total."""
+        local_thresh = self.da_mixed_local_radius_km
+        max_local = self.da_mixed_local_max_edges_per_query
+        k_total = self.da_target_source_k
+
+        is_local = dist_km < local_thresh
+        is_far = ~is_local
+
+        old_dst = sq_edge_index[1]
+        keep_mask = torch.zeros(old_dst.shape[0], dtype=torch.bool)
+
+        for qi in torch.unique(old_dst).tolist():
+            qi_edges = torch.nonzero(old_dst == qi, as_tuple=False).squeeze(1)
+            local_edges = qi_edges[is_local[qi_edges]]
+            far_edges = qi_edges[is_far[qi_edges]]
+
+            # Nearest local edges, capped
+            kept_local = torch.tensor([], dtype=torch.long)
+            if local_edges.numel() > 0:
+                order = torch.argsort(dist_km[local_edges])
+                kept_local = local_edges[order[:max_local]]
+
+            # Fill remaining budget from far edges
+            remaining = (k_total - kept_local.numel()) if k_total else far_edges.numel()
+            kept_far = torch.tensor([], dtype=torch.long)
+            if far_edges.numel() > 0 and remaining > 0:
+                order = torch.argsort(dist_km[far_edges])
+                kept_far = far_edges[order[:remaining]]
+
+            if kept_local.numel() > 0:
+                keep_mask[kept_local] = True
+            if kept_far.numel() > 0:
+                keep_mask[kept_far] = True
 
         return sq_edge_index[:, keep_mask], sq_edge_attr[keep_mask]
 

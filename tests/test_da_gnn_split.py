@@ -503,3 +503,182 @@ def test_split_configs_match_geometry():
     # Only payload differs
     assert on.disable_payload is False
     assert off.disable_payload is True
+
+
+# ---------------------------------------------------------------------------
+# Mixed-local mode
+# ---------------------------------------------------------------------------
+
+
+def test_mixed_local_allows_close_edges():
+    """Mixed-local graphs retain some sub-exclusion-radius edges."""
+    tmpdir, holdout, train_fids = _setup_graph_dir(
+        n_query=30, n_source=20, n_holdout=5, edge_dist_km_range=(5.0, 80.0)
+    )
+
+    ds_strict = DAGraphDataset(
+        graph_dir=tmpdir,
+        loss_fids=train_fids,
+        target_index=0,
+        is_train=True,
+        da_split_enabled=True,
+        da_source_fraction=0.5,
+        da_exclude_radius_km=20.0,
+        da_target_source_k=16,
+    )
+    # 100% graph fraction so every graph is mixed-local
+    ds_mixed = DAGraphDataset(
+        graph_dir=tmpdir,
+        loss_fids=train_fids,
+        target_index=0,
+        is_train=True,
+        da_split_enabled=True,
+        da_source_fraction=0.5,
+        da_exclude_radius_km=20.0,
+        da_target_source_k=16,
+        da_mixed_local_enabled=True,
+        da_mixed_local_graph_fraction=1.0,
+        da_mixed_local_max_edges_per_query=2,
+        da_mixed_local_radius_km=20.0,
+    )
+
+    dist_mean, dist_std = 21.59, 17.30
+    any_local = False
+    for idx in range(len(ds_mixed)):
+        out_m = ds_mixed[idx]
+        sq_ei = out_m["source", "influences", "query"].edge_index
+        if sq_ei.numel() == 0:
+            continue
+        ea = out_m["source", "influences", "query"].edge_attr
+        d_km = ea[:, 0] * dist_std + dist_mean
+        if (d_km < 20.0).any():
+            any_local = True
+
+        # Strict version should have no close edges
+        out_s = ds_strict[idx]
+        sq_ei_s = out_s["source", "influences", "query"].edge_index
+        if sq_ei_s.numel() > 0:
+            ea_s = out_s["source", "influences", "query"].edge_attr
+            d_km_s = ea_s[:, 0] * dist_std + dist_mean
+            assert (d_km_s >= 20.0).all()
+
+    assert any_local, "Expected at least one local edge in mixed-local mode"
+
+
+def test_mixed_local_respects_max_edges_per_query():
+    """Mixed-local never exceeds max_local edges per query."""
+    tmpdir, holdout, train_fids = _setup_dense_candidate_graph_dir()
+
+    ds = DAGraphDataset(
+        graph_dir=tmpdir,
+        loss_fids=train_fids,
+        target_index=0,
+        is_train=True,
+        da_split_enabled=True,
+        da_source_fraction=0.95,
+        da_exclude_radius_km=20.0,
+        da_target_source_k=16,
+        split_seed=7,
+        da_mixed_local_enabled=True,
+        da_mixed_local_graph_fraction=1.0,
+        da_mixed_local_max_edges_per_query=2,
+        da_mixed_local_radius_km=20.0,
+    )
+
+    dist_mean, dist_std = 21.59, 17.30
+    out = ds[0]
+    sq_ei = out["source", "influences", "query"].edge_index
+    if sq_ei.numel() == 0:
+        return
+    ea = out["source", "influences", "query"].edge_attr
+    d_km = ea[:, 0] * dist_std + dist_mean
+
+    for qi in torch.unique(sq_ei[1]).tolist():
+        mask = sq_ei[1] == qi
+        local = (d_km[mask] < 20.0).sum().item()
+        assert local <= 2, f"Query {qi} has {local} local edges, expected <= 2"
+
+
+def test_mixed_local_respects_total_k():
+    """Mixed-local never exceeds da_target_source_k total edges per query."""
+    tmpdir, holdout, train_fids = _setup_dense_candidate_graph_dir()
+
+    ds = DAGraphDataset(
+        graph_dir=tmpdir,
+        loss_fids=train_fids,
+        target_index=0,
+        is_train=True,
+        da_split_enabled=True,
+        da_source_fraction=0.95,
+        da_exclude_radius_km=20.0,
+        da_target_source_k=6,
+        split_seed=7,
+        da_mixed_local_enabled=True,
+        da_mixed_local_graph_fraction=1.0,
+        da_mixed_local_max_edges_per_query=2,
+        da_mixed_local_radius_km=20.0,
+    )
+
+    out = ds[0]
+    sq_ei = out["source", "influences", "query"].edge_index
+    if sq_ei.numel() == 0:
+        return
+
+    for qi in torch.unique(sq_ei[1]).tolist():
+        n_edges = (sq_ei[1] == qi).sum().item()
+        assert n_edges <= 6, f"Query {qi} has {n_edges} edges, expected <= 6"
+
+
+def test_mixed_local_disabled_matches_strict():
+    """With da_mixed_local_enabled=False, output matches strict split."""
+    tmpdir, holdout, train_fids = _setup_graph_dir(
+        n_query=30, n_source=20, n_holdout=5, edge_dist_km_range=(5.0, 80.0)
+    )
+
+    ds_strict = DAGraphDataset(
+        graph_dir=tmpdir,
+        loss_fids=train_fids,
+        target_index=0,
+        is_train=True,
+        da_split_enabled=True,
+        da_source_fraction=0.5,
+        da_exclude_radius_km=20.0,
+        da_target_source_k=16,
+    )
+    ds_disabled = DAGraphDataset(
+        graph_dir=tmpdir,
+        loss_fids=train_fids,
+        target_index=0,
+        is_train=True,
+        da_split_enabled=True,
+        da_source_fraction=0.5,
+        da_exclude_radius_km=20.0,
+        da_target_source_k=16,
+        da_mixed_local_enabled=False,
+        da_mixed_local_graph_fraction=0.5,
+        da_mixed_local_max_edges_per_query=2,
+    )
+
+    for idx in range(len(ds_strict)):
+        g1 = ds_strict[idx]
+        g2 = ds_disabled[idx]
+        assert torch.equal(g1["query"].loss_mask, g2["query"].loss_mask)
+        assert torch.equal(
+            g1["source", "influences", "query"].edge_index,
+            g2["source", "influences", "query"].edge_index,
+        )
+
+
+def test_mixed_local_config_parses():
+    """Mixed-local config file parses correctly."""
+    from models.rtma_bias.train_da_gnn import DAGNNConfig
+
+    cfg = DAGNNConfig.from_toml(
+        "models/hrrr_da/configs/da_split_s_tmax_k64_mixed_local.toml"
+    )
+    assert cfg.da_mixed_local_enabled is True
+    assert cfg.da_mixed_local_graph_fraction == 0.15
+    assert cfg.da_mixed_local_max_edges_per_query == 2
+    assert cfg.da_mixed_local_radius_km == 20.0
+    assert cfg.da_split_enabled is True
+    assert cfg.da_target_source_k == 16

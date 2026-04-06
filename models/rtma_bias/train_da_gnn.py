@@ -55,6 +55,11 @@ class DAGNNConfig:
     da_target_source_k: int | None = 16
     split_seed: int = 42
 
+    da_mixed_local_enabled: bool = False
+    da_mixed_local_graph_fraction: float = 0.0
+    da_mixed_local_max_edges_per_query: int = 0
+    da_mixed_local_radius_km: float = 20.0
+
     train_years: list[int] = field(default_factory=list)
     val_years: list[int] = field(default_factory=list)
 
@@ -145,7 +150,7 @@ class DASplitEpochCallback(L.Callback):
             if ds.da_target_source_k is not None and spq.size > 0
             else 0.0
         )
-        print(
+        base_msg = (
             f"  [epoch {epoch}] split audit ({n} graphs):\n"
             f"    src={_np.mean(n_src_list):.0f}, "
             f"qry={_np.mean(n_qry_list):.0f}, "
@@ -157,9 +162,38 @@ class DASplitEpochCallback(L.Callback):
             f"    nearest_src_km: "
             f"min={md.min():.1f} p25={_np.percentile(md, 25):.1f} "
             f"med={_np.median(md):.1f} p75={_np.percentile(md, 75):.1f} "
-            f"p95={_np.percentile(md, 95):.1f} max={md.max():.1f}",
-            flush=True,
+            f"p95={_np.percentile(md, 95):.1f} max={md.max():.1f}"
         )
+
+        # Mixed-local audit: report local vs far edge counts
+        if ds.da_mixed_local_enabled:
+            local_thresh = ds.da_mixed_local_radius_km
+            local_counts, far_counts, has_local = [], [], []
+            for i in range(n):
+                out = ds[i]
+                sq_ei = out["source", "influences", "query"].edge_index
+                if sq_ei.numel() == 0:
+                    continue
+                ea = out["source", "influences", "query"].edge_attr
+                d = (ea[:, 0] * dist_std + dist_mean).numpy()
+                dst = sq_ei[1].numpy()
+                qry_idx = _np.where(out["query"].loss_mask.numpy())[0]
+                for qi in qry_idx:
+                    qi_d = d[dst == qi]
+                    n_local = int((qi_d < local_thresh).sum())
+                    n_far = int((qi_d >= local_thresh).sum())
+                    local_counts.append(n_local)
+                    far_counts.append(n_far)
+                    has_local.append(n_local > 0)
+            lc = _np.array(local_counts) if local_counts else _np.array([0.0])
+            fc = _np.array(far_counts) if far_counts else _np.array([0.0])
+            hl = _np.array(has_local) if has_local else _np.array([False])
+            base_msg += (
+                f"\n    mixed-local: qry_with_local={hl.mean():.1%} "
+                f"local/qry={lc.mean():.2f} far/qry={fc.mean():.1f}"
+            )
+
+        print(base_msg, flush=True)
 
 
 def _parse_args():
@@ -212,6 +246,10 @@ def main():
         da_exclude_radius_km=cfg.da_exclude_radius_km,
         da_target_source_k=cfg.da_target_source_k,
         split_seed=cfg.split_seed,
+        da_mixed_local_enabled=cfg.da_mixed_local_enabled,
+        da_mixed_local_graph_fraction=cfg.da_mixed_local_graph_fraction,
+        da_mixed_local_max_edges_per_query=cfg.da_mixed_local_max_edges_per_query,
+        da_mixed_local_radius_km=cfg.da_mixed_local_radius_km,
     )
     train_ds.save_norm_stats(os.path.join(cfg.out_dir, "norm_stats.json"))
 
@@ -256,6 +294,12 @@ def main():
             f"Candidate source graph: source_k={train_ds.source_candidate_k}, "
             f"source_radius={train_ds.source_candidate_radius_km}km"
         )
+        if cfg.da_mixed_local_enabled:
+            print(
+                f"Mixed-local: graph_frac={cfg.da_mixed_local_graph_fraction}, "
+                f"max_local/qry={cfg.da_mixed_local_max_edges_per_query}, "
+                f"local_radius={cfg.da_mixed_local_radius_km}km"
+            )
 
     # Record effective family in run metadata
     with open(os.path.join(cfg.out_dir, "split_pointer.json"), "w") as f:
@@ -268,6 +312,10 @@ def main():
                 "da_exclude_radius_km": cfg.da_exclude_radius_km,
                 "da_target_source_k": cfg.da_target_source_k,
                 "split_seed": cfg.split_seed,
+                "da_mixed_local_enabled": cfg.da_mixed_local_enabled,
+                "da_mixed_local_graph_fraction": cfg.da_mixed_local_graph_fraction,
+                "da_mixed_local_max_edges_per_query": cfg.da_mixed_local_max_edges_per_query,
+                "da_mixed_local_radius_km": cfg.da_mixed_local_radius_km,
                 "graph_dir": cfg.graph_dir,
                 "holdout_fids_json": cfg.holdout_fids_json,
                 "train_years": cfg.train_years,
