@@ -57,8 +57,7 @@ class DAGraphDataset(Dataset):
         Fraction of training graphs that use mixed-local mode.
     da_mixed_local_max_edges_per_query : int
         Max local (< exclusion radius) edges kept per query in mixed-local mode.
-    da_mixed_local_radius_km : float
-        Distance threshold for "local" edges (typically == da_exclude_radius_km).
+        The local/far boundary is always ``da_exclude_radius_km``.
     """
 
     def __init__(
@@ -77,7 +76,6 @@ class DAGraphDataset(Dataset):
         da_mixed_local_enabled: bool = False,
         da_mixed_local_graph_fraction: float = 0.0,
         da_mixed_local_max_edges_per_query: int = 0,
-        da_mixed_local_radius_km: float = 20.0,
     ):
         super().__init__()
         self.loss_fids = loss_fids
@@ -95,7 +93,6 @@ class DAGraphDataset(Dataset):
         self.da_mixed_local_enabled = da_mixed_local_enabled
         self.da_mixed_local_graph_fraction = da_mixed_local_graph_fraction
         self.da_mixed_local_max_edges_per_query = da_mixed_local_max_edges_per_query
-        self.da_mixed_local_radius_km = da_mixed_local_radius_km
         self._epoch = 0
 
         # Load and verify metadata
@@ -153,6 +150,8 @@ class DAGraphDataset(Dataset):
     @property
     def effective_family(self) -> str:
         """Runtime family label reflecting source masking policy."""
+        if self.da_split_enabled and self.da_mixed_local_enabled:
+            return "da-graph-v3-mixed-local"
         if self.da_split_enabled:
             return "da-graph-v3"
         return self._family
@@ -381,7 +380,7 @@ class DAGraphDataset(Dataset):
         dist_km: torch.Tensor,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Keep up to *max_local* local edges + fill from far up to K total."""
-        local_thresh = self.da_mixed_local_radius_km
+        local_thresh = self.da_exclude_radius_km
         max_local = self.da_mixed_local_max_edges_per_query
         k_total = self.da_target_source_k
 

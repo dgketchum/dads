@@ -539,7 +539,6 @@ def test_mixed_local_allows_close_edges():
         da_mixed_local_enabled=True,
         da_mixed_local_graph_fraction=1.0,
         da_mixed_local_max_edges_per_query=2,
-        da_mixed_local_radius_km=20.0,
     )
 
     dist_mean, dist_std = 21.59, 17.30
@@ -582,7 +581,6 @@ def test_mixed_local_respects_max_edges_per_query():
         da_mixed_local_enabled=True,
         da_mixed_local_graph_fraction=1.0,
         da_mixed_local_max_edges_per_query=2,
-        da_mixed_local_radius_km=20.0,
     )
 
     dist_mean, dist_std = 21.59, 17.30
@@ -616,7 +614,6 @@ def test_mixed_local_respects_total_k():
         da_mixed_local_enabled=True,
         da_mixed_local_graph_fraction=1.0,
         da_mixed_local_max_edges_per_query=2,
-        da_mixed_local_radius_km=20.0,
     )
 
     out = ds[0]
@@ -679,6 +676,60 @@ def test_mixed_local_config_parses():
     assert cfg.da_mixed_local_enabled is True
     assert cfg.da_mixed_local_graph_fraction == 0.15
     assert cfg.da_mixed_local_max_edges_per_query == 2
-    assert cfg.da_mixed_local_radius_km == 20.0
+    # local/far boundary uses da_exclude_radius_km (no separate radius param)
+    assert cfg.da_exclude_radius_km == 20.0
     assert cfg.da_split_enabled is True
     assert cfg.da_target_source_k == 16
+
+
+def test_mixed_local_configs_match_geometry():
+    """DA-on and DA-off mixed-local configs use matched split/mixed params."""
+    from models.rtma_bias.train_da_gnn import DAGNNConfig
+
+    on = DAGNNConfig.from_toml(
+        "models/hrrr_da/configs/da_split_s_tmax_k64_mixed_local.toml"
+    )
+    off = DAGNNConfig.from_toml(
+        "models/hrrr_da/configs/da_split_off_tmax_k64_mixed_local.toml"
+    )
+
+    assert on.da_split_enabled is True
+    assert off.da_split_enabled is True
+    assert on.da_source_fraction == off.da_source_fraction
+    assert on.da_exclude_radius_km == off.da_exclude_radius_km
+    assert on.da_target_source_k == off.da_target_source_k == 16
+    assert on.split_seed == off.split_seed
+    assert on.da_mixed_local_enabled == off.da_mixed_local_enabled is True
+    assert on.da_mixed_local_graph_fraction == off.da_mixed_local_graph_fraction
+    assert (
+        on.da_mixed_local_max_edges_per_query == off.da_mixed_local_max_edges_per_query
+    )
+    # Only payload differs
+    assert on.disable_payload is False
+    assert off.disable_payload is True
+
+
+def test_mixed_local_effective_family():
+    """Mixed-local datasets report a distinct effective_family."""
+    tmpdir, holdout, train_fids = _setup_graph_dir()
+
+    ds_strict = DAGraphDataset(
+        graph_dir=tmpdir,
+        loss_fids=train_fids,
+        target_index=0,
+        is_train=True,
+        da_split_enabled=True,
+    )
+    ds_mixed = DAGraphDataset(
+        graph_dir=tmpdir,
+        loss_fids=train_fids,
+        target_index=0,
+        is_train=True,
+        da_split_enabled=True,
+        da_mixed_local_enabled=True,
+        da_mixed_local_graph_fraction=0.15,
+        da_mixed_local_max_edges_per_query=2,
+    )
+
+    assert ds_strict.effective_family == "da-graph-v3"
+    assert ds_mixed.effective_family == "da-graph-v3-mixed-local"

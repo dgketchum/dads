@@ -58,7 +58,6 @@ class DAGNNConfig:
     da_mixed_local_enabled: bool = False
     da_mixed_local_graph_fraction: float = 0.0
     da_mixed_local_max_edges_per_query: int = 0
-    da_mixed_local_radius_km: float = 20.0
 
     train_years: list[int] = field(default_factory=list)
     val_years: list[int] = field(default_factory=list)
@@ -167,7 +166,7 @@ class DASplitEpochCallback(L.Callback):
 
         # Mixed-local audit: report local vs far edge counts
         if ds.da_mixed_local_enabled:
-            local_thresh = ds.da_mixed_local_radius_km
+            local_thresh = ds.da_exclude_radius_km
             local_counts, far_counts, has_local = [], [], []
             for i in range(n):
                 out = ds[i]
@@ -249,7 +248,6 @@ def main():
         da_mixed_local_enabled=cfg.da_mixed_local_enabled,
         da_mixed_local_graph_fraction=cfg.da_mixed_local_graph_fraction,
         da_mixed_local_max_edges_per_query=cfg.da_mixed_local_max_edges_per_query,
-        da_mixed_local_radius_km=cfg.da_mixed_local_radius_km,
     )
     train_ds.save_norm_stats(os.path.join(cfg.out_dir, "norm_stats.json"))
 
@@ -298,7 +296,7 @@ def main():
             print(
                 f"Mixed-local: graph_frac={cfg.da_mixed_local_graph_fraction}, "
                 f"max_local/qry={cfg.da_mixed_local_max_edges_per_query}, "
-                f"local_radius={cfg.da_mixed_local_radius_km}km"
+                f"local_thresh=exclude_radius={cfg.da_exclude_radius_km}km"
             )
 
     # Record effective family in run metadata
@@ -315,7 +313,6 @@ def main():
                 "da_mixed_local_enabled": cfg.da_mixed_local_enabled,
                 "da_mixed_local_graph_fraction": cfg.da_mixed_local_graph_fraction,
                 "da_mixed_local_max_edges_per_query": cfg.da_mixed_local_max_edges_per_query,
-                "da_mixed_local_radius_km": cfg.da_mixed_local_radius_km,
                 "graph_dir": cfg.graph_dir,
                 "holdout_fids_json": cfg.holdout_fids_json,
                 "train_years": cfg.train_years,
