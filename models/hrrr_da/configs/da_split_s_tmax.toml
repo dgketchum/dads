@@ -20,6 +20,7 @@ source_edge_dropout = 0.2
 da_split_enabled = true
 da_source_fraction = 0.5
 da_exclude_radius_km = 20.0
+da_target_source_k = 16
 split_seed = 42
 
 train_years = [2018, 2019, 2020, 2021, 2022, 2023]

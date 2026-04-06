@@ -45,6 +45,9 @@ class DAGraphDataset(Dataset):
         Fraction of non-holdout stations assigned as sources (rest are queries).
     da_exclude_radius_km : float
         Remove source→query edges shorter than this distance.
+    da_target_source_k : int | None
+        After runtime split/radius filtering, keep at most the nearest K
+        surviving source neighbors per query. ``None`` disables this cap.
     split_seed : int
         Base seed for deterministic per-epoch split re-randomization.
     """
@@ -60,6 +63,7 @@ class DAGraphDataset(Dataset):
         da_split_enabled: bool = False,
         da_source_fraction: float = 0.5,
         da_exclude_radius_km: float = 20.0,
+        da_target_source_k: int | None = 16,
         split_seed: int = 42,
     ):
         super().__init__()
@@ -69,6 +73,11 @@ class DAGraphDataset(Dataset):
         self.da_split_enabled = da_split_enabled
         self.da_source_fraction = da_source_fraction
         self.da_exclude_radius_km = da_exclude_radius_km
+        self.da_target_source_k = (
+            int(da_target_source_k)
+            if da_target_source_k is not None and int(da_target_source_k) > 0
+            else None
+        )
         self.split_seed = split_seed
         self._epoch = 0
 
@@ -87,6 +96,11 @@ class DAGraphDataset(Dataset):
         self.query_feature_cols: list[str] = meta["query_feature_cols"]
         self.target_cols: list[str] = meta["target_cols"]
         self._sq_edge_norm = meta.get("source_query_edge_norm", {})
+        self.source_candidate_k = meta.get("source_k")
+        self.source_candidate_radius_km = meta.get(
+            "source_max_radius_km",
+            meta.get("max_radius_km"),
+        )
 
         # v1: separate context/payload; v0: combined source_feature_cols
         if family in ("da-graph-v1", "da-graph-v2", "da-graph-v3"):
@@ -273,14 +287,9 @@ class DAGraphDataset(Dataset):
         )
         sq_edge_attr = sq_edge_attr[edge_keep]
 
-        # Apply exclusion radius: reconstruct km distance from normalized edge ch0
-        if self.da_exclude_radius_km > 0 and sq_edge_index.numel() > 0:
-            dist_mean = self._sq_edge_norm.get("dist_mean", 0.0)
-            dist_std = self._sq_edge_norm.get("dist_std", 1.0)
-            dist_km = sq_edge_attr[:, 0] * dist_std + dist_mean
-            radius_keep = dist_km >= self.da_exclude_radius_km
-            sq_edge_index = sq_edge_index[:, radius_keep]
-            sq_edge_attr = sq_edge_attr[radius_keep]
+        sq_edge_index, sq_edge_attr = self._prune_source_edges(
+            sq_edge_index, sq_edge_attr
+        )
 
         # Update loss_mask: only query-designated non-holdout stations get train loss
         q_fid_to_idx = {}
@@ -295,6 +304,43 @@ class DAGraphDataset(Dataset):
         loss_mask = new_loss_mask
 
         return s_ctx, s_pay, sq_edge_index, sq_edge_attr, loss_mask
+
+    def _prune_source_edges(
+        self,
+        sq_edge_index: torch.Tensor,
+        sq_edge_attr: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Apply distance floor and nearest-surviving-K cap to source edges."""
+        if sq_edge_index.numel() == 0:
+            return sq_edge_index, sq_edge_attr
+
+        dist_mean = self._sq_edge_norm.get("dist_mean", 0.0)
+        dist_std = self._sq_edge_norm.get("dist_std", 1.0)
+        dist_km = sq_edge_attr[:, 0] * dist_std + dist_mean
+
+        if self.da_exclude_radius_km > 0:
+            radius_keep = dist_km >= self.da_exclude_radius_km
+            sq_edge_index = sq_edge_index[:, radius_keep]
+            sq_edge_attr = sq_edge_attr[radius_keep]
+            dist_km = dist_km[radius_keep]
+            if sq_edge_index.numel() == 0:
+                return sq_edge_index, sq_edge_attr
+
+        if self.da_target_source_k is None:
+            return sq_edge_index, sq_edge_attr
+
+        old_dst = sq_edge_index[1]
+        keep_mask = torch.zeros(old_dst.shape[0], dtype=torch.bool)
+        unique_dst = torch.unique(old_dst)
+        for qi in unique_dst.tolist():
+            edge_idx = torch.nonzero(old_dst == qi, as_tuple=False).squeeze(1)
+            if edge_idx.numel() <= self.da_target_source_k:
+                keep_mask[edge_idx] = True
+                continue
+            nearest = torch.argsort(dist_km[edge_idx])[: self.da_target_source_k]
+            keep_mask[edge_idx[nearest]] = True
+
+        return sq_edge_index[:, keep_mask], sq_edge_attr[keep_mask]
 
     def __getitem__(self, idx: int) -> HeteroData:
         g = self._graphs[idx]

@@ -52,6 +52,7 @@ class DAGNNConfig:
     da_split_enabled: bool = False
     da_source_fraction: float = 0.5
     da_exclude_radius_km: float = 20.0
+    da_target_source_k: int | None = 16
     split_seed: int = 42
 
     train_years: list[int] = field(default_factory=list)
@@ -97,6 +98,7 @@ class DASplitEpochCallback(L.Callback):
         n_src_list, n_qry_list, n_holdout_list = [], [], []
         edges_before_list, edges_after_list = [], []
         min_dist_list = []
+        src_per_qry = []
         dist_mean = ds._sq_edge_norm.get("dist_mean", 0.0)
         dist_std = ds._sq_edge_norm.get("dist_std", 1.0)
 
@@ -118,17 +120,31 @@ class DASplitEpochCallback(L.Callback):
             edges_after_list.append(sq_ei.shape[1] if sq_ei.numel() > 0 else 0)
 
             # Nearest source distance per supervised query
+            qry_idx = _np.where(out["query"].loss_mask.numpy())[0]
+            if len(qry_idx) > 0:
+                dst_all = (
+                    sq_ei[1].numpy() if sq_ei.numel() > 0 else _np.array([], dtype=int)
+                )
+                counts = _np.array(
+                    [(dst_all == qi).sum() for qi in qry_idx], dtype=float
+                )
+                src_per_qry.extend(counts.tolist())
             if sq_ei.numel() > 0:
                 ea = out["source", "influences", "query"].edge_attr
                 d_km = (ea[:, 0] * dist_std + dist_mean).numpy()
                 dst = sq_ei[1].numpy()
-                qry_idx = _np.where(out["query"].loss_mask.numpy())[0]
                 for qi in qry_idx:
                     d = d_km[dst == qi]
                     if len(d) > 0:
                         min_dist_list.append(float(d.min()))
 
         md = _np.array(min_dist_list) if min_dist_list else _np.array([0.0])
+        spq = _np.array(src_per_qry) if src_per_qry else _np.array([0.0])
+        full_k = (
+            float((spq >= ds.da_target_source_k).mean())
+            if ds.da_target_source_k is not None and spq.size > 0
+            else 0.0
+        )
         print(
             f"  [epoch {epoch}] split audit ({n} graphs):\n"
             f"    src={_np.mean(n_src_list):.0f}, "
@@ -136,6 +152,8 @@ class DASplitEpochCallback(L.Callback):
             f"holdout={_np.mean(n_holdout_list):.0f}\n"
             f"    edges: before={_np.mean(edges_before_list):.0f}, "
             f"after={_np.mean(edges_after_list):.0f}\n"
+            f"    src_per_qry: mean={spq.mean():.1f} med={_np.median(spq):.1f} "
+            f"zero={(spq == 0).mean():.1%} full_k={full_k:.1%}\n"
             f"    nearest_src_km: "
             f"min={md.min():.1f} p25={_np.percentile(md, 25):.1f} "
             f"med={_np.median(md):.1f} p75={_np.percentile(md, 75):.1f} "
@@ -192,6 +210,7 @@ def main():
         da_split_enabled=cfg.da_split_enabled,
         da_source_fraction=cfg.da_source_fraction,
         da_exclude_radius_km=cfg.da_exclude_radius_km,
+        da_target_source_k=cfg.da_target_source_k,
         split_seed=cfg.split_seed,
     )
     train_ds.save_norm_stats(os.path.join(cfg.out_dir, "norm_stats.json"))
@@ -230,7 +249,12 @@ def main():
     if cfg.da_split_enabled:
         print(
             f"DA split: enabled, source_frac={cfg.da_source_fraction}, "
-            f"exclude_radius={cfg.da_exclude_radius_km}km, seed={cfg.split_seed}"
+            f"exclude_radius={cfg.da_exclude_radius_km}km, "
+            f"target_source_k={cfg.da_target_source_k}, seed={cfg.split_seed}"
+        )
+        print(
+            f"Candidate source graph: source_k={train_ds.source_candidate_k}, "
+            f"source_radius={train_ds.source_candidate_radius_km}km"
         )
 
     # Record effective family in run metadata
@@ -242,6 +266,7 @@ def main():
                 "da_split_enabled": cfg.da_split_enabled,
                 "da_source_fraction": cfg.da_source_fraction,
                 "da_exclude_radius_km": cfg.da_exclude_radius_km,
+                "da_target_source_k": cfg.da_target_source_k,
                 "split_seed": cfg.split_seed,
                 "graph_dir": cfg.graph_dir,
                 "holdout_fids_json": cfg.holdout_fids_json,

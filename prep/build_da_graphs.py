@@ -1,13 +1,19 @@
 """
-Build per-day HeteroData graphs for DA benchmark (da-graph-v0).
+Build per-day HeteroData graphs for DA benchmark.
+
+Supports da-graph-v1 (37-feature core-graph-v0 context) and da-graph-v2
+(enriched context via --extra-feature-cols).
 
 Creates two node types:
-  - query: all stations with HRRR background (same population as core-graph-v0)
+  - query: all stations with HRRR background
   - source: non-holdout stations with observed delta values
+
+Source context mirrors query features. Source payload is observation deltas
++ valid flags (4 features).
 
 Edge families:
   - source -> query: observation influence (excludes colocated self-edges)
-  - query -> query: same k-NN spatial propagation as core-graph-v0
+  - query -> query: k-NN spatial propagation
 
 Output: HeteroData .pt files + meta.json + split_spec.json
 """
@@ -109,23 +115,18 @@ def _parse_args():
     p.add_argument("--k", type=int, default=16)
     p.add_argument("--source-k", type=int, default=16)
     p.add_argument("--max-radius-km", type=float, default=150.0)
+    p.add_argument(
+        "--source-max-radius-km",
+        type=float,
+        default=None,
+        help="Optional source->query radius cap. Defaults to --max-radius-km.",
+    )
     p.add_argument("--max-abs-target", type=float, default=None)
     p.add_argument(
         "--extra-feature-cols",
         nargs="*",
         default=None,
         help="Explicit extra column names to include from parquet",
-    )
-    # Source feature columns (beyond deltas)
-    p.add_argument(
-        "--source-hrrr-cols",
-        nargs="*",
-        default=["tmax_hrrr", "tmin_hrrr"],
-    )
-    p.add_argument(
-        "--source-static-cols",
-        nargs="*",
-        default=["elevation"],
     )
     return p.parse_args()
 
@@ -165,16 +166,16 @@ def main():
     df = df.dropna(subset=[required_col])
     print(f"Kept {len(df)} of {before} rows with {required_col}")
 
-    # Explicit extra feature columns
+    # Explicit extra feature columns (must all be present — fail hard per policy)
     explicit_extra_cols: list[str] = []
     if args.extra_feature_cols:
-        for c in args.extra_feature_cols:
-            if c in df.columns:
-                explicit_extra_cols.append(c)
-            else:
-                print(f"WARNING: --extra-feature-cols '{c}' not found in table")
-        if explicit_extra_cols:
-            print(f"Explicit extra cols: {explicit_extra_cols}")
+        missing = [c for c in args.extra_feature_cols if c not in df.columns]
+        if missing:
+            raise ValueError(
+                f"--extra-feature-cols requested columns not in table: {missing}"
+            )
+        explicit_extra_cols = list(args.extra_feature_cols)
+        print(f"Explicit extra cols: {explicit_extra_cols}")
 
     # Fill NaN in weather/extra/explicit
     for c in weather_cols + extra_cols + explicit_extra_cols:
@@ -272,8 +273,18 @@ def main():
     source_fids_arr = non_holdout_sta[id_col].astype(str).values
 
     source_tree = BallTree(source_coords, metric="haversine")
-    max_rad = args.max_radius_km / 6371.0
+    source_max_radius_km = (
+        args.source_max_radius_km
+        if args.source_max_radius_km is not None
+        else args.max_radius_km
+    )
+    max_rad = source_max_radius_km / 6371.0
     source_k = min(args.source_k, len(source_fids_arr))
+    print(
+        "Building source->query candidate graph "
+        f"(source_k={source_k}, source_radius={source_max_radius_km} km, "
+        f"non_holdout_sources={len(source_fids_arr)})..."
+    )
 
     # Pre-compute source->query k-NN map
     sq_dists, sq_indices = source_tree.query(query_coords, k=source_k)
@@ -594,6 +605,7 @@ def main():
         "k": args.k,
         "source_k": args.source_k,
         "max_radius_km": args.max_radius_km,
+        "source_max_radius_km": source_max_radius_km,
         "holdout_fids_json": args.holdout_fids_json,
         "n_holdout_requested": len(holdout_fids),
         "n_holdout_effective": len(effective_holdout),
@@ -601,7 +613,12 @@ def main():
         "query_edge_norm": query_edge_norm,
         "source_query_edge_norm": sq_edge_norm,
         "extra_feature_cols": explicit_extra_cols,
-        "extra_feature_data_class": {c: "background" for c in explicit_extra_cols},
+        "extra_feature_data_class": {
+            c: "static"
+            if c in TERRAIN_COLS or c.startswith("terrain_") or c.startswith("sx_")
+            else "background"
+            for c in explicit_extra_cols
+        },
     }
     with open(os.path.join(args.out_dir, "meta.json"), "w") as f:
         json.dump(meta, f, indent=2)

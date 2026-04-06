@@ -124,6 +124,71 @@ def _setup_graph_dir(n_days=3, **graph_kwargs):
     return tmpdir, holdout_fids, train_fids
 
 
+def _setup_dense_candidate_graph_dir():
+    """Create a graph with many candidate sources for one holdout query."""
+    tmpdir = tempfile.mkdtemp()
+
+    meta = {
+        "family": "da-graph-v1",
+        "query_feature_cols": [f"qf_{i}" for i in range(37)],
+        "target_cols": ["delta_tmax", "delta_tmin"],
+        "source_context_feature_cols": [f"sc_{i}" for i in range(37)],
+        "source_payload_feature_cols": [
+            "delta_tmax",
+            "delta_tmin",
+            "valid_delta_tmax",
+            "valid_delta_tmin",
+        ],
+        "source_query_edge_norm": {
+            "dist_mean": 21.59,
+            "dist_std": 17.30,
+            "delev_mean": 15.52,
+            "delev_std": 1992.21,
+        },
+        "source_k": 64,
+        "source_max_radius_km": 300.0,
+    }
+    with open(os.path.join(tmpdir, "meta.json"), "w") as f:
+        json.dump(meta, f)
+
+    g = HeteroData()
+    n_query = 13
+    n_source = 12
+
+    g["query"].x = torch.randn(n_query, 37)
+    g["query"].y = torch.randn(n_query, 2)
+    g["query"].valid_mask = torch.ones(n_query, 2, dtype=torch.bool)
+    all_fids = [f"sta_{i:03d}" for i in range(n_query)]
+    holdout_fids = {all_fids[0]}
+    train_fids = set(all_fids[1:])
+    g["query"].fids = all_fids
+
+    g["source"].fids = all_fids[1:]
+    g["source"].context_x = torch.randn(n_source, 37)
+    g["source"].payload_x = torch.randn(n_source, 4)
+    g["source"].num_nodes = n_source
+
+    # Connect every source to the holdout query with increasing distance.
+    dists = [5.0 * (i + 1) for i in range(n_source)]  # 5, 10, ..., 60 km
+    dist_mean, dist_std = 21.59, 17.30
+    src = torch.arange(n_source, dtype=torch.long)
+    dst = torch.zeros(n_source, dtype=torch.long)
+    ea = torch.zeros(n_source, 7)
+    for i, d_km in enumerate(dists):
+        ea[i, 0] = (d_km - dist_mean) / dist_std
+    g["source", "influences", "query"].edge_index = torch.stack([src, dst])
+    g["source", "influences", "query"].edge_attr = ea
+
+    # Minimal query-query graph.
+    g["query", "neighbors", "query"].edge_index = torch.tensor(
+        [[0, 1], [1, 0]], dtype=torch.long
+    )
+    g["query", "neighbors", "query"].edge_attr = torch.zeros(2, 7)
+
+    torch.save(g, os.path.join(tmpdir, "2024-01-01.pt"))
+    return tmpdir, holdout_fids, train_fids
+
+
 # ---------------------------------------------------------------------------
 # Split-disabled parity
 # ---------------------------------------------------------------------------
@@ -280,6 +345,53 @@ def test_radius_filter_removes_close_edges():
         assert n_edges_with <= n_edges_no
 
 
+def test_target_source_k_keeps_nearest_surviving_edges():
+    """Runtime cap keeps the nearest surviving K source edges per query."""
+    tmpdir, holdout, train_fids = _setup_dense_candidate_graph_dir()
+
+    ds_full = DAGraphDataset(
+        graph_dir=tmpdir,
+        loss_fids=train_fids,
+        target_index=0,
+        is_train=True,
+        da_split_enabled=True,
+        da_source_fraction=0.95,
+        da_exclude_radius_km=20.0,
+        da_target_source_k=None,
+        split_seed=7,
+    )
+    ds_cap = DAGraphDataset(
+        graph_dir=tmpdir,
+        loss_fids=train_fids,
+        target_index=0,
+        is_train=True,
+        da_split_enabled=True,
+        da_source_fraction=0.95,
+        da_exclude_radius_km=20.0,
+        da_target_source_k=4,
+        split_seed=7,
+    )
+
+    ds_full.set_epoch(0)
+    ds_cap.set_epoch(0)
+    g_full = ds_full[0]
+    g_cap = ds_cap[0]
+
+    dist_mean, dist_std = 21.59, 17.30
+    full_ei = g_full["source", "influences", "query"].edge_index
+    full_ea = g_full["source", "influences", "query"].edge_attr
+    cap_ei = g_cap["source", "influences", "query"].edge_index
+    cap_ea = g_cap["source", "influences", "query"].edge_attr
+
+    full_d = (full_ea[full_ei[1] == 0, 0] * dist_std + dist_mean).tolist()
+    cap_d = (cap_ea[cap_ei[1] == 0, 0] * dist_std + dist_mean).tolist()
+
+    assert len(full_d) > 4
+    assert len(cap_d) == 4
+    assert min(cap_d) >= 20.0
+    assert sorted(cap_d) == sorted(sorted(full_d)[:4])
+
+
 # ---------------------------------------------------------------------------
 # Epoch re-randomization
 # ---------------------------------------------------------------------------
@@ -386,6 +498,7 @@ def test_split_configs_match_geometry():
     assert off.da_split_enabled is True
     assert on.da_source_fraction == off.da_source_fraction
     assert on.da_exclude_radius_km == off.da_exclude_radius_km
+    assert on.da_target_source_k == off.da_target_source_k == 16
     assert on.split_seed == off.split_seed
     # Only payload differs
     assert on.disable_payload is False
