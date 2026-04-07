@@ -360,18 +360,50 @@ class DAGraphDataset(Dataset):
         if self.da_target_source_k is None:
             return sq_edge_index, sq_edge_attr
 
-        old_dst = sq_edge_index[1]
-        keep_mask = torch.zeros(old_dst.shape[0], dtype=torch.bool)
-        unique_dst = torch.unique(old_dst)
-        for qi in unique_dst.tolist():
-            edge_idx = torch.nonzero(old_dst == qi, as_tuple=False).squeeze(1)
-            if edge_idx.numel() <= self.da_target_source_k:
-                keep_mask[edge_idx] = True
-                continue
-            nearest = torch.argsort(dist_km[edge_idx])[: self.da_target_source_k]
-            keep_mask[edge_idx[nearest]] = True
+        keep_mask = self._nearest_k_mask(
+            sq_edge_index[1], dist_km, self.da_target_source_k
+        )
 
         return sq_edge_index[:, keep_mask], sq_edge_attr[keep_mask]
+
+    def _nearest_k_mask(
+        self,
+        dst_index: torch.Tensor,
+        dist_km: torch.Tensor,
+        k_per_dst: int | torch.Tensor,
+    ) -> torch.Tensor:
+        """Select nearest edges per destination without per-query Python scans."""
+        n_edges = dst_index.numel()
+        keep_mask = torch.zeros(n_edges, dtype=torch.bool, device=dst_index.device)
+        if n_edges == 0:
+            return keep_mask
+
+        if isinstance(k_per_dst, int):
+            if k_per_dst <= 0:
+                return keep_mask
+        elif k_per_dst.numel() == 0:
+            return keep_mask
+
+        # Lexicographic sort: destination first, distance second.
+        order = torch.argsort(dist_km, stable=True)
+        order = order[torch.argsort(dst_index[order], stable=True)]
+        sorted_dst = dst_index[order]
+
+        n_dst = int(sorted_dst.max().item()) + 1
+        counts = torch.bincount(sorted_dst, minlength=n_dst)
+        starts = counts.cumsum(0) - counts
+        ranks = (
+            torch.arange(n_edges, dtype=torch.long, device=dst_index.device)
+            - starts[sorted_dst]
+        )
+
+        if isinstance(k_per_dst, int):
+            keep_sorted = ranks < k_per_dst
+        else:
+            keep_sorted = ranks < k_per_dst[sorted_dst]
+
+        keep_mask[order[keep_sorted]] = True
+        return keep_mask
 
     def _prune_mixed_local(
         self,
@@ -384,34 +416,45 @@ class DAGraphDataset(Dataset):
         max_local = self.da_mixed_local_max_edges_per_query
         k_total = self.da_target_source_k
 
-        is_local = dist_km < local_thresh
-        is_far = ~is_local
-
         old_dst = sq_edge_index[1]
-        keep_mask = torch.zeros(old_dst.shape[0], dtype=torch.bool)
+        is_local = dist_km < local_thresh
+        keep_mask = torch.zeros(
+            old_dst.shape[0], dtype=torch.bool, device=old_dst.device
+        )
 
-        for qi in torch.unique(old_dst).tolist():
-            qi_edges = torch.nonzero(old_dst == qi, as_tuple=False).squeeze(1)
-            local_edges = qi_edges[is_local[qi_edges]]
-            far_edges = qi_edges[is_far[qi_edges]]
+        local_idx = torch.nonzero(is_local, as_tuple=False).squeeze(1)
+        far_idx = torch.nonzero(~is_local, as_tuple=False).squeeze(1)
 
-            # Nearest local edges, capped
-            kept_local = torch.tensor([], dtype=torch.long)
-            if local_edges.numel() > 0:
-                order = torch.argsort(dist_km[local_edges])
-                kept_local = local_edges[order[:max_local]]
+        local_kept_counts = None
+        if local_idx.numel() > 0 and max_local > 0:
+            local_keep = self._nearest_k_mask(
+                old_dst[local_idx], dist_km[local_idx], max_local
+            )
+            keep_mask[local_idx[local_keep]] = True
+            kept_local_dst = old_dst[keep_mask]
+            local_kept_counts = torch.bincount(
+                kept_local_dst, minlength=int(old_dst.max().item()) + 1
+            )
 
-            # Fill remaining budget from far edges
-            remaining = (k_total - kept_local.numel()) if k_total else far_edges.numel()
-            kept_far = torch.tensor([], dtype=torch.long)
-            if far_edges.numel() > 0 and remaining > 0:
-                order = torch.argsort(dist_km[far_edges])
-                kept_far = far_edges[order[:remaining]]
+        if far_idx.numel() == 0:
+            return sq_edge_index[:, keep_mask], sq_edge_attr[keep_mask]
 
-            if kept_local.numel() > 0:
-                keep_mask[kept_local] = True
-            if kept_far.numel() > 0:
-                keep_mask[kept_far] = True
+        if k_total is None:
+            keep_mask[far_idx] = True
+            return sq_edge_index[:, keep_mask], sq_edge_attr[keep_mask]
+
+        if local_kept_counts is None:
+            local_kept_counts = torch.zeros(
+                int(old_dst.max().item()) + 1,
+                dtype=torch.long,
+                device=old_dst.device,
+            )
+
+        remaining_per_dst = (k_total - local_kept_counts).clamp(min=0)
+        far_keep = self._nearest_k_mask(
+            old_dst[far_idx], dist_km[far_idx], remaining_per_dst
+        )
+        keep_mask[far_idx[far_keep]] = True
 
         return sq_edge_index[:, keep_mask], sq_edge_attr[keep_mask]
 

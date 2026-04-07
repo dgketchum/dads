@@ -164,32 +164,16 @@ class DASplitEpochCallback(L.Callback):
             f"p95={_np.percentile(md, 95):.1f} max={md.max():.1f}"
         )
 
-        # Mixed-local audit: report local vs far edge counts
-        if ds.da_mixed_local_enabled:
+        # Mixed-local audit: report local vs far edge counts using
+        # already-collected nearest-source distances (no extra ds[i] calls)
+        if ds.da_mixed_local_enabled and min_dist_list:
             local_thresh = ds.da_exclude_radius_km
-            local_counts, far_counts, has_local = [], [], []
-            for i in range(n):
-                out = ds[i]
-                sq_ei = out["source", "influences", "query"].edge_index
-                if sq_ei.numel() == 0:
-                    continue
-                ea = out["source", "influences", "query"].edge_attr
-                d = (ea[:, 0] * dist_std + dist_mean).numpy()
-                dst = sq_ei[1].numpy()
-                qry_idx = _np.where(out["query"].loss_mask.numpy())[0]
-                for qi in qry_idx:
-                    qi_d = d[dst == qi]
-                    n_local = int((qi_d < local_thresh).sum())
-                    n_far = int((qi_d >= local_thresh).sum())
-                    local_counts.append(n_local)
-                    far_counts.append(n_far)
-                    has_local.append(n_local > 0)
-            lc = _np.array(local_counts) if local_counts else _np.array([0.0])
-            fc = _np.array(far_counts) if far_counts else _np.array([0.0])
-            hl = _np.array(has_local) if has_local else _np.array([False])
+            md_arr = _np.array(min_dist_list)
+            n_with_local = int((md_arr < local_thresh).sum())
+            n_total = len(md_arr)
             base_msg += (
-                f"\n    mixed-local: qry_with_local={hl.mean():.1%} "
-                f"local/qry={lc.mean():.2f} far/qry={fc.mean():.1f}"
+                f"\n    mixed-local: qry_with_local={n_with_local / n_total:.1%} "
+                f"local_edges={n_with_local}/{n_total}"
             )
 
         print(base_msg, flush=True)
