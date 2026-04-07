@@ -102,6 +102,8 @@ class DASplitEpochCallback(L.Callback):
         n_src_list, n_qry_list, n_holdout_list = [], [], []
         edges_before_list, edges_after_list = [], []
         min_dist_list = []
+        local_edge_counts = []
+        local_thresh = getattr(ds, "da_exclude_radius_km", 0.0)
         src_per_qry = []
         dist_mean = ds._sq_edge_norm.get("dist_mean", 0.0)
         dist_std = ds._sq_edge_norm.get("dist_std", 1.0)
@@ -141,6 +143,7 @@ class DASplitEpochCallback(L.Callback):
                     d = d_km[dst == qi]
                     if len(d) > 0:
                         min_dist_list.append(float(d.min()))
+                        local_edge_counts.append(int((d < local_thresh).sum()))
 
         md = _np.array(min_dist_list) if min_dist_list else _np.array([0.0])
         spq = _np.array(src_per_qry) if src_per_qry else _np.array([0.0])
@@ -167,13 +170,16 @@ class DASplitEpochCallback(L.Callback):
         # Mixed-local audit: report local vs far edge counts using
         # already-collected nearest-source distances (no extra ds[i] calls)
         if ds.da_mixed_local_enabled and min_dist_list:
-            local_thresh = ds.da_exclude_radius_km
             md_arr = _np.array(min_dist_list)
-            n_with_local = int((md_arr < local_thresh).sum())
-            n_total = len(md_arr)
+            lec = _np.array(local_edge_counts)
+            n_qry_local = int((md_arr < ds.da_exclude_radius_km).sum())
+            n_qry_total = len(md_arr)
+            n_local_edges = int(lec.sum())
+            n_total_edges = int(spq[spq > 0].sum()) if spq.size else 0
             base_msg += (
-                f"\n    mixed-local: qry_with_local={n_with_local / n_total:.1%} "
-                f"local_edges={n_with_local}/{n_total}"
+                f"\n    mixed-local: qry_with_local={n_qry_local}/{n_qry_total} "
+                f"({n_qry_local / n_qry_total:.1%}), "
+                f"local_edges={n_local_edges}/{n_total_edges}"
             )
 
         print(base_msg, flush=True)
