@@ -629,11 +629,12 @@ def build_i3a(
     h2: float = H2_DEFAULT,
     h3: float = H3_DEFAULT,
 ) -> np.ndarray:
-    """Areal 3D support index I3a (Equation C2).
+    """Areal 3D support index I3a (Equation C2, Daly et al. 2008).
 
-    Inverse-distance-weighted mean of I3c within *support_radius_m*.
-    Pixels at the origin receive a distance of ``cell_size_m / 2`` to avoid
-    division by zero.
+    Computes the inverse-distance-weighted mean of nearby effective terrain
+    heights within *support_radius_m*, then applies the same piecewise I3c
+    threshold to the result.  This matches the PRISM spec: I3a is derived
+    from weighted h_i values, **not** from a smoothed I3c field.
 
     Parameters
     ----------
@@ -644,9 +645,9 @@ def build_i3a(
     support_radius_m : float
         Support radius in metres (default 100 000 m).
     h2 : float
-        2D threshold passed to :func:`build_i3c`.
+        2D threshold (default 75 m).
     h3 : float
-        3D threshold passed to :func:`build_i3c`.
+        3D threshold (default 250 m).
 
     Returns
     -------
@@ -654,7 +655,7 @@ def build_i3a(
     """
     from scipy.signal import fftconvolve
 
-    i3c = build_i3c(eth, h2=h2, h3=h3).astype(np.float64)
+    eth64 = np.asarray(eth, dtype=np.float64)
 
     r_pix = _radius_pixels(support_radius_m, cell_size_m)
     y, x = np.ogrid[-r_pix : r_pix + 1, -r_pix : r_pix + 1]
@@ -663,16 +664,17 @@ def build_i3a(
     d_safe = np.where(d == 0.0, cell_size_m / 2.0, d)
     k = np.where(d <= support_radius_m, 1.0 / d_safe, 0.0).astype(np.float64)
 
-    valid = np.isfinite(i3c).astype(np.float64)
-    filled = np.where(np.isfinite(i3c), i3c, 0.0)
+    valid = np.isfinite(eth64).astype(np.float64)
+    filled = np.where(np.isfinite(eth64), eth64, 0.0)
 
     data_conv = fftconvolve(filled, k, mode="same")
     mask_conv = fftconvolve(valid, k, mode="same")
 
     with np.errstate(invalid="ignore", divide="ignore"):
-        i3a = np.where(mask_conv > 0.0, data_conv / mask_conv, np.nan)
+        h_a = np.where(mask_conv > 0.0, data_conv / mask_conv, np.nan)
 
-    return np.clip(i3a, 0.0, 1.0).astype(np.float32)
+    # Apply the same piecewise threshold as I3c to the areal mean height
+    return np.clip((h_a - h2) / (h3 - h2), 0.0, 1.0).astype(np.float32)
 
 
 def build_i3d(i3c: np.ndarray, i3a: np.ndarray) -> np.ndarray:
