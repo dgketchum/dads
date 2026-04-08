@@ -284,30 +284,41 @@ def test_build_i3c_matches_spec():
 
 
 def test_build_i3a_uses_eth_not_i3c():
-    """I3a should be derived from IDW-smoothed ETH, not smoothed I3c.
+    """I3a must be IDW(ETH) then threshold, not IDW(I3c).
 
-    Place a tall mountain (ETH=500m) surrounded by flat terrain (ETH=0).
-    A cell 50 km away should get I3a > 0 because the IDW-averaged ETH
-    around it includes the tall mountain. If I3a were incorrectly computed
-    from smoothed I3c, this test might still pass, but the values would
-    differ — this test verifies the sign and rough magnitude.
+    Construct a case where the two approaches diverge:
+    Fill the grid with ETH=60m (below h2=75m, so I3c=0 everywhere).
+    Place a single tall feature (ETH=400m) in the center.
+
+    Wrong (smooth I3c): the 60m cells all have I3c=0, so the IDW
+    average away from the peak is ~0, giving I3a=0 everywhere except
+    right at the peak.
+
+    Correct (smooth ETH): the IDW-averaged ETH near the peak pulls above
+    75m even at cells whose own ETH is only 60m, giving I3a > 0 in a halo
+    around the peak. We test a point 25 km from the peak where this
+    difference is decisive.
     """
-    H, W = 250, 250
-    eth = np.zeros((H, W), dtype="float32")
-    # Place a 20-pixel-radius mountain in the center with ETH=500m
+    H, W = 200, 200
+    eth = np.full((H, W), 60.0, dtype="float32")  # below h2=75
+    # Tall peak in center
     y, x = np.mgrid[:H, :W]
-    r = np.sqrt((x - 125) ** 2 + (y - 125) ** 2)
-    eth[r < 20] = 500.0
+    r = np.sqrt((x - 100) ** 2 + (y - 100) ** 2)
+    eth[r < 10] = 400.0
 
     i3a = build_i3a(eth, cell_size_m=1000.0, support_radius_m=100_000.0)
-    # Center of mountain: IDW mean pulls toward 500m but the 100km
-    # neighborhood is mostly zero, so h_a is modest. After thresholding
-    # at (h_a - 75)/175, expect a positive but not saturated value.
-    assert i3a[125, 125] > 0.05, f"I3a at mountain center = {i3a[125, 125]}"
-    # I3a should decrease with distance from the mountain
-    assert i3a[125, 125] > i3a[125, 200], "I3a should decay with distance"
-    # Far corner: should be 0 (beyond support or h_a < h2)
-    assert i3a[0, 0] == 0.0
+
+    # 10 km from peak: own ETH=60 (I3c=0), but IDW-averaged ETH ≈ 80m
+    # which exceeds h2=75m → I3a > 0. The broken implementation (smooth
+    # I3c first) would give ≈0 here because the surrounding I3c=0 cells
+    # dominate the IDW average.
+    assert i3a[100, 110] > 0.0, (
+        f"I3a at 10km from peak = {i3a[100, 110]:.4f}; "
+        "should be >0 (IDW of ETH exceeds h2=75m)"
+    )
+    # Verify the cell's own I3c is indeed 0 (confirming the test design)
+    own_i3c = build_i3c(eth[100:101, 110:111])
+    assert own_i3c[0, 0] == 0.0, "Test design: cell's own ETH should be below h2"
 
 
 def test_build_i3d_is_max():
