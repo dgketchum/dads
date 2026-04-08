@@ -128,7 +128,207 @@ def _parse_args():
         default=None,
         help="Explicit extra column names to include from parquet",
     )
+    p.add_argument(
+        "--workers",
+        type=int,
+        default=1,
+        help="Number of parallel workers for daily graph build (default 1)",
+    )
     return p.parse_args()
+
+
+# Module-level shared state for fork-based multiprocessing.
+# Populated by main() before workers are spawned.
+_SHARED: dict = {}
+
+
+def _build_one_day(day_key: str) -> None:
+    """Build and save a single day's HeteroData graph.
+
+    All shared data is read from the module-level ``_SHARED`` dict, which is
+    populated by the parent process before forking.
+    """
+    S = _SHARED
+    day_df = S["day_groups"][day_key]
+    day_ts = pd.Timestamp(day_key)
+    fids = day_df["fid"].values
+    fid_list = list(fids)
+    n_query = len(fid_list)
+
+    weather_cols = S["weather_cols"]
+    extra_cols = S["extra_cols"]
+    explicit_extra_cols = S["explicit_extra_cols"]
+    target_cols = S["target_cols"]
+    fid_terrain = S["fid_terrain"]
+    fid_proj = S["fid_proj"]
+    rsun_data = S["rsun_data"]
+    rsun_tf = S["rsun_tf"]
+    landsat_data = S["landsat_data"]
+    landsat_tf = S["landsat_tf"]
+    query_knn = S["query_knn"]
+    query_static_edges = S["query_static_edges"]
+    query_edge_norm = S["query_edge_norm"]
+    sq_knn_map = S["sq_knn_map"]
+    sq_static_edges = S["sq_static_edges"]
+    sq_edge_norm = S["sq_edge_norm"]
+    holdout_fids = S["holdout_fids"]
+    max_abs_target = S["max_abs_target"]
+
+    # === QUERY NODE FEATURES ===
+    wx_arr = day_df[weather_cols].values.astype("float32")
+    if extra_cols:
+        ex_arr = day_df[extra_cols].values.astype("float32")
+    else:
+        ex_arr = np.zeros((n_query, 0), dtype="float32")
+    if explicit_extra_cols:
+        expl_arr = day_df[explicit_extra_cols].values.astype("float32")
+    else:
+        expl_arr = np.zeros((n_query, 0), dtype="float32")
+
+    terrain_arr = np.stack(
+        [fid_terrain.get(f, np.zeros(6, dtype="float32")) for f in fid_list]
+    )
+
+    doy_idx = min(day_ts.dayofyear - 1, rsun_data.shape[0] - 1)
+    rsun_arr = np.array(
+        [
+            _extract_point(rsun_data, rsun_tf, *fid_proj[f], band_idx=doy_idx)
+            for f in fid_list
+        ],
+        dtype="float32",
+    ).reshape(-1, 1)
+
+    period = _date_to_period(day_ts)
+    b_start = period * 7
+    landsat_arr = np.stack(
+        [
+            _extract_point_bands(landsat_data, landsat_tf, *fid_proj[f], b_start, 7)
+            for f in fid_list
+        ]
+    )
+
+    doy = day_ts.dayofyear
+    doy_sin = np.sin(2 * np.pi * doy / 365.25)
+    doy_cos = np.cos(2 * np.pi * doy / 365.25)
+    temporal_arr = np.full((n_query, 2), [doy_sin, doy_cos], dtype="float32")
+
+    loc_arr = np.column_stack(
+        [
+            day_df["latitude"].values.astype("float32"),
+            day_df["longitude"].values.astype("float32"),
+        ]
+    )
+
+    parts = [wx_arr]
+    if ex_arr.shape[1] > 0:
+        parts.append(ex_arr)
+    if expl_arr.shape[1] > 0:
+        parts.append(expl_arr)
+    parts.extend([terrain_arr, rsun_arr, landsat_arr, temporal_arr, loc_arr])
+    query_x = np.concatenate(parts, axis=1)
+    query_x = np.nan_to_num(query_x, nan=0.0, posinf=0.0, neginf=0.0)
+
+    # Query targets
+    y_raw = np.column_stack([day_df[tc].values.astype("float32") for tc in target_cols])
+    valid_mask = np.isfinite(y_raw)
+    if max_abs_target is not None:
+        valid_mask = valid_mask & (np.abs(y_raw) <= max_abs_target)
+    y = np.where(valid_mask, y_raw, 0.0).astype("float32")
+
+    # === SOURCE NODES (non-holdout with observations) ===
+    source_mask = np.array([f not in holdout_fids for f in fid_list])
+    any_valid = valid_mask.any(axis=1)
+    source_mask = source_mask & any_valid
+
+    source_indices = np.where(source_mask)[0]
+    source_fids = [fid_list[si] for si in source_indices]
+    n_source = len(source_fids)
+
+    source_background = query_x[source_indices]
+
+    # Observation payload: deltas + valid flags
+    obs_payload = []
+    for tc in target_cols:
+        vals = day_df[tc].values.astype("float32")[source_indices]
+        obs_payload.append(np.nan_to_num(vals, nan=0.0))
+    for ti, tc in enumerate(target_cols):
+        vals = valid_mask[source_indices, ti].astype("float32")
+        obs_payload.append(vals)
+
+    obs_arr = (
+        np.column_stack(obs_payload)
+        if obs_payload
+        else np.zeros((n_source, 0), dtype="float32")
+    )
+    source_context_x = source_background
+    source_payload_x = obs_arr
+
+    # === QUERY -> QUERY EDGES ===
+    ugrd = day_df["ugrd_hrrr"].values if "ugrd_hrrr" in day_df.columns else None
+    vgrd = day_df["vgrd_hrrr"].values if "vgrd_hrrr" in day_df.columns else None
+    qq_edge_index, qq_edge_attr = build_edges_for_day(
+        fid_list, ugrd, vgrd, query_knn, query_static_edges, query_edge_norm
+    )
+
+    # === SOURCE -> QUERY EDGES ===
+    source_fid_to_idx = {f: si for si, f in enumerate(source_fids)}
+
+    sq_src_list, sq_dst_list, sq_attr_list = [], [], []
+    for qi, qfid in enumerate(fid_list):
+        nbr_sfids = sq_knn_map.get(qfid, [])
+        for sfid in nbr_sfids:
+            if sfid not in source_fid_to_idx:
+                continue
+            si = source_fid_to_idx[sfid]
+            sq_src_list.append(si)
+            sq_dst_list.append(qi)
+
+            static = sq_static_edges.get(qfid, {}).get(sfid)
+            if static is not None:
+                attr = np.array(
+                    [
+                        (static["distance_km"] - sq_edge_norm["dist_mean"])
+                        / sq_edge_norm["dist_std"],
+                        static["bearing_sin"],
+                        static["bearing_cos"],
+                        (static["delta_elevation"] - sq_edge_norm.get("delev_mean", 0))
+                        / max(sq_edge_norm.get("delev_std", 1), 1e-8),
+                        0.0,  # delta_tpi placeholder
+                        0.0,  # upwind_cos
+                        0.0,  # upwind_sin
+                    ],
+                    dtype="float32",
+                )
+            else:
+                attr = np.zeros(7, dtype="float32")
+            sq_attr_list.append(attr)
+
+    if sq_src_list:
+        sq_edge_index = torch.tensor([sq_src_list, sq_dst_list], dtype=torch.long)
+        sq_edge_attr = torch.from_numpy(np.stack(sq_attr_list))
+    else:
+        sq_edge_index = torch.zeros(2, 0, dtype=torch.long)
+        sq_edge_attr = torch.zeros(0, 7, dtype=torch.float32)
+
+    # === BUILD HETERODATA ===
+    data = HeteroData()
+    data["query"].x = torch.from_numpy(query_x)
+    data["query"].y = torch.from_numpy(y)
+    data["query"].valid_mask = torch.from_numpy(valid_mask)
+    data["query"].fids = fid_list
+
+    data["source"].context_x = torch.from_numpy(source_context_x)
+    data["source"].payload_x = torch.from_numpy(source_payload_x)
+    data["source"].fids = source_fids
+
+    data["source", "influences", "query"].edge_index = sq_edge_index
+    data["source", "influences", "query"].edge_attr = sq_edge_attr
+
+    data["query", "neighbors", "query"].edge_index = qq_edge_index
+    data["query", "neighbors", "query"].edge_attr = qq_edge_attr
+
+    date_str = day_ts.strftime("%Y-%m-%d")
+    torch.save(data, os.path.join(S["out_dir"], f"{date_str}.pt"))
 
 
 def main():
@@ -367,187 +567,63 @@ def main():
     days = sorted(day_groups.keys())
     print(f"Days to process: {len(days)}")
 
+    # Store shared state in module-level dict for fork-based multiprocessing
+    _SHARED.update(
+        day_groups=day_groups,
+        weather_cols=weather_cols,
+        extra_cols=extra_cols,
+        explicit_extra_cols=explicit_extra_cols,
+        target_cols=target_cols,
+        fid_terrain=fid_terrain,
+        fid_proj=fid_proj,
+        rsun_data=rsun_data,
+        rsun_tf=rsun_tf,
+        landsat_data=landsat_data,
+        landsat_tf=landsat_tf,
+        query_knn=query_knn,
+        query_static_edges=query_static_edges,
+        query_edge_norm=query_edge_norm,
+        sq_knn_map=sq_knn_map,
+        sq_static_edges=sq_static_edges,
+        sq_edge_norm=sq_edge_norm,
+        holdout_fids=holdout_fids,
+        max_abs_target=args.max_abs_target,
+        out_dir=args.out_dir,
+    )
+
+    n_workers = getattr(args, "workers", 1) or 1
     t0 = time.time()
-    for i, day_key in enumerate(days):
-        day_df = day_groups[day_key]
-        day_ts = pd.Timestamp(day_key)
-        fids = day_df["fid"].values
-        fid_list = list(fids)
-        n_query = len(fid_list)
 
-        # === QUERY NODE FEATURES ===
-        wx_arr = day_df[weather_cols].values.astype("float32")
-        if extra_cols:
-            ex_arr = day_df[extra_cols].values.astype("float32")
-        else:
-            ex_arr = np.zeros((n_query, 0), dtype="float32")
-        if explicit_extra_cols:
-            expl_arr = day_df[explicit_extra_cols].values.astype("float32")
-        else:
-            expl_arr = np.zeros((n_query, 0), dtype="float32")
+    if n_workers > 1:
+        from concurrent.futures import ProcessPoolExecutor, as_completed
 
-        terrain_arr = np.stack(
-            [fid_terrain.get(f, np.zeros(6, dtype="float32")) for f in fid_list]
-        )
-
-        doy_idx = min(day_ts.dayofyear - 1, rsun_data.shape[0] - 1)
-        rsun_arr = np.array(
-            [
-                _extract_point(rsun_data, rsun_tf, *fid_proj[f], band_idx=doy_idx)
-                for f in fid_list
-            ],
-            dtype="float32",
-        ).reshape(-1, 1)
-
-        period = _date_to_period(day_ts)
-        b_start = period * 7
-        landsat_arr = np.stack(
-            [
-                _extract_point_bands(landsat_data, landsat_tf, *fid_proj[f], b_start, 7)
-                for f in fid_list
-            ]
-        )
-
-        doy = day_ts.dayofyear
-        doy_sin = np.sin(2 * np.pi * doy / 365.25)
-        doy_cos = np.cos(2 * np.pi * doy / 365.25)
-        temporal_arr = np.full((n_query, 2), [doy_sin, doy_cos], dtype="float32")
-
-        loc_arr = np.column_stack(
-            [
-                day_df["latitude"].values.astype("float32"),
-                day_df["longitude"].values.astype("float32"),
-            ]
-        )
-
-        parts = [wx_arr]
-        if ex_arr.shape[1] > 0:
-            parts.append(ex_arr)
-        if expl_arr.shape[1] > 0:
-            parts.append(expl_arr)
-        parts.extend([terrain_arr, rsun_arr, landsat_arr, temporal_arr, loc_arr])
-        query_x = np.concatenate(parts, axis=1)
-        query_x = np.nan_to_num(query_x, nan=0.0, posinf=0.0, neginf=0.0)
-
-        # Query targets
-        y_raw = np.column_stack(
-            [day_df[tc].values.astype("float32") for tc in target_cols]
-        )
-        valid_mask = np.isfinite(y_raw)
-        if args.max_abs_target is not None:
-            valid_mask = valid_mask & (np.abs(y_raw) <= args.max_abs_target)
-        y = np.where(valid_mask, y_raw, 0.0).astype("float32")
-
-        # === SOURCE NODES (non-holdout with observations) ===
-        source_mask = np.array([f not in holdout_fids for f in fid_list])
-        # Source must have at least one valid target
-        any_valid = valid_mask.any(axis=1)
-        source_mask = source_mask & any_valid
-
-        source_indices = np.where(source_mask)[0]
-        source_fids = [fid_list[si] for si in source_indices]
-        n_source = len(source_fids)
-
-        # Build source features: full query features at source locations + obs payload
-        # The query_x array has all stations in fid_list order; slice source indices
-        source_background = query_x[source_indices]  # (n_source, 37)
-
-        # Observation payload: deltas + valid flags
-        obs_payload = []
-        for tc in target_cols:
-            vals = day_df[tc].values.astype("float32")[source_indices]
-            obs_payload.append(np.nan_to_num(vals, nan=0.0))
-        for ti, tc in enumerate(target_cols):
-            vals = valid_mask[source_indices, ti].astype("float32")
-            obs_payload.append(vals)
-
-        obs_arr = (
-            np.column_stack(obs_payload)
-            if obs_payload
-            else np.zeros((n_source, 0), dtype="float32")
-        )
-        # da-graph-v1: keep context and payload as separate tensors
-        source_context_x = source_background  # (n_source, 37)
-        source_payload_x = obs_arr  # (n_source, 4)
-
-        # === QUERY -> QUERY EDGES ===
-        ugrd = day_df["ugrd_hrrr"].values if "ugrd_hrrr" in day_df.columns else None
-        vgrd = day_df["vgrd_hrrr"].values if "vgrd_hrrr" in day_df.columns else None
-        qq_edge_index, qq_edge_attr = build_edges_for_day(
-            fid_list, ugrd, vgrd, query_knn, query_static_edges, query_edge_norm
-        )
-
-        # === SOURCE -> QUERY EDGES ===
-        source_fid_to_idx = {f: si for si, f in enumerate(source_fids)}
-
-        sq_src_list, sq_dst_list, sq_attr_list = [], [], []
-        for qi, qfid in enumerate(fid_list):
-            nbr_sfids = sq_knn_map.get(qfid, [])
-            for sfid in nbr_sfids:
-                if sfid not in source_fid_to_idx:
-                    continue  # source not active today
-                si = source_fid_to_idx[sfid]
-                sq_src_list.append(si)
-                sq_dst_list.append(qi)
-
-                # Edge attributes from pre-computed static edges
-                static = sq_static_edges.get(qfid, {}).get(sfid)
-                if static is not None:
-                    attr = np.array(
-                        [
-                            (static["distance_km"] - sq_edge_norm["dist_mean"])
-                            / sq_edge_norm["dist_std"],
-                            static["bearing_sin"],
-                            static["bearing_cos"],
-                            (
-                                static["delta_elevation"]
-                                - sq_edge_norm.get("delev_mean", 0)
-                            )
-                            / max(sq_edge_norm.get("delev_std", 1), 1e-8),
-                            0.0,  # delta_tpi placeholder
-                            0.0,  # upwind_cos (could add dynamic)
-                            0.0,  # upwind_sin
-                        ],
-                        dtype="float32",
+        print(f"Using {n_workers} workers")
+        with ProcessPoolExecutor(max_workers=n_workers) as pool:
+            futures = {pool.submit(_build_one_day, dk): dk for dk in days}
+            done = 0
+            for fut in as_completed(futures):
+                fut.result()  # raise if failed
+                done += 1
+                if done % 50 == 0 or done == len(days):
+                    elapsed = time.time() - t0
+                    rate = done / elapsed
+                    eta = (len(days) - done) / rate if rate > 0 else 0
+                    print(
+                        f"  [{done}/{len(days)}]  {rate:.1f} days/s  "
+                        f"ETA {eta / 60:.1f} min"
                     )
-                else:
-                    attr = np.zeros(7, dtype="float32")
-                sq_attr_list.append(attr)
-
-        if sq_src_list:
-            sq_edge_index = torch.tensor([sq_src_list, sq_dst_list], dtype=torch.long)
-            sq_edge_attr = torch.from_numpy(np.stack(sq_attr_list))
-        else:
-            sq_edge_index = torch.zeros(2, 0, dtype=torch.long)
-            sq_edge_attr = torch.zeros(0, 7, dtype=torch.float32)
-
-        # === BUILD HETERODATA ===
-        data = HeteroData()
-        data["query"].x = torch.from_numpy(query_x)
-        data["query"].y = torch.from_numpy(y)
-        data["query"].valid_mask = torch.from_numpy(valid_mask)
-        data["query"].fids = fid_list
-
-        data["source"].context_x = torch.from_numpy(source_context_x)
-        data["source"].payload_x = torch.from_numpy(source_payload_x)
-        data["source"].fids = source_fids
-
-        data["source", "influences", "query"].edge_index = sq_edge_index
-        data["source", "influences", "query"].edge_attr = sq_edge_attr
-
-        data["query", "neighbors", "query"].edge_index = qq_edge_index
-        data["query", "neighbors", "query"].edge_attr = qq_edge_attr
-
-        date_str = day_ts.strftime("%Y-%m-%d")
-        torch.save(data, os.path.join(args.out_dir, f"{date_str}.pt"))
-
-        if (i + 1) % 50 == 0 or (i + 1) == len(days):
-            elapsed = time.time() - t0
-            rate = (i + 1) / elapsed
-            eta = (len(days) - i - 1) / rate if rate > 0 else 0
-            print(
-                f"  [{i + 1}/{len(days)}] {date_str}  {rate:.1f} days/s  ETA {eta / 60:.1f} min"
-            )
+    else:
+        for i, day_key in enumerate(days):
+            _build_one_day(day_key)
+            if (i + 1) % 50 == 0 or (i + 1) == len(days):
+                elapsed = time.time() - t0
+                rate = (i + 1) / elapsed
+                eta = (len(days) - i - 1) / rate if rate > 0 else 0
+                date_str = pd.Timestamp(day_key).strftime("%Y-%m-%d")
+                print(
+                    f"  [{i + 1}/{len(days)}] {date_str}  {rate:.1f} days/s  "
+                    f"ETA {eta / 60:.1f} min"
+                )
 
     # Compute effective holdout coverage
     all_query_fids = set()
