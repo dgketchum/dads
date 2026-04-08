@@ -615,7 +615,11 @@ def main():
         "extra_feature_cols": explicit_extra_cols,
         "extra_feature_data_class": {
             c: "static"
-            if c in TERRAIN_COLS or c.startswith("terrain_") or c.startswith("sx_")
+            if c in TERRAIN_COLS
+            or c.startswith("terrain_")
+            or c.startswith("sx_")
+            or c.startswith("facet_")
+            or c.startswith("effective_terrain")
             else "background"
             for c in explicit_extra_cols
         },
