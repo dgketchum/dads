@@ -701,9 +701,25 @@ def main():
         json.dump(sorted(val_holdout), f)
 
     # Save metadata
-    # Family version: da-graph-v1 if standard 37-feature context,
-    # da-graph-v2 if extra features were added (new family per policy)
-    family = "da-graph-v2" if explicit_extra_cols else "da-graph-v1"
+    # Family version per policy/DA_GRAPH_POLICY.md:
+    #   da-graph-v1: base 37-feature context, 4 active edge channels
+    #   da-graph-v2: enriched node features (extra-feature-cols)
+    #   da-graph-v3: enriched edges (all 7 source-query channels active)
+    _has_extra_nodes = bool(explicit_extra_cols)
+    _has_eth = "effective_terrain_height" in (
+        set(c for qe in sq_static_edges.values() for e in qe.values() for c in e)
+    )
+    _has_active_edges = any(
+        e.get("delta_eth") is not None
+        for qe in sq_static_edges.values()
+        for e in qe.values()
+    )
+    if _has_active_edges:
+        family = "da-graph-edge-v1"
+    elif _has_extra_nodes:
+        family = "da-graph-v2"
+    else:
+        family = "da-graph-v1"
     meta = {
         "family": family,
         "query_feature_cols": query_feature_cols,
