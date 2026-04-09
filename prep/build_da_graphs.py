@@ -271,6 +271,8 @@ def _build_one_day(day_key: str) -> None:
     )
 
     # === SOURCE -> QUERY EDGES ===
+    # Per-query wind direction for upwind_cos (daily, from HRRR)
+    wdir_vals = day_df["wdir_hrrr"].values if "wdir_hrrr" in day_df.columns else None
     source_fid_to_idx = {f: si for si, f in enumerate(source_fids)}
 
     sq_src_list, sq_dst_list, sq_attr_list = [], [], []
@@ -285,6 +287,16 @@ def _build_one_day(day_key: str) -> None:
 
             static = sq_static_edges.get(qfid, {}).get(sfid)
             if static is not None:
+                # Upwind cosine: cos(angle between wind-from and source-to-query bearing)
+                # wdir_hrrr is wind-from direction in degrees (meteorological convention)
+                upwind_cos = 0.0
+                if wdir_vals is not None:
+                    wdir_deg = wdir_vals[qi]
+                    if np.isfinite(wdir_deg):
+                        wind_from_rad = np.radians(wdir_deg)
+                        bearing_rad = static["bearing_rad"]
+                        upwind_cos = float(np.cos(wind_from_rad - bearing_rad))
+
                 attr = np.array(
                     [
                         (static["distance_km"] - sq_edge_norm["dist_mean"])
@@ -293,9 +305,10 @@ def _build_one_day(day_key: str) -> None:
                         static["bearing_cos"],
                         (static["delta_elevation"] - sq_edge_norm.get("delev_mean", 0))
                         / max(sq_edge_norm.get("delev_std", 1), 1e-8),
-                        0.0,  # delta_tpi placeholder
-                        0.0,  # upwind_cos
-                        0.0,  # upwind_sin
+                        (static["delta_eth"] - sq_edge_norm.get("deth_mean", 0))
+                        / max(sq_edge_norm.get("deth_std", 1), 1e-8),
+                        upwind_cos,
+                        static["facet_align_12km"],
                     ],
                     dtype="float32",
                 )
@@ -504,6 +517,23 @@ def main():
     source_sta_lookup = non_holdout_sta.set_index(id_col)
     query_sta_lookup = active_sta.set_index(id_col)
 
+    # Pre-extract per-station edge-relevant features from the station-day table.
+    # These are static (same value every day) so we sample once per fid.
+    fid_eth: dict[str, float] = {}
+    fid_facet_sin12: dict[str, float] = {}
+    fid_facet_cos12: dict[str, float] = {}
+    _first_rows = df.drop_duplicates(subset=["fid"]).set_index("fid")
+    for fid in unique_fids:
+        if fid in _first_rows.index:
+            r = _first_rows.loc[fid]
+            fid_eth[fid] = float(r.get("effective_terrain_height", 0) or 0)
+            fid_facet_sin12[fid] = float(r.get("facet_sin_12km", 0) or 0)
+            fid_facet_cos12[fid] = float(r.get("facet_cos_12km", 0) or 0)
+        else:
+            fid_eth[fid] = 0.0
+            fid_facet_sin12[fid] = 0.0
+            fid_facet_cos12[fid] = 0.0
+
     sq_static_edges: dict[str, dict[str, dict[str, float]]] = {}
     for qfid, nbr_sfids in sq_knn_map.items():
         sq_static_edges[qfid] = {}
@@ -512,12 +542,18 @@ def main():
         q_row = query_sta_lookup.loc[qfid]
         q_lat, q_lon = float(q_row["latitude"]), float(q_row["longitude"])
         q_elev = float(q_row.get("elevation", 0) or 0)
+        q_eth = fid_eth.get(qfid, 0.0)
+        q_fsin = fid_facet_sin12.get(qfid, 0.0)
+        q_fcos = fid_facet_cos12.get(qfid, 0.0)
         for sfid in nbr_sfids:
             if sfid not in source_sta_lookup.index:
                 continue
             s_row = source_sta_lookup.loc[sfid]
             s_lat, s_lon = float(s_row["latitude"]), float(s_row["longitude"])
             s_elev = float(s_row.get("elevation", 0) or 0)
+            s_eth = fid_eth.get(sfid, 0.0)
+            s_fsin = fid_facet_sin12.get(sfid, 0.0)
+            s_fcos = fid_facet_cos12.get(sfid, 0.0)
 
             # Haversine distance
             lat1, lat2 = np.radians(s_lat), np.radians(q_lat)
@@ -529,18 +565,28 @@ def main():
             )
             dist_km = 6371.0 * 2 * np.arctan2(np.sqrt(a), np.sqrt(1 - a))
 
-            # Bearing from source to query
+            # Bearing from source to query (radians, geographic)
             bearing = np.arctan2(
                 np.sin(dlon) * np.cos(lat2),
                 np.cos(lat1) * np.sin(lat2)
                 - np.sin(lat1) * np.cos(lat2) * np.cos(dlon),
             )
 
+            # Facet alignment: cosine similarity of 12km facet vectors
+            dot = q_fsin * s_fsin + q_fcos * s_fcos
+            q_mag = np.sqrt(q_fsin**2 + q_fcos**2)
+            s_mag = np.sqrt(s_fsin**2 + s_fcos**2)
+            denom = q_mag * s_mag
+            facet_align = float(dot / denom) if denom > 1e-8 else 0.0
+
             sq_static_edges[qfid][sfid] = {
                 "distance_km": dist_km,
                 "bearing_sin": float(np.sin(bearing)),
                 "bearing_cos": float(np.cos(bearing)),
-                "delta_elevation": q_elev - s_elev,  # query minus source
+                "bearing_rad": float(bearing),
+                "delta_elevation": q_elev - s_elev,
+                "delta_eth": q_eth - s_eth,
+                "facet_align_12km": facet_align,
             }
 
     # Compute normalization stats for source->query edges
@@ -550,11 +596,14 @@ def main():
     all_delev = [
         e["delta_elevation"] for qe in sq_static_edges.values() for e in qe.values()
     ]
+    all_deth = [e["delta_eth"] for qe in sq_static_edges.values() for e in qe.values()]
     sq_edge_norm = {
         "dist_mean": float(np.mean(all_dists)) if all_dists else 0.0,
         "dist_std": float(max(np.std(all_dists), 1e-8)) if all_dists else 1.0,
         "delev_mean": float(np.mean(all_delev)) if all_delev else 0.0,
         "delev_std": float(max(np.std(all_delev), 1e-8)) if all_delev else 1.0,
+        "deth_mean": float(np.mean(all_deth)) if all_deth else 0.0,
+        "deth_std": float(max(np.std(all_deth), 1e-8)) if all_deth else 1.0,
     }
 
     if os.path.exists(active_csv):
@@ -668,11 +717,9 @@ def main():
             "bearing_sin",
             "bearing_cos",
             "delta_elevation_norm",
-        ],
-        "source_query_edge_placeholder_channels": [
-            "delta_tpi (zero)",
-            "upwind_cos (zero)",
-            "upwind_sin (zero)",
+            "delta_effective_terrain_height_norm",
+            "upwind_cos",
+            "facet_align_12km",
         ],
         "n_days": len(days),
         "n_query_features": len(query_feature_cols),

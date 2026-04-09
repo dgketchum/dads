@@ -1,5 +1,5 @@
-name = "da_facet_v1_s_tmax_k64"
-description = "DA facet-v1: physio-v1 + effective_terrain_height, terrain_i3d, facet_sin/cos at 12km"
+name = "da_edge_v1_s_tmax_k64"
+description = "DA edge-v1: facet-v1 nodes (46 features) + terrain-aware source-query edges (delta_eth, upwind_cos, facet_align_12km)"
 
 hidden_dim = 64
 n_hops = 1
@@ -26,8 +26,8 @@ split_seed = 42
 train_years = [2018, 2019, 2020, 2021, 2022, 2023]
 val_years = [2024]
 
-graph_dir = "/nas/dads/runs/da_facet_v1_graphs_k64_r300"
-out_dir = "/nas/dads/runs/da_facet_v1_s_tmax_k64/seed_42"
+graph_dir = "/nas/dads/runs/da_edge_v1_graphs_k64_r300"
+out_dir = "/nas/dads/runs/da_edge_v1_s_tmax_k64/seed_42"
 holdout_fids_json = "/home/dgketchum/code/dads/artifacts/canonical_holdout_fids.json"
 device = "cuda:0"
 num_workers = 0
