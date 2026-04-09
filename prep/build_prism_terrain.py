@@ -114,7 +114,7 @@ def _write_single(
     H, W = arr.shape
     profile = dict(profile_base, count=1, height=H, width=W)
     with rasterio.open(path, "w", **profile) as dst:
-        dst.write(arr[np.newaxis, :, :], 1)
+        dst.write(arr, 1)
         dst.set_band_description(1, description)
     print(f"  written: {path}")
 

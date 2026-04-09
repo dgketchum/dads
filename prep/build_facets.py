@@ -198,6 +198,9 @@ def build_facets(
 
     print("Computing per-facet orientation …")
 
+    # GRASS nulls export as Int32 min; clamp to 0 (nodata)
+    segs[segs < 0] = 0
+
     flat_ids = segs.ravel()
     valid = flat_ids > 0
     ids = flat_ids[valid]
