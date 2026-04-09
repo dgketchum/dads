@@ -134,6 +134,12 @@ def _parse_args():
         default=1,
         help="Number of parallel workers for daily graph build (default 1)",
     )
+    p.add_argument(
+        "--active-edges",
+        action="store_true",
+        help="Populate terrain-aware source-query edge channels "
+        "(delta_eth, upwind_cos, facet_align_12km) instead of zeros",
+    )
     return p.parse_args()
 
 
@@ -271,8 +277,12 @@ def _build_one_day(day_key: str) -> None:
     )
 
     # === SOURCE -> QUERY EDGES ===
-    # Per-query wind direction for upwind_cos (daily, from HRRR)
-    wdir_vals = day_df["wdir_hrrr"].values if "wdir_hrrr" in day_df.columns else None
+    active_edges = S.get("active_edges", False)
+    wdir_vals = (
+        day_df["wdir_hrrr"].values
+        if active_edges and "wdir_hrrr" in day_df.columns
+        else None
+    )
     source_fid_to_idx = {f: si for si, f in enumerate(source_fids)}
 
     sq_src_list, sq_dst_list, sq_attr_list = [], [], []
@@ -287,15 +297,22 @@ def _build_one_day(day_key: str) -> None:
 
             static = sq_static_edges.get(qfid, {}).get(sfid)
             if static is not None:
-                # Upwind cosine: cos(angle between wind-from and source-to-query bearing)
-                # wdir_hrrr is wind-from direction in degrees (meteorological convention)
-                upwind_cos = 0.0
-                if wdir_vals is not None:
-                    wdir_deg = wdir_vals[qi]
-                    if np.isfinite(wdir_deg):
-                        wind_from_rad = np.radians(wdir_deg)
-                        bearing_rad = static["bearing_rad"]
-                        upwind_cos = float(np.cos(wind_from_rad - bearing_rad))
+                # Channels 5-6: terrain-aware when --active-edges, zeros otherwise
+                if active_edges:
+                    upwind_cos = 0.0
+                    if wdir_vals is not None:
+                        wdir_deg = wdir_vals[qi]
+                        if np.isfinite(wdir_deg):
+                            wind_from_rad = np.radians(wdir_deg)
+                            bearing_rad = static["bearing_rad"]
+                            upwind_cos = float(np.cos(wind_from_rad - bearing_rad))
+                    ch4 = (
+                        static["delta_eth"] - sq_edge_norm.get("deth_mean", 0)
+                    ) / max(sq_edge_norm.get("deth_std", 1), 1e-8)
+                    ch5 = upwind_cos
+                    ch6 = static["facet_align_12km"]
+                else:
+                    ch4, ch5, ch6 = 0.0, 0.0, 0.0
 
                 attr = np.array(
                     [
@@ -305,10 +322,9 @@ def _build_one_day(day_key: str) -> None:
                         static["bearing_cos"],
                         (static["delta_elevation"] - sq_edge_norm.get("delev_mean", 0))
                         / max(sq_edge_norm.get("delev_std", 1), 1e-8),
-                        (static["delta_eth"] - sq_edge_norm.get("deth_mean", 0))
-                        / max(sq_edge_norm.get("deth_std", 1), 1e-8),
-                        upwind_cos,
-                        static["facet_align_12km"],
+                        ch4,
+                        ch5,
+                        ch6,
                     ],
                     dtype="float32",
                 )
@@ -637,6 +653,7 @@ def main():
         sq_edge_norm=sq_edge_norm,
         holdout_fids=holdout_fids,
         max_abs_target=args.max_abs_target,
+        active_edges=getattr(args, "active_edges", False),
         out_dir=args.out_dir,
     )
 
@@ -702,21 +719,13 @@ def main():
 
     # Save metadata
     # Family version per policy/DA_GRAPH_POLICY.md:
-    #   da-graph-v1: base 37-feature context, 4 active edge channels
-    #   da-graph-v2: enriched node features (extra-feature-cols)
-    #   da-graph-v3: enriched edges (all 7 source-query channels active)
-    _has_extra_nodes = bool(explicit_extra_cols)
-    _has_eth = "effective_terrain_height" in (
-        set(c for qe in sq_static_edges.values() for e in qe.values() for c in e)
-    )
-    _has_active_edges = any(
-        e.get("delta_eth") is not None
-        for qe in sq_static_edges.values()
-        for e in qe.values()
-    )
-    if _has_active_edges:
+    #   da-graph-v1: base 37-feature context, 4 active edge channels + 3 placeholders
+    #   da-graph-v2: enriched node features (--extra-feature-cols)
+    #   da-graph-edge-v1: enriched edges via --active-edges (all 7 channels active)
+    active_edges = getattr(args, "active_edges", False)
+    if active_edges:
         family = "da-graph-edge-v1"
-    elif _has_extra_nodes:
+    elif explicit_extra_cols:
         family = "da-graph-v2"
     else:
         family = "da-graph-v1"
@@ -728,15 +737,33 @@ def main():
         "target_cols": target_cols,
         "query_edge_dim": 7,
         "source_query_edge_dim": 7,
-        "source_query_edge_active_channels": [
-            "distance_norm",
-            "bearing_sin",
-            "bearing_cos",
-            "delta_elevation_norm",
-            "delta_effective_terrain_height_norm",
-            "upwind_cos",
-            "facet_align_12km",
-        ],
+        "source_query_edge_active_channels": (
+            [
+                "distance_norm",
+                "bearing_sin",
+                "bearing_cos",
+                "delta_elevation_norm",
+                "delta_effective_terrain_height_norm",
+                "upwind_cos",
+                "facet_align_12km",
+            ]
+            if active_edges
+            else [
+                "distance_norm",
+                "bearing_sin",
+                "bearing_cos",
+                "delta_elevation_norm",
+            ]
+        ),
+        "source_query_edge_placeholder_channels": (
+            []
+            if active_edges
+            else [
+                "delta_tpi (zero)",
+                "upwind_cos (zero)",
+                "upwind_sin (zero)",
+            ]
+        ),
         "n_days": len(days),
         "n_query_features": len(query_feature_cols),
         "n_source_context_features": len(source_context_feature_cols),

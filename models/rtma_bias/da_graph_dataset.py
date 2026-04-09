@@ -103,8 +103,15 @@ class DAGraphDataset(Dataset):
             meta = json.load(f)
 
         family = meta.get("family", "")
-        if family not in ("da-graph-v0", "da-graph-v1", "da-graph-v2", "da-graph-v3"):
-            raise ValueError(f"Expected da-graph-v0/v1/v2/v3 family, got {family}")
+        _KNOWN_FAMILIES = (
+            "da-graph-v0",
+            "da-graph-v1",
+            "da-graph-v2",
+            "da-graph-v3",
+            "da-graph-edge-v1",
+        )
+        if family not in _KNOWN_FAMILIES:
+            raise ValueError(f"Expected one of {_KNOWN_FAMILIES}, got {family}")
         self._family = family
 
         self.query_feature_cols: list[str] = meta["query_feature_cols"]
@@ -117,7 +124,7 @@ class DAGraphDataset(Dataset):
         )
 
         # v1: separate context/payload; v0: combined source_feature_cols
-        if family in ("da-graph-v1", "da-graph-v2", "da-graph-v3"):
+        if family in ("da-graph-v1", "da-graph-v2", "da-graph-v3", "da-graph-edge-v1"):
             self.source_context_feature_cols: list[str] = meta[
                 "source_context_feature_cols"
             ]
@@ -188,7 +195,12 @@ class DAGraphDataset(Dataset):
                     query_xs.append(qx[mask])
             else:
                 query_xs.append(qx)
-            if self._family in ("da-graph-v1", "da-graph-v2", "da-graph-v3"):
+            if self._family in (
+                "da-graph-v1",
+                "da-graph-v2",
+                "da-graph-v3",
+                "da-graph-edge-v1",
+            ):
                 source_ctx_xs.append(g["source"].context_x)
                 source_pay_xs.append(g["source"].payload_x)
             else:
@@ -466,7 +478,12 @@ class DAGraphDataset(Dataset):
         qy = g["query"].y.clone()
         q_valid = g["query"].valid_mask.clone()
 
-        if self._family in ("da-graph-v1", "da-graph-v2", "da-graph-v3"):
+        if self._family in (
+            "da-graph-v1",
+            "da-graph-v2",
+            "da-graph-v3",
+            "da-graph-edge-v1",
+        ):
             s_ctx = g["source"].context_x.clone()
             s_pay = g["source"].payload_x.clone()
         else:
@@ -533,7 +550,12 @@ class DAGraphDataset(Dataset):
         if q_valid.ndim == 2:
             out["query"].valid_mask = q_valid
 
-        if self._family in ("da-graph-v1", "da-graph-v2", "da-graph-v3"):
+        if self._family in (
+            "da-graph-v1",
+            "da-graph-v2",
+            "da-graph-v3",
+            "da-graph-edge-v1",
+        ):
             out["source"].context_x = s_ctx
             out["source"].payload_x = s_pay
             out["source"].num_nodes = s_ctx.shape[0]
